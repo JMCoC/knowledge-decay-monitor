@@ -116,6 +116,13 @@ enabled = true
 # The maximum file size allowed (e.g. "5MB", "500KB").
 file_size_limit = "50MiB"
 
+# Matches 00001_initial_schema.sql. Local fixtures are loaded via seed buckets.
+[storage.buckets.documents]
+public = false
+file_size_limit = "10MiB"
+allowed_mime_types = ["application/pdf", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "text/markdown", "text/plain", "text/plain; charset=utf-8", "text/markdown; charset=utf-8"]
+objects_path = "./fixtures/storage"
+
 # Uncomment to configure local storage buckets
 # [storage.buckets.images]
 # public = false

@@ -1,3 +1,11 @@
+# Knowledge Decay Monitor
+
+La [arquitectura base del equipo](docs/architecture/arquitectura-base.md) define contexto, contenedores, módulos, responsabilidades, dependencias, contrato de operación y Walking Skeleton. La decisión principal queda registrada en [ADR-001](docs/architecture/adr/ADR-001-monolito-modular.md).
+
+Para preparar el Sprint 1, seguir el [Protocolo Anti-Bloqueo del Día Cero](docs/architecture/day-zero-protocol.md): esquema, tipos, seed, ownership y checklist local de cinco pasos. Los [resultados de validación](docs/architecture/day-zero-verification.md) distinguen esta base de los flujos del sprint aún pendientes.
+
+El proyecto usa pnpm 12.5.1 (fijado en `package.json`). Después del arranque local, los controles son `pnpm typecheck`, `pnpm lint`, `pnpm test:db` y `pnpm test:fixtures`.
+
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
 ## Getting Started

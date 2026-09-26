@@ -1,0 +1,11 @@
+begin;
+create extension if not exists pgtap with schema extensions;
+set search_path = public, extensions;
+select plan(5);
+select has_table('public', 'workspaces', 'Workspace table exists');
+select has_table('public', 'profiles', 'Profile table exists');
+select has_table('public', 'documents', 'Document table exists');
+select has_table('public', 'document_versions', 'Version table exists');
+select has_table('public', 'document_chunks', 'Chunk table exists');
+select * from finish();
+rollback;
