@@ -21,19 +21,26 @@ export interface Actor {
   role: WorkspaceRole;
 }
 
+/**
+ * Named so per-item results in a batch can reuse it. S1-03 emits
+ * UNAUTHENTICATED, FORBIDDEN, INVALID_INPUT, NOT_FOUND and INTERNAL_ERROR;
+ * CONFLICT and PROCESSING_FAILED are reserved for later sprints.
+ */
+export type ActionErrorCode =
+  | "UNAUTHENTICATED"
+  | "FORBIDDEN"
+  | "INVALID_INPUT"
+  | "NOT_FOUND"
+  | "CONFLICT"
+  | "PROCESSING_FAILED"
+  | "INTERNAL_ERROR";
+
 export type ActionResult<T> =
   | { ok: true; data: T }
   | {
       ok: false;
       error: {
-        code:
-          | "UNAUTHENTICATED"
-          | "FORBIDDEN"
-          | "INVALID_INPUT"
-          | "NOT_FOUND"
-          | "CONFLICT"
-          | "PROCESSING_FAILED"
-          | "INTERNAL_ERROR";
+        code: ActionErrorCode;
         /** Controlled user-facing text, never an exception or provider payload. */
         message: string;
       };
@@ -50,10 +57,42 @@ export interface UploadMetadata {
   ownerId: string;
 }
 
-export interface UploadedVersion {
-  documentId: string;
+/** Declared facts about one file. The server never receives the bytes in S1-03. */
+export interface UploadItemInput {
+  /** name, category, ownerId. Unchanged from the Day Cero contract. */
+  metadata: UploadMetadata;
+  /** Only used to derive the validated extension and for diagnostics. */
+  fileName: string;
+  declaredMimeType: string;
+  sizeBytes: number;
+  /**
+   * First 8 bytes of the file in base64: exactly 12 characters, 11 of data and
+   * a trailing `=`. Checked in memory, never persisted. Not a security control
+   * — it is a sanity check that avoids uploading 10 MiB of a mislabelled file.
+   */
+  signature: string;
+}
+
+export interface UploadItemResult {
+  index: number;
+  outcome:
+    | {
+        ok: true;
+        documentId: string;
+        versionId: string;
+        /** <workspace>/<document>/<version>/original.<ext>, resolved by the server. */
+        storagePath: string;
+        /** Canonical MIME derived from the extension. Must be sent to Storage. */
+        canonicalMimeType: string;
+      }
+    | { ok: false; error: { code: ActionErrorCode; message: string } };
+}
+
+export interface FinalizeItemResult {
   versionId: string;
-  processingStatus: "uploaded";
+  outcome:
+    | { ok: true; processingStatus: "uploaded" | "processing" }
+    | { ok: false; error: { code: ActionErrorCode; message: string } };
 }
 
 /** Undefined means no filter; null explicitly means Unassigned/no version status. */
@@ -97,12 +136,11 @@ export interface WorkspaceApi {
 }
 
 export interface IngestionApi {
-  /** `files`: repeated File fields; `metadata`: JSON UploadMetadata[] in file order.
-   * Validate 1..10 files, <=10 MiB each, with Zod + server-side file validation.
-   * Per-file outcomes make partial batch success explicit; no false batch atomicity.
-   */
-  uploadDocuments(formData: FormData): Promise<ActionResult<ActionResult<UploadedVersion>[]>>;
-  /** Reauthorize server-side; enqueue once without changing document/version IDs. */
+  /** 1..10 items. The batch is not atomic: each item has its own result. */
+  reserveUpload(items: UploadItemInput[]): Promise<ActionResult<UploadItemResult[]>>;
+  /** Reauthorizes on the server. Never accepts a bucket, path or expiry from the browser. */
+  finalizeUpload(versionIds: string[]): Promise<ActionResult<FinalizeItemResult[]>>;
+  /** Unchanged in S1-03. Implemented by S1-07. */
   retryProcessing(versionId: string): Promise<
     ActionResult<{ versionId: string; processingStatus: "uploaded" | "processing" }>
   >;
