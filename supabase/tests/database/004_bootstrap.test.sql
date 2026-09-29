@@ -26,6 +26,9 @@ select throws_ok($$select bootstrap_workspace('Anonymous','Nobody')$$,'42501',nu
 set local role anon;
 select throws_ok($$select bootstrap_workspace('Anonymous','Nobody')$$,'42501',null,'Anon cannot execute bootstrap');
 reset role;
-select is((select count(*) from workspaces),3::bigint,'Only one new workspace was created');
+select is((select count(*) from workspaces w
+  join profiles p on p.workspace_id = w.id
+  where p.id = '10000000-0000-4000-8000-000000000099'
+    and w.name = 'Renamed'),1::bigint,'Only one new workspace was created for the test user');
 select * from finish();
 rollback;

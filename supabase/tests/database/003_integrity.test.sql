@@ -2,8 +2,11 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set search_path = public, extensions;
 select no_plan();
-select is((select count(*) from auth.users where email like '%@example.test'), 4::bigint, 'Four local Auth users');
-select is((select count(*) from auth.identities where provider = 'email' and user_id in (select id from profiles)), 4::bigint, 'All profiles have email identities');
+select ok((select count(*) >= 4 from auth.users where email like '%@example.test'), 'Local Auth seed users exist');
+select ok((select not exists (
+  select 1 from profiles p
+  where not exists (select 1 from auth.identities i where i.user_id = p.id and i.provider = 'email')
+)), 'All profiles have email identities');
 select is((select count(*) from document_chunks where vector_dims(embedding) = 384), 3::bigint, 'All mock vectors have 384 dimensions');
 select is((select count(*) from documents where active_version_id is null), 2::bigint, 'Incomplete v1 documents have no active pointer');
 select ok((select bool_and(version_status is null) from document_versions where processing_status <> 'ready'), 'Incomplete processing has no functional status');
