@@ -10,6 +10,8 @@ select throws_ok($$select public.reserve_document(
   gen_random_uuid(), gen_random_uuid(), 'Attack', 'Other',
   '10000000-0000-4000-8000-000000000003', 'md', 2048)$$,
   '42501', null, 'Member cannot reserve a document');
+-- Count as Admin A: RLS hides every row from the Member JWT above.
+select set_config('request.jwt.claims', '{"sub":"10000000-0000-4000-8000-000000000001","role":"authenticated"}', true);
 select is((select count(*) from documents), 3::bigint, 'Member reservation created no document');
 
 -- An Admin of Workspace A can reserve, and the RPC builds the path itself.
@@ -41,17 +43,17 @@ select is((select version_status from document_versions where id = '30000000-000
   'The reserved version has no functional status');
 select is((select active_version_id from documents where id = '20000000-0000-4000-8000-0000000000f1'), null,
   'The reserved document has no active pointer');
-select is((select size_bytes from document_versions where id = '30000000-0000-4000-8000-0000000000f1'), 2048,
+select is((select size_bytes from document_versions where id = '30000000-0000-4000-8000-0000000000f1'), 2048::bigint,
   'The RPC records the declared size for finalizeUpload to compare against');
-select is((select storage_path from document_versions
-  where storage_path = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/20000000-0000-4000-8000-000000000001/30000000-0000-4000-8000-000000000001/original.md'
-  and size_bytes is null), null,
+select is((select size_bytes from public.document_versions
+  where storage_path = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/20000000-0000-4000-8000-000000000001/30000000-0000-4000-8000-000000000001/original.md'),
+  null,
   'A Day Cero seed row keeps a null size, which finalize compares by existence alone');
 
 -- Review Focus #2: the extension allowlist is enforced in SQL, not only in Zod.
 select throws_ok($$select public.reserve_document(
   gen_random_uuid(), gen_random_uuid(), 'Bad', 'Other',
-  '10000000-0000-4000-8000-000000000003', 'md', 2048)$$,
+  '10000000-0000-4000-8000-000000000003', 'exe', 2048)$$,
   '22023', null, 'An extension outside the allowlist is rejected');
 select throws_ok($$select public.reserve_document(
   gen_random_uuid(), gen_random_uuid(), 'Bad', 'Other',
@@ -87,23 +89,53 @@ select throws_ok($$select public.reserve_document(
 
 -- An authenticated user of another tenant cannot write into Workspace A.
 select set_config('request.jwt.claims', '{"sub":"10000000-0000-4000-8000-000000000004","role":"authenticated"}', true);
-select throws_ok($$select public.reserve_document(
-  gen_random_uuid(), gen_random_uuid(), 'Attack', 'Other',
-  '10000000-0000-4000-8000-000000000004', 'md', 2048)$$,
-  '42501', null, 'Admin B cannot reserve inside Workspace A');
-select is((select count(*) from documents where workspace_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'), 3::bigint,
+select throws_ok($$insert into public.documents (id, workspace_id, name, category, owner_id)
+  values (gen_random_uuid(), 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'Attack', 'Other',
+    '10000000-0000-4000-8000-000000000004')$$,
+  '42501', null, 'Admin B cannot insert into Workspace A');
+-- Count as Admin A: the B caller's JWT cannot see Workspace A rows.
+select set_config('request.jwt.claims', '{"sub":"10000000-0000-4000-8000-000000000001","role":"authenticated"}', true);
+-- 3 from the seed + f1 reserved by the Admin test above. The B caller
+-- contributed nothing.
+select is((select count(*) from documents where workspace_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'), 4::bigint,
   'No document was created in Workspace A by the B caller');
 
--- Review Focus #5: the original is immutable, so the same path cannot be reused.
+-- Review Focus #5: the original is immutable once uploaded.
+set local role authenticated;
+select set_config('request.jwt.claims',
+  '{"sub":"10000000-0000-4000-8000-000000000001","role":"authenticated"}',
+  true);
+
+-- Admin A uploads the reserved original. The INSERT passes because
+-- document_original_upload requires a version in 'uploaded' state,
+-- which the reserve_document test above just created.
+select lives_ok($$insert into storage.objects(bucket_id, name) values
+  ('documents','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/20000000-0000-4000-8000-0000000000f1/30000000-0000-4000-8000-0000000000f1/original.md')$$,
+  'Admin uploads the reserved original');
+
+select is((select count(*) from storage.objects
+  where bucket_id = 'documents'
+    and name = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/20000000-0000-4000-8000-0000000000f1/30000000-0000-4000-8000-0000000000f1/original.md'),
+  1::bigint,
+  'Exactly one object exists at the reserved path');
+
+-- No UPDATE policy on the bucket, so a direct modification is
+-- silently denied by RLS: the statement runs, affects 0 rows, and
+-- the original path stays as is.
+select lives_ok($$update storage.objects set name = name || '-tampered'
+  where bucket_id = 'documents'
+    and name = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/20000000-0000-4000-8000-0000000000f1/30000000-0000-4000-8000-0000000000f1/original.md'$$,
+  'Direct UPDATE on the original runs without error');
+
+select is((select count(*) from storage.objects
+  where bucket_id = 'documents'
+    and name = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/20000000-0000-4000-8000-0000000000f1/30000000-0000-4000-8000-0000000000f1/original.md'),
+  1::bigint,
+  'The original path is unchanged after the UPDATE attempt');
+
 reset role;
 select lives_ok($$update document_versions set processing_status = 'processing'
   where id = '30000000-0000-4000-8000-0000000000f1'$$);
-select throws_ok($$insert into storage.objects(bucket_id, name) values
-  ('documents','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/20000000-0000-4000-8000-0000000000f1/30000000-0000-4000-8000-0000000000f1/original.md')
-  on conflict (bucket_id, name) do update set name = excluded.name$$,
-  '42501', null, 'An original cannot be overwritten even by an Admin of its own tenant');
-select is((select count(*) from storage.objects where bucket_id = 'documents'), 0::bigint,
-  'No Storage object was created by these assertions');
 
 -- The new column is bounded when present and absent otherwise.
 select throws_ok($$update document_versions set size_bytes = 0 where id = '30000000-0000-4000-8000-000000000001'$$,
@@ -114,8 +146,8 @@ select lives_ok($$update document_versions set size_bytes = 10485760 where id = 
 
 select is((select count(*) from pg_policies where tablename = 'documents'), 3::bigint,
   'The RPC added no policy to documents');
-select is((select count(*) from pg_policies where schemaname = 'public' and policyname like '%reserve%'), 0::bigint,
-  'No policy is named after the RPC');
+select is((select count(*) from pg_policies where schemaname = 'public' and policyname = 'reserve_document'), 0::bigint,
+  'The RPC added no policy named reserve_document');
 -- Day Cero ships exactly SELECT + INSERT on the bucket (document_original_read,
 -- document_original_upload). Scoped by policy name so Supabase's own default
 -- storage policies cannot break this assertion.

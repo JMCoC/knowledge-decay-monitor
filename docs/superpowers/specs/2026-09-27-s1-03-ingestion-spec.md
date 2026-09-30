@@ -288,6 +288,16 @@ Un solo objeto. El nombre lo fija el protocolo: `supabase migration new <dominio
 
 ```sql
 -- supabase/migrations/<timestamp>_reserve_document.sql
+-- The column is added before the function that uses it. Two separate
+-- statements: PostgreSQL rejects ADD COLUMN ... ADD CONSTRAINT without
+-- a comma in a single ALTER TABLE.
+alter table public.document_versions
+  add column size_bytes bigint;
+
+alter table public.document_versions
+  add constraint document_versions_size_bytes_within_limit
+    check (size_bytes is null or size_bytes between 1 and 10485760);
+
 create function public.reserve_document(
   p_document_id uuid,
   p_version_id uuid,
@@ -330,11 +340,6 @@ begin
   return v_storage_path;
 end;
 $$;
-
-alter table public.document_versions
-  add column size_bytes bigint
-  add constraint document_versions_size_bytes_within_limit
-    check (size_bytes is null or size_bytes between 1 and 10485760);
 
 revoke all on function public.reserve_document(uuid,uuid,text,public.document_category,uuid,text,bigint)
   from public, anon;

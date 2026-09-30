@@ -3,6 +3,18 @@
 -- storage_path_matches_identity CHECK that enforces it. A caller can supply
 -- only an extension from a three-value allowlist, never a path.
 
+-- Nullable so the Day Cero seed rows keep working and no default invents data
+-- for them. This function never writes null: every version it creates carries
+-- the size the caller declared, which is what finalizeUpload compares Storage
+-- against. Seed rows predate the column and stay null. The column is added
+-- before the function that uses it.
+alter table public.document_versions
+  add column size_bytes bigint;
+
+alter table public.document_versions
+  add constraint document_versions_size_bytes_within_limit
+    check (size_bytes is null or size_bytes between 1 and 10485760);
+
 create function public.reserve_document(
   p_document_id uuid,
   p_version_id uuid,
@@ -45,15 +57,6 @@ begin
   return v_storage_path;
 end;
 $$;
-
--- Nullable so the Day Cero seed rows keep working and no default invents data
--- for them. This function never writes null: every version it creates carries
--- the size the caller declared, which is what finalizeUpload compares Storage
--- against. Seed rows predate the column and stay null.
-alter table public.document_versions
-  add column size_bytes bigint
-  add constraint document_versions_size_bytes_within_limit
-    check (size_bytes is null or size_bytes between 1 and 10485760);
 
 revoke all on function public.reserve_document(uuid,uuid,text,public.document_category,uuid,text,bigint)
   from public, anon, authenticated;
