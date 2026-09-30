@@ -3,30 +3,42 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --hostname 127.0.0.1 --port 3000",
     "build": "next build",
     "start": "next start",
+    "start:local": "next start --hostname 127.0.0.1 --port 3000",
     "lint": "eslint",
     "typecheck": "next typegen && tsc --noEmit",
     "test:db": "supabase test db --local",
-    "test:fixtures": "node scripts/check-local-fixtures.mjs"
+    "test:fixtures": "node scripts/check-local-fixtures.mjs",
+    "test:unit": "vitest run --config vitest.config.mts",
+    "test:integration": "node scripts/with-local-supabase.mjs integration",
+    "test:e2e:auth": "node scripts/with-local-supabase.mjs e2e",
+    "test:auth:restart": "node scripts/check-auth-restart.mjs"
   },
   "dependencies": {
     "@sentry/nextjs": "^10.75.0",
+    "@supabase/ssr": "0.12.7",
+    "@supabase/supabase-js": "2.117.2",
     "next": "16.3.5",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "server-only": "0.0.1",
+    "zod": "4.6.5"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
+    "@types/node": "^24.10.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.3.5",
     "supabase": "^2.117.0",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vite": "8.3.1",
+    "vitest": "5.0.2"
   },
   "packageManager": "pnpm@12.5.1"
 }
