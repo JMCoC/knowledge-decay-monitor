@@ -310,7 +310,7 @@ La base común fija el comportamiento, pero el Día Cero no eligió el runtime d
 | Runtime de parsing y embeddings | Compatibilidad real con PDF/DOCX/Markdown y `gte-small`; límites de tiempo/memoria para archivos permitidos | Antes del primer pipeline real |
 | Disparo y recuperación del trabajo | Cómo se inicia, se evita doble ejecución y se recupera una interrupción sin depender de que el navegador siga abierto | Antes de integrar procesamiento/retry |
 | Finalización transaccional | Operación que persiste chunks y estados/puntero de manera consistente; prueba de fallo | Antes de declarar v1 `ready` |
-| Compensación de upload | Qué sucede si Storage falla después de reservar filas, o si falla la persistencia tras cargar el archivo | Antes del E2E de upload |
+| Compensación de upload | **Cerrada en S1-03**: Día Cero no otorga `DELETE` sobre `documents` ni `document_versions`, así que una reserva huérfana no se deshace. La limitación se declara (el Repository muestra el documento con `processing_status = uploaded` sin objeto); S1-07 lo marcará `processing_failed`; el cierre real llega con el Purge Worker en Sprint 5. Ver spec S1-03 §10.1. | Cerrada |
 
 No se promete una cola durable, un scheduler, Realtime o un worker desplegado que aún no existen. La elección debe documentarse con su evidencia y, si altera límites o despliegue, mediante otro ADR. Replace File conserva la ambigüedad identificada en S1-07; no se implementa una semántica por suposición.
 
