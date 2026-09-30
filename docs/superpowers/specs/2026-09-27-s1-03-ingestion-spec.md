@@ -441,6 +441,7 @@ La alternativa —una RPC que reciba un array y capture excepciones por ítem en
 |---|---|---|---|
 | Sin sesión | sobre de la Server Action | `UNAUTHENTICATED` | no se reserva nada |
 | Rol `Member` | sobre de la Server Action | `FORBIDDEN` | no se reserva nada |
+| Usuario sin workspace (`WORKSPACE_REQUIRED` de identity) | sobre de la Server Action | `FORBIDDEN` | no se reserva nada, mensaje controlado en inglés. Mapeo interno de ingestion (`requirePrivilegedActor`): es un estado normal de onboarding, no un defecto, así que no llega a Sentry |
 | Nombre vacío, solo espacios o mayor de 200 caracteres | ítem | `INVALID_INPUT` | ese ítem no existe |
 | Categoría fuera del enum fijo | ítem | `INVALID_INPUT` | ese ítem no existe |
 | Owner ausente | ítem | `INVALID_INPUT` | ese ítem no existe |
