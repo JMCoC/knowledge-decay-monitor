@@ -7,7 +7,7 @@ import {
   isDeclaredMimeConsistent,
   isSignatureConsistent,
   isValidFileSize,
-} from "./validation";
+} from "@/modules/ingestion/validation";
 
 const PDF_BYTES = Buffer.from([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x32, 0x33]);
 const DOCX_BYTES = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00]);

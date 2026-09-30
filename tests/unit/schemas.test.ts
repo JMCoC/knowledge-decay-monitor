@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { uploadBatchSchema, uploadItemSchema, finalizeBatchSchema } from "./schemas";
+import { uploadBatchSchema, uploadItemSchema, finalizeBatchSchema } from "@/modules/ingestion/schemas";
 
 const validItem = {
   metadata: {
