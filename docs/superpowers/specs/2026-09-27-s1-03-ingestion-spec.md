@@ -65,7 +65,7 @@ Las filas de `documents` y `document_versions` deben existir **antes** de subir 
 | Longitud del nombre | 1 a 200 caracteres tras `btrim` | `CHECK` de `documents.name` |
 | Longitud de la ruta de Storage | derivada, nunca aportada por el cliente | `CHECK storage_path_matches_identity` |
 
-El PRD y el ticket dicen "10 MB"; Día Cero fijó 10 MiB y el bucket ya está creado con ese valor. **10 MiB es la lectura válida** y no se reinterpretará.
+El PRD y el ticket dicen "10 MB". La implementación usa 10 485 760 bytes, que es el file_size_limit del bucket creado en Día Cero. Se conserva la nomenclatura "MB" del ticket y del PRD, con el valor binario fijado en 10 485 760 bytes (10 MiB) y no se reinterpretará.
 
 ---
 
