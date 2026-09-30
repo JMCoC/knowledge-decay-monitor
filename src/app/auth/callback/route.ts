@@ -1,13 +1,13 @@
 import { NextResponse, type NextRequest } from "next/server";
 import type { CookieOptions } from "@supabase/ssr";
-import { APP_ORIGIN } from "../../../lib/app-origin";
+import { getAppOrigin } from "../../../lib/app-origin";
 import { reportAuthFailure } from "../../../lib/observability/auth-events";
 import { createWritableClient } from "../../../lib/supabase/server";
 
 type CookieUpdate = { name: string; value: string; options: CookieOptions };
 
 function redirect(path: string, cookies: CookieUpdate[] = [], headers: Map<string, string> = new Map()) {
-  const response = NextResponse.redirect(new URL(path, APP_ORIGIN));
+  const response = NextResponse.redirect(new URL(path, getAppOrigin()));
   for (const [name, value] of headers) response.headers.set(name, value);
   for (const { name, value, options } of cookies) response.cookies.set(name, value, options);
   response.headers.set("Cache-Control", "private, no-store");

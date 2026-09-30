@@ -2,7 +2,7 @@
 
 import { AuthApiError } from "@supabase/supabase-js";
 import type { ActionResult } from "../../types/contracts";
-import { APP_ORIGIN } from "../../lib/app-origin";
+import { getAppOrigin } from "../../lib/app-origin";
 import { reportAuthFailure } from "../../lib/observability/auth-events";
 import { createWritableClient } from "../../lib/supabase/server";
 import { IdentityError } from "./errors";
@@ -147,7 +147,7 @@ export async function requestPasswordReset(
   try {
     const client = await createWritableClient();
     const { error } = await client.auth.resetPasswordForEmail(parsed.data.email, {
-      redirectTo: `${APP_ORIGIN}/auth/callback`,
+      redirectTo: `${getAppOrigin()}/auth/callback`,
     });
     if (error) {
       reportAuthFailure({ operation: "recovery", code: "PROVIDER_ERROR", correlationId: crypto.randomUUID() });

@@ -1,6 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthApiError } from "@supabase/supabase-js";
-import { login, logout, register } from "../../src/modules/identity/actions";
+import { login, logout, register, requestPasswordReset } from "../../src/modules/identity/actions";
 
 const mocks = vi.hoisted(() => ({
   createWritableClient: vi.fn(),
@@ -43,6 +43,7 @@ function createClient({
       signUp: vi.fn(async () => signUpResult),
       signInWithPassword: vi.fn(async () => signInResult),
       signOut: vi.fn(async () => signOutResult),
+      resetPasswordForEmail: vi.fn(async () => ({ error: null as Error | null })),
       getUser: vi.fn(async () => userResult),
     },
     from: vi.fn(() => query),
@@ -52,6 +53,7 @@ function createClient({
 
 describe("Identity Auth actions", () => {
   beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.unstubAllEnvs());
 
   it("does not claim registration succeeded when Auth returned no session", async () => {
     mocks.createWritableClient.mockResolvedValue(
@@ -63,6 +65,21 @@ describe("Identity Auth actions", () => {
     ).resolves.toMatchObject({
       ok: false,
       error: { code: "INTERNAL_ERROR" },
+    });
+  });
+
+  it("sends recovery to the configured environment callback", async () => {
+    vi.stubEnv("APP_ORIGIN", "https://knowledge-decay-monitor-git-develop-kdm17.vercel.app");
+    const client = createClient();
+    mocks.createWritableClient.mockResolvedValue(client);
+
+    await expect(requestPasswordReset({ email: "alex@example.com" })).resolves.toEqual({
+      ok: true,
+      data: { accepted: true },
+    });
+
+    expect(client.auth.resetPasswordForEmail).toHaveBeenCalledWith("alex@example.com", {
+      redirectTo: "https://knowledge-decay-monitor-git-develop-kdm17.vercel.app/auth/callback",
     });
   });
 
