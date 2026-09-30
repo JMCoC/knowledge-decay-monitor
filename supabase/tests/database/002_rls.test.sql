@@ -6,7 +6,7 @@ select no_plan();
 -- Metadata only, rolled back. Real blob access is tested separately over HTTP.
 insert into storage.objects (bucket_id, name)
 select 'documents', storage_path from public.document_versions
-on conflict (bucket_id, name) do nothing;
+on conflict do nothing;
 
 set local role authenticated;
 select set_config('request.jwt.claims', '{"sub":"10000000-0000-4000-8000-000000000001","role":"authenticated"}', true);
