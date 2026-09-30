@@ -7,7 +7,6 @@ import type {
   ActionErrorCode,
   ActionResult,
   Actor,
-  DocumentCategory,
   FinalizeItemResult,
   UploadItemInput,
   UploadItemResult,
@@ -19,36 +18,6 @@ import { actionCodeForSqlstate, canonicalMimeFor, extensionFromFileName } from "
 const GENERIC_OWNER_MESSAGE = "The selected owner is not available.";
 const MISSING_OBJECT_MESSAGE = "The file did not reach storage. Try the upload again.";
 const SIZE_MISMATCH_MESSAGE = "The stored file does not match the file you selected.";
-
-/**
- * Typed against the Task 5 migration, not against today's database.ts.
- * Until Dev 1 regenerates types, reserve_document is invisible to TS: this
- * narrow cast is the only untyped seam, and it disappears with the regen.
- */
-// TODO(s1-03): remove cast after database.ts regeneration (Task 5)
-type ReserveDocumentFn = (
-  fn: "reserve_document",
-  args: {
-    p_document_id: string;
-    p_version_id: string;
-    p_name: string;
-    p_category: DocumentCategory;
-    p_owner_id: string;
-    p_extension: string;
-    p_size_bytes: number;
-  },
-) => Promise<{ data: string | null; error: { code: string } | null }>;
-
-/**
- * The row finalizeUpload reads. size_bytes is guaranteed by the Task 5
- * migration; database.ts catches up at regen.
- */
-// TODO(s1-03): remove cast after database.ts regeneration (Task 5)
-interface FinalizeVersionRow {
-  id: string;
-  storage_path: string;
-  size_bytes: number | null;
-}
 
 function internalError(): ActionResult<never> {
   return {
@@ -143,7 +112,6 @@ export async function reserveUpload(
   }
 
   const supabase = await createReadOnlyClient();
-  const callReserveDocument = supabase.rpc as unknown as ReserveDocumentFn;
   const results: UploadItemResult[] = [];
 
   for (const [index, entry] of batch.data.entries()) {
@@ -182,9 +150,9 @@ export async function reserveUpload(
 
     // A rejected RPC arrives as { error }; a dead connection throws. Both
     // are item-level failures: the envelope stays ok (spec §8.2).
-    let rpcResult: Awaited<ReturnType<ReserveDocumentFn>>;
+    let rpcResult: Awaited<ReturnType<typeof supabase.rpc>>;
     try {
-      rpcResult = await callReserveDocument("reserve_document", {
+      rpcResult = await supabase.rpc("reserve_document", {
         p_document_id: documentId,
         p_version_id: versionId,
         p_name: item.data.metadata.name,
@@ -316,7 +284,7 @@ export async function finalizeUpload(
 
       // RLS already scoped the read to the caller's tenant, so a null row is
       // either an unknown id or another tenant's. Both answer the same way.
-      const version = rawVersion as unknown as FinalizeVersionRow | null;
+      const version = rawVersion;
       if (!version) {
         results.push({
           versionId,
