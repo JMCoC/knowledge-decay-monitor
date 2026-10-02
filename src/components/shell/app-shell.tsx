@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
 import type { WorkspaceRole } from "../../types/contracts";
 import { logout } from "../../modules/identity/actions";
@@ -15,6 +15,7 @@ type AppShellProps = {
 
 export function AppShell({ workspaceName, fullName, role, children }: AppShellProps) {
   const router = useRouter();
+  const pathname = usePathname();
   const [message, setMessage] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const canSeeRepository = role === "Admin" || role === "QA Lead";
@@ -36,6 +37,9 @@ export function AppShell({ workspaceName, fullName, role, children }: AppShellPr
       setPending(false);
     }
   }
+
+  const isHomeActive = pathname === "/app";
+  const isRepositoryActive = pathname.startsWith("/repository");
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
@@ -68,21 +72,27 @@ export function AppShell({ workspaceName, fullName, role, children }: AppShellPr
         >
           <Link
             href="/app"
-            aria-current="page"
-            className="shrink-0 rounded-lg bg-cyan-50 px-3 py-2 text-sm font-semibold text-cyan-950"
+            aria-current={isHomeActive ? "page" : undefined}
+            className={`shrink-0 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+              isHomeActive
+                ? "bg-cyan-50 font-semibold text-cyan-950"
+                : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+            }`}
           >
             Home
           </Link>
           {canSeeRepository ? (
-            <button
-              type="button"
-              disabled
-              aria-disabled="true"
-              className="shrink-0 cursor-not-allowed rounded-lg px-3 py-2 text-left text-sm text-slate-400"
-              title="Repository will be available in a later release."
+            <Link
+              href="/repository"
+              aria-current={isRepositoryActive ? "page" : undefined}
+              className={`shrink-0 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                isRepositoryActive
+                  ? "bg-cyan-50 font-semibold text-cyan-950"
+                  : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+              }`}
             >
               Repository
-            </button>
+            </Link>
           ) : null}
         </nav>
 
