@@ -7,20 +7,20 @@ export default async function RepositoryPage() {
 
     if ("error" in result) {
         return (
-            <main className="mx-auto w-full max-w-6xl p-8">
-                <h1 className="text-2xl font-semibold">Repositorio</h1>
+            <div className="mx-auto w-full max-w-6xl">
+                <h1 className="text-2xl font-semibold text-slate-900">Repositorio</h1>
 
                 <div className="mt-6 rounded-lg border border-red-200 bg-red-50 p-4 text-red-700">
                     {result.error}
                 </div>
-            </main>
+            </div>
         );
     }
 
     return (
-        <main className="mx-auto w-full max-w-6xl p-8">
+        <div className="mx-auto w-full max-w-6xl">
             <div>
-                <h1 className="text-3xl font-semibold">Repositorio</h1>
+                <h1 className="text-3xl font-semibold text-slate-900">Repositorio</h1>
                 <p className="mt-2 text-sm text-zinc-600">
                     Documentos disponibles en tu Workspace
                 </p>
@@ -90,6 +90,6 @@ export default async function RepositoryPage() {
                     </tbody>
                 </table>
             </div>
-        </main>
+        </div>
     );
 }
