@@ -1,10 +1,10 @@
-import { createClient } from "@/lib/supabase/server";
+import { createReadOnlyClient } from "@/lib/supabase/server";
 import type { Actor, IdentityApi } from "@/types/contracts";
 
 export function createIdentityService(): IdentityApi {
     return {
         async requireActor(): Promise<Actor> {
-            const supabase = await createClient();
+            const supabase = await createReadOnlyClient();
 
             const {
                 data: { user },

@@ -1,4 +1,4 @@
-import { createServerClient } from "@supabase/ssr";
+﻿import { createServerClient } from "@supabase/ssr";
 import type { BrowserContext } from "@playwright/test";
 
 export async function loginAs(
@@ -29,7 +29,7 @@ export async function loginAs(
             cookiesToSet.push({
               name: c.name,
               value: c.value,
-              domain: "localhost",
+              domain: "127.0.0.1",
               path: "/",
             });
           }

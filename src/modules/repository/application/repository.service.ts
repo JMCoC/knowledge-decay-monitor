@@ -9,7 +9,7 @@ import type {
     Actor,
 } from "@/types/contracts";
 
-import { createClient } from "@/lib/supabase/server";
+import { createReadOnlyClient } from "@/lib/supabase/server";
 import {
     findRepositoryDocuments,
     findVersionStoragePath,
@@ -46,7 +46,7 @@ export function createRepositoryService(identity: {
                     };
                 }
 
-                const supabase = await createClient();
+                const supabase = await createReadOnlyClient();
 
                 const result = await findRepositoryDocuments(supabase, query);
 
@@ -150,7 +150,7 @@ export function createRepositoryService(identity: {
                     };
                 }
 
-                const supabase = await createClient();
+                const supabase = await createReadOnlyClient();
 
                 const versionData = await findVersionStoragePath(
                     supabase,

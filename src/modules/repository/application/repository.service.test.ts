@@ -6,7 +6,7 @@ import * as sentry from "@sentry/nextjs";
 
 // Mocks de dependencias externas
 vi.mock("@/lib/supabase/server", () => ({
-    createClient: vi.fn().mockResolvedValue({}),
+    createReadOnlyClient: vi.fn().mockResolvedValue({}),
 }));
 
 vi.mock("../infrastructure/repository.repository", () => ({

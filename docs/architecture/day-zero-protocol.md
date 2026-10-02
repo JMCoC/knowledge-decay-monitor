@@ -38,7 +38,7 @@ Se conceden permisos explícitos; no se depende de los GRANT por defecto de Supa
 
 ### Storage
 
-Bucket privado `documents`, máximo 10 MiB por archivo (10 × 1024 × 1024 bytes). Formatos: PDF, DOCX y Markdown. El límite de 10 archivos por lote y la validación de contenido se implementan en S1-03; el MIME del bucket no demuestra que el archivo sea válido.
+Bucket privado `documents, máximo 10 MiB por archivo (10 × 1024 × 1024 bytes). Formatos: PDF, DOCX y Markdown. S1-03 valida hechos declarados (extensión, tamaño, MIME coherente, firma de 8 bytes en memoria); S1-04 valida el contenido real al parsear. El MIME del bucket no demuestra que el archivo sea válido, y una firma de prefijo no distingue un DOCX de un ZIP genérico ni dice nada de un Markdown.
 
 Ruta: `<workspace_id>/<document_id>/<version_id>/original.<ext>`. La política exige una versión registrada cuyo `storage_path` coincida exactamente, además del tenant y rol. Conocer un prefijo no permite abrir o escribir archivos sin registro. Primero se reserva documento/versión `uploaded`; luego se carga el objeto sin sobrescritura; después se inicia el pipeline. Dev 2 debe compensar una carga fallida y limpiar reservas/objetos huérfanos.
 
@@ -115,6 +115,7 @@ tests/e2e/
 | Cada nueva migración | Autor registrado antes de crearla | Dev 1 revisa orden y tipos |
 | `supabase/tests/database/001_day_zero.test.sql`, `002_rls.test.sql`, `004_bootstrap.test.sql` | Dev 1 | Otros añaden archivos propios |
 | `supabase/tests/database/003_integrity.test.sql` | Dev 2 | Dev 1 revisa cambios de restricciones |
+| `supabase/tests/database/005_ingestion.test.sql` | Dev 2 | Cubre RPC `reserve_document`, `size_bytes` y policies del bucket |
 | `scripts/check-local-fixtures.mjs` | Dev 1 | Dev 2/3 solicitan nuevos escenarios |
 | `tests/e2e/auth/**` | Dev 1 | S1-01 |
 | `tests/e2e/repository/**` | Dev 3 | Dev 2 entrega fixtures y readiness del worker |

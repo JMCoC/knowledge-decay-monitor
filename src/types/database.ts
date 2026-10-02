@@ -60,6 +60,7 @@ export type Database = {
           document_id: string
           id: string
           processing_status: Database["public"]["Enums"]["processing_status"]
+          size_bytes: number | null
           storage_path: string
           updated_at: string
           version_number: number
@@ -72,6 +73,7 @@ export type Database = {
           document_id: string
           id?: string
           processing_status?: Database["public"]["Enums"]["processing_status"]
+          size_bytes?: number | null
           storage_path: string
           updated_at?: string
           version_number: number
@@ -84,6 +86,7 @@ export type Database = {
           document_id?: string
           id?: string
           processing_status?: Database["public"]["Enums"]["processing_status"]
+          size_bytes?: number | null
           storage_path?: string
           updated_at?: string
           version_number?: number
@@ -221,6 +224,18 @@ export type Database = {
     Functions: {
       bootstrap_workspace: {
         Args: { full_name: string; workspace_name: string }
+        Returns: string
+      }
+      reserve_document: {
+        Args: {
+          p_category: Database["public"]["Enums"]["document_category"]
+          p_document_id: string
+          p_extension: string
+          p_name: string
+          p_owner_id: string
+          p_size_bytes: number
+          p_version_id: string
+        }
         Returns: string
       }
     }

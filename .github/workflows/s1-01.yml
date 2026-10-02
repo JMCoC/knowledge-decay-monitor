@@ -1,0 +1,67 @@
+name: S1-01 Auth and Workspace
+
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [develop, main]
+
+permissions:
+  contents: read
+
+jobs:
+  auth-workspace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.11.0
+          package-manager-cache: false
+
+      - name: Install pnpm
+        run: npm install --global pnpm@12.5.1
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Unit tests
+        run: pnpm test:unit
+
+      - name: Start disposable local Supabase
+        run: node scripts/local-supabase-lifecycle.mjs start
+
+      - name: Database tests
+        run: pnpm test:db
+
+      - name: Local fixture regression
+        run: pnpm test:fixtures
+
+      - name: Auth and bootstrap integration
+        run: pnpm test:integration
+
+      - name: Production build
+        run: node scripts/with-local-supabase.mjs build
+
+      - name: Install Chromium and system dependencies
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Auth and workspace browser tests
+        run: pnpm test:e2e:auth
+
+      - name: Recovery template restart test
+        run: pnpm test:auth:restart
+
+      - name: Stop disposable local Supabase
+        if: always()
+        run: node scripts/local-supabase-lifecycle.mjs stop
