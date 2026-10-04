@@ -6,31 +6,20 @@ import type {
     RepositoryQuery,
 } from "@/types/contracts";
 
-import { createIdentityService } from "@/modules/identity/application/identity.service";
+import { requireDocumentActor } from "@/modules/identity";
 import { createRepositoryService } from "./repository.service";
 
 export async function listRepositoryDocuments(
     query: RepositoryQuery = {},
-): Promise<RepositoryPage | { error: string }> {
-    const identity = createIdentityService();
-    const repository = createRepositoryService(identity);
-
-    const result = await repository.listDocuments(query);
-
-    if (!result.ok) {
-        return {
-            error: result.error.message,
-        };
-    }
-
-    return result.data;
+): Promise<ActionResult<RepositoryPage>> {
+    const repository = createRepositoryService({ requireDocumentActor });
+    return repository.listDocuments(query);
 }
 
 export async function getDocumentOriginalUrlAction(
     versionId: string,
 ): Promise<ActionResult<{ url: string; expiresAt: string }>> {
-    const identity = createIdentityService();
-    const repository = createRepositoryService(identity);
+    const repository = createRepositoryService({ requireDocumentActor });
 
     return repository.getOriginalUrl(versionId);
 }

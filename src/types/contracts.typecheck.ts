@@ -1,18 +1,26 @@
 import type {
   ActionErrorCode,
   ActionResult,
-  FinalizeItemResult,
   IngestionApi,
   UploadItemInput,
   UploadItemResult,
+  UploadSnapshot,
 } from "./contracts";
 
-/** finalizeUpload takes an array; a single-item call passes a one-element array. */
-const _finalize: IngestionApi["finalizeUpload"] = (versionIds: string[]) =>
-  Promise.resolve({ ok: true, data: [] as FinalizeItemResult[] });
+const _finalize: IngestionApi["finalizeUpload"] = (input) =>
+  Promise.resolve({
+    ok: true,
+    data: {
+      versionId: input.versionId,
+      uploadState: "pending",
+      attemptId: input.attemptId,
+      canOpen: false,
+      canResume: true,
+      canRecover: false,
+    },
+  });
 
-/** The per-item error reuses the envelope's code union. */
-const _code: ActionErrorCode = "PROCESSING_FAILED";
+const _code: ActionErrorCode = "CONFLICT";
 
 const _item: UploadItemInput = {
   metadata: { name: "Runbook", category: "SOP", ownerId: "u" },
@@ -20,6 +28,8 @@ const _item: UploadItemInput = {
   declaredMimeType: "application/pdf",
   sizeBytes: 1024,
   signature: "JVBERi0xMjM=",
+  idempotencyKey: "550e8400-e29b-41d4-a716-446655440000",
+  sha256: "a".repeat(64),
 };
 
 const _ok: UploadItemResult = {
@@ -27,12 +37,23 @@ const _ok: UploadItemResult = {
   outcome: {
     ok: true,
     documentId: "d",
-    versionId: "v",
-    storagePath: "w/d/v/original.pdf",
-    canonicalMimeType: "application/pdf",
+    target: {
+      versionId: "v",
+      attemptId: "a",
+      storagePath: "w/d/v/attempts/a/original.pdf",
+      canonicalMimeType: "application/pdf",
+    },
   },
 };
 
 const _envelope: ActionResult<UploadItemResult[]> = { ok: true, data: [_ok] };
+const _snapshot: UploadSnapshot = {
+  versionId: "v",
+  uploadState: null,
+  attemptId: null,
+  canOpen: false,
+  canResume: true,
+  canRecover: false,
+};
 
-void [_finalize, _code, _item, _envelope];
+void [_finalize, _code, _item, _envelope, _snapshot];

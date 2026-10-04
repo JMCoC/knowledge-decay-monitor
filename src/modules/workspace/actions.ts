@@ -73,8 +73,9 @@ export async function createWorkspace(
       return failure("INTERNAL_ERROR", "We couldn't create your workspace. Try again.");
     }
 
-    if (!data) return reconcileUncertainBootstrap(client);
-    return { ok: true, data: { workspaceId: data } };
+    const workspaceId = data as string | null;
+    if (!workspaceId) return reconcileUncertainBootstrap(client);
+    return { ok: true, data: { workspaceId } };
   } catch (error) {
     if (error instanceof IdentityError && error.code === "UNAUTHENTICATED") {
       return failure("UNAUTHENTICATED", "Please sign in to continue.");

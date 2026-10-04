@@ -1,4 +1,4 @@
 import "server-only";
 
 export { createWorkspace } from "./actions";
-export { getOwnWorkspace } from "./queries";
+export { getOwnWorkspace, listEligibleOwners } from "./queries";

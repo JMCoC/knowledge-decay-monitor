@@ -1,121 +1,80 @@
+import "server-only";
+
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/database";
+import { createServiceClient } from "@/lib/supabase/service";
+import { IdentityError } from "@/modules/identity";
 import type { RepositoryQuery } from "@/types/contracts";
+import { repositoryQuerySchema } from "../schemas";
 
 type DbClient = SupabaseClient<Database>;
 
-export async function findRepositoryDocuments(
-    supabase: DbClient,
-    query: RepositoryQuery,
-) {
-    const page = Math.max(query.page ?? 1, 1);
-    const pageSize = Math.min(Math.max(query.pageSize ?? 25, 1), 100);
-    const from = (page - 1) * pageSize;
-    const to = from + pageSize - 1;
-    const versionRelation =
-        query.versionStatus === undefined
-            ? "document_versions!document_versions_document_id_workspace_id_fkey"
-            : "document_versions!document_versions_document_id_workspace_id_fkey!inner";
-
-    let request = supabase
-        .from("documents")
-        .select(
-            `
-        id,
-        name,
-        category,
-        owner_id,
-        active_version_id,
-        created_at,
-        profiles!documents_owner_id_workspace_id_fkey (
-          id,
-          full_name
-        ),
-        ${versionRelation} (
-          id,
-          version_number,
-          processing_status,
-          version_status,
-          analysis_status
-        )
-      `,
-            { count: "exact" },
-        )
-        .order("created_at", { ascending: false })
-        .range(from, to);
-
-    if (query.name?.trim()) {
-        request = request.ilike("name", `%${query.name.trim()}%`);
-    }
-
-    if (query.category) {
-        request = request.eq("category", query.category);
-    }
-
-    if (query.ownerId !== undefined) {
-        request =
-            query.ownerId === null
-                ? request.is("owner_id", null)
-                : request.eq("owner_id", query.ownerId);
-    }
-
-    if (query.versionStatus !== undefined) {
-        request =
-            query.versionStatus === null
-                ? request.is("document_versions.version_status", null)
-                : request.eq("document_versions.version_status", query.versionStatus);
-    }
-
-    const { data, error, count } = await request;
-
-    if (error) {
-        throw error;
-    }
-
-    return {
-        data: data ?? [],
-        total: count ?? 0,
-        page,
-        pageSize,
-    };
+export function escapeLikeLiteral(value: string): string {
+  return value.replace(/[\\%_]/g, "\\$&");
 }
 
+export async function findRepositoryDocuments(supabase: DbClient, query: RepositoryQuery) {
+  const parsed = repositoryQuerySchema.parse(query);
+  const page = parsed.page;
+  const pageSize = parsed.pageSize;
+  const from = (page - 1) * pageSize;
+  const to = from + pageSize - 1;
+
+  let request = supabase
+    .from("repository_documents")
+    .select(
+      "id,name,category,owner_id,owner_profile_id,owner_full_name,active_version_id,created_at,latest_version_id,latest_version_number,latest_processing_status,latest_version_status,latest_analysis_status,latest_upload_state",
+      { count: "exact" },
+    )
+    .order("created_at", { ascending: false })
+    .order("id", { ascending: false })
+    .range(from, to);
+
+  if (parsed.name) request = request.ilike("name", `%${escapeLikeLiteral(parsed.name)}%`);
+  if (parsed.category !== undefined) request = request.eq("category", parsed.category);
+  if (parsed.ownerId !== undefined) {
+    request = parsed.ownerId === null
+      ? request.is("owner_id", null)
+      : request.eq("owner_id", parsed.ownerId);
+  }
+  if (parsed.versionStatus !== undefined) {
+    request = parsed.versionStatus === null
+      ? request.is("latest_version_status", null)
+      : request.eq("latest_version_status", parsed.versionStatus);
+  }
+
+  const { data, error, count } = await request;
+  if (error) throw new Error("Repository query failed.");
+  return { data: data ?? [], total: count ?? 0, page, pageSize };
+}
+
+/** Resolves only a confirmed canonical original through a service-only RPC that rechecks Profile. */
 export async function findVersionStoragePath(
-    supabase: DbClient,
-    versionId: string,
-    workspaceId: string,
+  userId: string,
+  versionId: string,
 ): Promise<{ storagePath: string } | null> {
-    const { data, error } = await supabase
-        .from("document_versions")
-        .select("storage_path")
-        .eq("id", versionId)
-        .eq("workspace_id", workspaceId)
-        .maybeSingle();
-
-    if (error || !data) {
-        return null;
-    }
-
-    return { storagePath: data.storage_path };
+  const { data, error } = await createServiceClient().rpc("get_confirmed_document_path", {
+    p_user_id: userId,
+    p_version_id: versionId,
+  });
+  if (error?.code === "42501") throw new IdentityError("FORBIDDEN");
+  if (error) throw new Error("Repository access check failed.");
+  return typeof data === "string" ? { storagePath: data } : null;
 }
 
 export async function createDocumentSignedUrl(
-    supabase: DbClient,
-    storagePath: string,
-    expiresInSeconds = 300,
+  supabase: DbClient,
+  storagePath: string,
+  expiresInSeconds = 300,
 ): Promise<{ url: string; expiresAt: string } | null> {
-    const { data, error } = await supabase.storage
-        .from("documents")
-        .createSignedUrl(storagePath, expiresInSeconds);
+  const { data, error } = await supabase.storage
+    .from("documents")
+    .createSignedUrl(storagePath, expiresInSeconds);
 
-    if (error || !data?.signedUrl) {
-        return null;
-    }
+  if (error || !data?.signedUrl) return null;
 
-    const expiresAt = new Date(Date.now() + expiresInSeconds * 1000).toISOString();
-
-    return {
-        url: data.signedUrl,
-        expiresAt,
-    };
+  return {
+    url: data.signedUrl,
+    expiresAt: new Date(Date.now() + expiresInSeconds * 1000).toISOString(),
+  };
 }
