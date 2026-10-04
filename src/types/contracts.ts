@@ -57,20 +57,44 @@ export interface UploadMetadata {
   ownerId: string;
 }
 
-/** Declared facts about one file. The server never receives the bytes in S1-03. */
+/** Browser declaration; the server independently verifies every byte before promotion. */
 export interface UploadItemInput {
-  /** name, category, ownerId. Unchanged from the Day Cero contract. */
   metadata: UploadMetadata;
-  /** Only used to derive the validated extension and for diagnostics. */
   fileName: string;
   declaredMimeType: string;
   sizeBytes: number;
-  /**
-   * First 8 bytes of the file in base64: exactly 12 characters, 11 of data and
-   * a trailing `=`. Checked in memory, never persisted. Not a security control
-   * — it is a sanity check that avoids uploading 10 MiB of a mislabelled file.
-   */
+  /** First min(8, sizeBytes) bytes, base64 encoded and checked in memory. */
   signature: string;
+  /** Generated before a reservation and reused after a lost response. */
+  idempotencyKey: string;
+  /** SHA-256 of the selected bytes; server recomputes it before confirmation. */
+  sha256: string;
+}
+
+export type UploadState = "pending" | "verifying" | "rejected" | "recovering" | "confirmed";
+
+export interface UploadReference {
+  sizeBytes: number;
+  sha256: string;
+  signature: string;
+}
+
+/** Safe public state. It does not contain hashes, paths, leases, or operation ids. */
+export interface UploadSnapshot {
+  versionId: string;
+  uploadState: UploadState | null;
+  attemptId: string | null;
+  canOpen: boolean;
+  canResume: boolean;
+  canRecover: boolean;
+}
+
+/** A short-lived transfer target created by a server-authorized reservation. */
+export interface UploadTarget {
+  versionId: string;
+  attemptId: string;
+  storagePath: string;
+  canonicalMimeType: string;
 }
 
 export interface UploadItemResult {
@@ -79,19 +103,8 @@ export interface UploadItemResult {
     | {
         ok: true;
         documentId: string;
-        versionId: string;
-        /** <workspace>/<document>/<version>/original.<ext>, resolved by the server. */
-        storagePath: string;
-        /** Canonical MIME derived from the extension. Must be sent to Storage. */
-        canonicalMimeType: string;
+        target: UploadTarget;
       }
-    | { ok: false; error: { code: ActionErrorCode; message: string } };
-}
-
-export interface FinalizeItemResult {
-  versionId: string;
-  outcome:
-    | { ok: true; processingStatus: "uploaded" | "processing" }
     | { ok: false; error: { code: ActionErrorCode; message: string } };
 }
 
@@ -112,10 +125,17 @@ export interface RepositoryItem {
   owner: Pick<Profile, "id" | "full_name"> | null;
   activeVersionId: string | null;
   /** Latest version, not an inner join through active_version_id. */
-  latestVersion: Pick<
-    DocumentVersion,
-    "id" | "version_number" | "processing_status" | "version_status" | "analysis_status"
-  > | null;
+  latestVersion:
+    | {
+        id: string;
+        version_number: number;
+        processing_status: ProcessingStatus | null;
+        version_status: VersionStatus | null;
+        analysis_status: AnalysisStatus | null;
+        uploadState: UploadState | null;
+        canOpen: boolean;
+      }
+    | null;
   createdAt: string;
 }
 
@@ -129,17 +149,27 @@ export interface RepositoryPage {
 /** Type contracts only. Implementations live in the owning business module. */
 export interface IdentityApi {
   requireActor(): Promise<Actor>;
+  requireDocumentActor(): Promise<Actor>;
+}
+
+export interface EligibleOwner {
+  id: string;
+  fullName: string;
 }
 
 export interface WorkspaceApi {
   createWorkspace(input: CreateWorkspaceInput): Promise<ActionResult<{ workspaceId: string }>>;
+  listEligibleOwners(): Promise<ActionResult<EligibleOwner[]>>;
 }
 
 export interface IngestionApi {
   /** 1..10 items. The batch is not atomic: each item has its own result. */
   reserveUpload(items: UploadItemInput[]): Promise<ActionResult<UploadItemResult[]>>;
-  /** Reauthorizes on the server. Never accepts a bucket, path or expiry from the browser. */
-  finalizeUpload(versionIds: string[]): Promise<ActionResult<FinalizeItemResult[]>>;
+  getUploadState(versionId: string): Promise<ActionResult<UploadSnapshot>>;
+  /** Reauthorizes the exact current version/attempt pair. */
+  finalizeUpload(input: { versionId: string; attemptId: string }): Promise<ActionResult<UploadSnapshot>>;
+  resumeUpload(versionId: string, reference?: UploadReference): Promise<ActionResult<UploadTarget | UploadSnapshot>>;
+  recoverUpload(versionId: string): Promise<ActionResult<UploadSnapshot>>;
   /** Unchanged in S1-03. Implemented by S1-07. */
   retryProcessing(versionId: string): Promise<
     ActionResult<{ versionId: string; processingStatus: "uploaded" | "processing" }>

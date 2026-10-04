@@ -1,4 +1,4 @@
-import { defineConfig, devices } from "@playwright/test";
+import { defineConfig, devices, type Project } from "@playwright/test";
 import { resolve } from "node:path";
 
 const PROJECT_ROOT = process.cwd();
@@ -7,6 +7,19 @@ const LOCAL_APP_ORIGIN = "http://127.0.0.1:3000";
 
 const node = process.execPath;
 const nextCli = resolve(PROJECT_ROOT, "node_modules/next/dist/bin/next");
+const projects: Project[] = [
+  {
+    name: "chromium",
+    use: { ...devices["Desktop Chrome"] },
+  },
+];
+
+if (process.env.KDM_TEST_EDGE === "1") {
+  projects.push({
+    name: "msedge",
+    use: { ...devices["Desktop Edge"], channel: "msedge" },
+  });
+}
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -23,30 +36,18 @@ export default defineConfig({
 
   use: {
     baseURL: process.env.PLAYWRIGHT_TEST_BASE_URL || LOCAL_APP_ORIGIN,
-    trace: "on-first-retry",
+    trace: "off",
+    video: "off",
+    screenshot: "off",
   },
 
-  projects: [
-    {
-      name: "chromium",
-      use: {
-        ...devices["Desktop Chrome"],
-      },
-    },
-    {
-      name: "msedge",
-      use: {
-        ...devices["Desktop Edge"],
-        channel: "msedge",
-      },
-    },
-  ],
+  projects,
 
   webServer: {
     command: `"${node}" "${nextCli}" start --hostname 127.0.0.1 --port 3000`,
     cwd: PROJECT_ROOT,
     url: `${LOCAL_APP_ORIGIN}/login`,
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: false,
     timeout: 120_000,
     stdout: "ignore",
     stderr: "ignore",

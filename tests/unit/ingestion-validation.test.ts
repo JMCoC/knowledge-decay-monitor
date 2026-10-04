@@ -72,6 +72,15 @@ describe("decodeSignature", () => {
     );
   });
 
+  it("decodes the exact available byte count for small uploads", () => {
+    expect(decodeSignature("YQ==", 1)).toEqual(new Uint8Array([0x61]));
+    expect(decodeSignature("YQ==", 2)).toBeNull();
+  });
+
+  it("rejects non-canonical base64 with unused bits set", () => {
+    expect(decodeSignature("YR==", 1)).toBeNull();
+  });
+
   it("rejects the wrong character count", () => {
     expect(decodeSignature("JVBERi0xMjM")).toBeNull();
     expect(decodeSignature("JVBERi0xMjM0")).toBeNull();
@@ -147,9 +156,12 @@ describe("actionCodeForSqlstate", () => {
     expect(actionCodeForSqlstate("42501")).toBe("FORBIDDEN");
   });
 
-  it("maps impossible server states to INTERNAL_ERROR", () => {
+  it("keeps integrity failures as INTERNAL_ERROR", () => {
     expect(actionCodeForSqlstate("23514")).toBe("INTERNAL_ERROR");
-    expect(actionCodeForSqlstate("23505")).toBe("INTERNAL_ERROR");
+  });
+
+  it("maps a duplicate idempotency key to CONFLICT", () => {
+    expect(actionCodeForSqlstate("23505")).toBe("CONFLICT");
   });
 
   it("returns null for anything unrecognised so the caller can report it", () => {

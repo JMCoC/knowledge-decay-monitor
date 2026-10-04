@@ -44,6 +44,9 @@ jobs:
       - name: Database tests
         run: pnpm test:db
 
+      - name: Generated database type consistency
+        run: pnpm check:database-types
+
       - name: Local fixture regression
         run: pnpm test:fixtures
 

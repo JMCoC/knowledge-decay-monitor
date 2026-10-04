@@ -4,6 +4,7 @@ import {
   authSafeSentryOptions,
   reportAuthFailure,
 } from "../../src/lib/observability/auth-events";
+import { captureOperationFailure } from "../../src/lib/observability/operation-events";
 
 const correlationId = "d2131057-f063-4b12-bafe-746728e8d7ad";
 const sentinels = [
@@ -52,6 +53,14 @@ describe("Auth telemetry transport privacy", () => {
       },
     });
     reportAuthFailure({ operation: "recovery", code: "PROVIDER_ERROR", correlationId });
+    captureOperationFailure({
+      module: "ingestion",
+      operation: "verify",
+      code: "INTERNAL_ERROR",
+      correlationId,
+      versionId: "fd23a0b7-8b95-4df0-a57f-887008ae9d12",
+      attemptId: "88725091-ae4b-47d2-88dc-490b0baf1072",
+    });
 
     expect(await Sentry.flush(1000)).toBe(true);
 
@@ -62,7 +71,7 @@ describe("Auth telemetry transport privacy", () => {
     const sentItems = (envelopes as [unknown, [unknown, unknown][]][])
       .flatMap(([, items]) => items)
       .filter(([headers]) => (headers as { type?: string }).type === "event");
-    expect(sentItems).toHaveLength(1);
+    expect(sentItems).toHaveLength(2);
     expect(sentItems[0]?.[1]).toMatchObject({
       message: "Authentication operation failed",
       level: "warning",
@@ -75,5 +84,20 @@ describe("Auth telemetry transport privacy", () => {
     expect(sentItems[0]?.[1]).not.toHaveProperty("request");
     expect(sentItems[0]?.[1]).not.toHaveProperty("exception");
     expect(sentItems[0]?.[1]).not.toHaveProperty("breadcrumbs");
+    expect(sentItems[1]?.[1]).toMatchObject({
+      message: "Product operation failed",
+      level: "error",
+      tags: {
+        module: "ingestion",
+        operation: "verify",
+        code: "INTERNAL_ERROR",
+        correlation_id: correlationId,
+        version_id: "fd23a0b7-8b95-4df0-a57f-887008ae9d12",
+        attempt_id: "88725091-ae4b-47d2-88dc-490b0baf1072",
+      },
+    });
+    expect(sentItems[1]?.[1]).not.toHaveProperty("request");
+    expect(sentItems[1]?.[1]).not.toHaveProperty("exception");
+    expect(sentItems[1]?.[1]).not.toHaveProperty("breadcrumbs");
   });
 });

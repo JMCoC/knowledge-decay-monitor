@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createRepositoryService } from "./repository.service";
 import type { Actor } from "@/types/contracts";
+import { IdentityError } from "@/modules/identity/errors";
 import * as repoInfra from "../infrastructure/repository.repository";
-import * as sentry from "@sentry/nextjs";
 
 // Mocks de dependencias externas
 vi.mock("@/lib/supabase/server", () => ({
@@ -15,9 +15,7 @@ vi.mock("../infrastructure/repository.repository", () => ({
     createDocumentSignedUrl: vi.fn(),
 }));
 
-vi.mock("@sentry/nextjs", () => ({
-    captureException: vi.fn(),
-}));
+vi.mock("server-only", () => ({}));
 
 describe("RepositoryService - S1-05", () => {
     const adminActor: Actor = {
@@ -46,7 +44,7 @@ describe("RepositoryService - S1-05", () => {
 
     describe("listDocuments", () => {
         it("debe permitir listar documentos a un Admin", async () => {
-            const mockIdentity = { requireActor: vi.fn().mockResolvedValue(adminActor) };
+            const mockIdentity = { requireDocumentActor: vi.fn().mockResolvedValue(adminActor) };
             vi.mocked(repoInfra.findRepositoryDocuments).mockResolvedValue({
                 data: [],
                 total: 0,
@@ -65,7 +63,7 @@ describe("RepositoryService - S1-05", () => {
         });
 
         it("debe permitir listar documentos a un QA Lead", async () => {
-            const mockIdentity = { requireActor: vi.fn().mockResolvedValue(qaLeadActor) };
+            const mockIdentity = { requireDocumentActor: vi.fn().mockResolvedValue(qaLeadActor) };
             vi.mocked(repoInfra.findRepositoryDocuments).mockResolvedValue({
                 data: [],
                 total: 0,
@@ -79,8 +77,53 @@ describe("RepositoryService - S1-05", () => {
             expect(result.ok).toBe(true);
         });
 
+        it("uses the latest version projection and keeps pending originals closed", async () => {
+            const mockIdentity = { requireDocumentActor: vi.fn().mockResolvedValue(adminActor) };
+            vi.mocked(repoInfra.findRepositoryDocuments).mockResolvedValue({
+                data: [{
+                    id: "20000000-0000-4000-8000-000000000001",
+                    name: "Runbook",
+                    category: "SOP",
+                    owner_id: adminActor.userId,
+                    owner_profile_id: adminActor.userId,
+                    owner_full_name: "Admin A",
+                    active_version_id: validVersionId,
+                    created_at: "2026-10-03T00:00:00.000Z",
+                    latest_version_id: "30000000-0000-4000-8000-000000000002",
+                    latest_version_number: 2,
+                    latest_processing_status: "uploaded",
+                    latest_version_status: null,
+                    latest_analysis_status: "pending_reanalysis",
+                    latest_upload_state: "pending",
+                }],
+                total: 1,
+                page: 1,
+                pageSize: 25,
+            });
+
+            const result = await createRepositoryService(mockIdentity).listDocuments({});
+
+            expect(result).toMatchObject({
+                ok: true,
+                data: { items: [{ activeVersionId: validVersionId, latestVersion: {
+                    id: "30000000-0000-4000-8000-000000000002",
+                    version_number: 2,
+                    uploadState: "pending",
+                    canOpen: false,
+                } }] },
+            });
+        });
+
+        it("rejects malformed filters before querying the repository", async () => {
+            const mockIdentity = { requireDocumentActor: vi.fn().mockResolvedValue(adminActor) };
+            const result = await createRepositoryService(mockIdentity).listDocuments({ page: 1.5 });
+
+            expect(result).toMatchObject({ ok: false, error: { code: "INVALID_INPUT" } });
+            expect(repoInfra.findRepositoryDocuments).not.toHaveBeenCalled();
+        });
+
         it("debe bloquear con FORBIDDEN si un Member intenta listar el repositorio", async () => {
-            const mockIdentity = { requireActor: vi.fn().mockResolvedValue(memberActor) };
+            const mockIdentity = { requireDocumentActor: vi.fn().mockRejectedValue(new IdentityError("FORBIDDEN")) };
             const service = createRepositoryService(mockIdentity);
 
             const result = await service.listDocuments({});
@@ -93,7 +136,7 @@ describe("RepositoryService - S1-05", () => {
 
         it("debe retornar UNAUTHENTICATED si no hay sesión activa", async () => {
             const mockIdentity = {
-                requireActor: vi.fn().mockRejectedValue(new Error("UNAUTHENTICATED")),
+                requireDocumentActor: vi.fn().mockRejectedValue(new IdentityError("UNAUTHENTICATED")),
             };
             const service = createRepositoryService(mockIdentity);
 
@@ -108,7 +151,7 @@ describe("RepositoryService - S1-05", () => {
 
     describe("getOriginalUrl (Apertura segura de archivos)", () => {
         it("debe rechazar con INVALID_INPUT si versionId no es un UUID válido (Validación Zod)", async () => {
-            const mockIdentity = { requireActor: vi.fn().mockResolvedValue(adminActor) };
+            const mockIdentity = { requireDocumentActor: vi.fn().mockResolvedValue(adminActor) };
             const service = createRepositoryService(mockIdentity);
 
             const result = await service.getOriginalUrl("id-invalido-no-uuid");
@@ -120,7 +163,7 @@ describe("RepositoryService - S1-05", () => {
         });
 
         it("debe rechazar con FORBIDDEN si un Member intenta solicitar una signed URL", async () => {
-            const mockIdentity = { requireActor: vi.fn().mockResolvedValue(memberActor) };
+            const mockIdentity = { requireDocumentActor: vi.fn().mockRejectedValue(new IdentityError("FORBIDDEN")) };
             const service = createRepositoryService(mockIdentity);
 
             const result = await service.getOriginalUrl(validVersionId);
@@ -132,7 +175,7 @@ describe("RepositoryService - S1-05", () => {
         });
 
         it("debe rechazar con NOT_FOUND si la versión pertenece a otro Workspace (Tenant Isolation)", async () => {
-            const mockIdentity = { requireActor: vi.fn().mockResolvedValue(adminActor) };
+            const mockIdentity = { requireDocumentActor: vi.fn().mockResolvedValue(adminActor) };
             // El repo no encuentra la versión dentro del tenant del actor
             vi.mocked(repoInfra.findVersionStoragePath).mockResolvedValue(null);
 
@@ -147,7 +190,7 @@ describe("RepositoryService - S1-05", () => {
         });
 
         it("debe generar la URL firmada exitosamente para un QA Lead", async () => {
-            const mockIdentity = { requireActor: vi.fn().mockResolvedValue(qaLeadActor) };
+            const mockIdentity = { requireDocumentActor: vi.fn().mockResolvedValue(qaLeadActor) };
             const fakeStoragePath = `${qaLeadActor.workspaceId}/doc-1/ver-1/original.md`;
             const fakeSigned = {
                 url: "https://supabase.local/storage/v1/object/sign/documents/test.md?token=xyz",
@@ -175,8 +218,8 @@ describe("RepositoryService - S1-05", () => {
             );
         });
 
-        it("debe capturar en Sentry y retornar INTERNAL_ERROR ante fallos inesperados de infraestructura", async () => {
-            const mockIdentity = { requireActor: vi.fn().mockResolvedValue(adminActor) };
+        it("returns INTERNAL_ERROR instead of treating infrastructure failure as an empty repository", async () => {
+            const mockIdentity = { requireDocumentActor: vi.fn().mockResolvedValue(adminActor) };
             vi.mocked(repoInfra.findVersionStoragePath).mockRejectedValue(
                 new Error("Database connection lost"),
             );
@@ -187,9 +230,8 @@ describe("RepositoryService - S1-05", () => {
             expect(result.ok).toBe(false);
             if (!result.ok) {
                 expect(result.error.code).toBe("INTERNAL_ERROR");
-                expect(result.error.message).toBe("Error interno al solicitar el archivo.");
+                expect(result.error.message).toBe("We couldn't open the file.");
             }
-            expect(sentry.captureException).toHaveBeenCalled();
         });
     });
 });

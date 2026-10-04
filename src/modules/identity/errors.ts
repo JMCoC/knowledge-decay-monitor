@@ -1,11 +1,13 @@
 export type IdentityErrorCode =
   | "UNAUTHENTICATED"
   | "WORKSPACE_REQUIRED"
+  | "FORBIDDEN"
   | "INTERNAL_ERROR";
 
 const messages: Record<IdentityErrorCode, string> = {
   UNAUTHENTICATED: "Authentication is required.",
   WORKSPACE_REQUIRED: "Workspace setup is required.",
+  FORBIDDEN: "You don't have permission to access documents.",
   INTERNAL_ERROR: "Unable to verify the current identity.",
 };
 

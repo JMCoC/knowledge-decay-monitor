@@ -6,6 +6,8 @@
 **Fecha:** 2026-09-27
 **Depende de:** [day-zero-protocol.md](../../architecture/day-zero-protocol.md), [arquitectura-base.md](../../architecture/arquitectura-base.md), [ADR-001](../../architecture/adr/ADR-001-monolito-modular.md), [tickets.md](../../Tickets/tickets.md) §S1-03, PRD §§10, 11, 12, 13, 46, 50
 
+> **Vigencia actualizada — 2026-10-03:** este documento conserva el diseño histórico de S1-03. En las áreas que se solapan, prevalecen la spec y el plan aprobados de [S1-02](../../superpowers/specs/2026-10-02-s1-02-tenant-isolation-integration-design.md): Profile persistido y guard común, permisos Member/Admin/QA, RPC service-only, reserva idempotente, Storage temporal por intento, verificación de bytes/hash, recuperación/limpieza, reconciliación legacy y proyección/apertura de Repository. Los detalles previos sobre escritura RPC con sesión, una ruta canónica usada como temporal, `finalizeUpload` de solo lectura, lote de finalización y compensación diferida quedan reemplazados. El navegador sigue enviando los bytes directamente a Storage para evitar el límite de payload de Vercel; la transferencia real está pendiente de resolver el `42P10` local. Parsing/embeddings/activación permanecen fuera de S1-02 y en S1-04.
+
 ---
 
 ## 1. Propósito y alcance

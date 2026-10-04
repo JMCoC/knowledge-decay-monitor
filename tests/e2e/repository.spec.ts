@@ -1,50 +1,79 @@
 import { test, expect } from "@playwright/test";
 import { loginAs } from "./auth.helper";
 
-test.describe("Flujo Repositorio y Acceso Seguro (S1-05)", () => {
-    test.beforeEach(async ({ context }) => {
+test.describe("Repository access", () => {
+    test("Admin can list documents and open a confirmed original", async ({ page, context }) => {
         await loginAs(context, "admin.a@example.test");
-    });
-    test("Admin puede consultar el repositorio y abrir un archivo", async ({ page, context }) => {
-        // 1. Acceder al repositorio
         await page.goto("/repository");
 
-        // 2. Verificar que se renderice la interfaz desktop-first del repositorio
-        await expect(page.getByRole("heading", { name: "Repositorio" })).toBeVisible();
+        await expect(page.getByRole("heading", { name: "Repository" })).toBeVisible();
         await expect(page.getByRole("table")).toBeVisible();
 
-        // 3. Verificar que las columnas requeridas existan
-        await expect(page.getByRole("columnheader", { name: "Documento" })).toBeVisible();
-        await expect(page.getByRole("columnheader", { name: "Categoría" })).toBeVisible();
-        await expect(page.getByRole("columnheader", { name: "Propietario" })).toBeVisible();
-        await expect(page.getByRole("columnheader", { name: "Versión" })).toBeVisible();
-        await expect(page.getByRole("columnheader", { name: "Estado" })).toBeVisible();
-        await expect(page.getByRole("columnheader", { name: "Acciones" })).toBeVisible();
+        await expect(page.getByRole("columnheader", { name: "Document" })).toBeVisible();
+        await expect(page.getByRole("columnheader", { name: "Category" })).toBeVisible();
+        await expect(page.getByRole("columnheader", { name: "Owner" })).toBeVisible();
+        await expect(page.getByRole("columnheader", { name: "Version" })).toBeVisible();
+        await expect(page.getByRole("columnheader", { name: "Status" })).toBeVisible();
+        await expect(page.getByRole("columnheader", { name: "Actions" })).toBeVisible();
 
-        // 4. Si hay documentos disponibles, probar el botón de abrir
-        const openButtons = page.getByRole("button", { name: /Abrir archivo/i });
-        const count = await openButtons.count();
+        const openButtons = page.getByRole("button", { name: /Open file/i });
+        await expect(openButtons).not.toHaveCount(0);
+        const openedPagePromise = context.waitForEvent("page");
+        const navigationResponsePromise = context.waitForEvent("response", (response) =>
+            response.request().isNavigationRequest() && response.status() === 200,
+        );
+        await openButtons.first().click();
+        const openedPage = await openedPagePromise;
+        const response = await navigationResponsePromise;
+        const bytes = await response.body();
 
-        if (count > 0) {
-            const firstButton = openButtons.first();
-
-            // Esperar el evento de apertura de nueva pestaña
-            const pagePromise = context.waitForEvent("page");
-            await firstButton.click();
-            const newPage = await pagePromise;
-
-            // Comprobar que la nueva pestaña cargue o apunte a una URL con token firmado
-            await expect(newPage).toHaveURL(/token=/);
-        }
+        expect(bytes.byteLength > 0).toBe(true);
+        await openedPage.close();
     });
 
-    test("Badge de estado visualiza correctamente las versiones", async ({ page }) => {
+    test("renders a controlled Repository upload or processing status", async ({ page }) => {
+        await loginAs(page.context(), "admin.a@example.test");
         await page.goto("/repository");
 
-        // Verificar que los badges rendericen estilos y etiquetas semánticas
-        const readyBadge = page.locator("text=Listo").first();
-        if (await readyBadge.isVisible()) {
-            await expect(readyBadge).toHaveClass(/bg-emerald-50/);
-        }
+        await expect(page.getByText(
+            /^(No version|Needs reconciliation|Upload incomplete|Verifying|Upload rejected|Recovering|Uploaded — processing pending|Ready|Processing|Processing failed)$/,
+        ).first()).toBeVisible();
+    });
+
+    test("shows a controlled message when the browser blocks the new tab", async ({ page }) => {
+        await loginAs(page.context(), "admin.a@example.test");
+        await page.addInitScript(() => {
+            window.open = () => null;
+        });
+        await page.goto("/repository");
+
+        await page.getByRole("button", { name: /Open file/i }).first().click();
+
+        await expect(page.getByText(
+            "Your browser blocked the new tab. Allow pop-ups and try again.",
+            { exact: true },
+        )).toBeVisible();
+    });
+
+    test("Workspace B cannot see Workspace A documents", async ({ page, context }) => {
+        await loginAs(context, "admin.b@example.test");
+        await page.goto("/repository");
+
+        await expect(page.getByRole("heading", { name: "Repository" })).toBeVisible();
+        await expect(page.getByText("Private policy B", { exact: true })).toBeVisible();
+        await expect(page.getByText("Incident response", { exact: true })).toHaveCount(0);
+        await expect(page.getByText("Engineering handbook", { exact: true })).toHaveCount(0);
+        await expect(page.getByText("Recovery drill", { exact: true })).toHaveCount(0);
+    });
+
+    test("Member cannot see Repository rows or upload controls even when Owner", async ({ page, context }) => {
+        await loginAs(context, "member.a@example.test");
+        await page.goto("/repository");
+
+        await expect(page.getByRole("heading", { name: "Repository" })).toBeVisible();
+        await expect(page.getByText("You don't have permission to access documents.", { exact: true })).toBeVisible();
+        await expect(page.getByRole("table")).toHaveCount(0);
+        await expect(page.getByRole("heading", { name: "Upload documents" })).toHaveCount(0);
+        await expect(page.getByText("Incident response", { exact: true })).toHaveCount(0);
     });
 });

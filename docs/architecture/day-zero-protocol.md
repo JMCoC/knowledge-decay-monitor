@@ -209,3 +209,14 @@ Ejecutar desde PowerShell en `C:\KDM\knowledge-decay-monitor`. Usar Node.js comp
 - [Next.js typegen](https://nextjs.org/docs/app/api-reference/cli/next#next-typegen-options), contrastado también con `node_modules/next/dist/docs/01-app/03-api-reference/06-cli/next.md` de la versión 16.3.5 instalada.
 
 La evidencia de ejecución y las limitaciones de esta entrega se registran en `docs/architecture/day-zero-verification.md`.
+
+## 5. Actualización de contratos para S1-02 — 2026-10-03
+
+La base de este protocolo describe el diseño previo a los tickets. Para roles, carga y Repository, la implementación aprobada de S1-02 es la fuente posterior y más específica: [spec](../superpowers/specs/2026-10-02-s1-02-tenant-isolation-integration-design.md), [aceptación local y límites](../testing/s1-02-acceptance.md) y [runbook de corte](../testing/s1-02-cutover.md).
+
+- Identidad y Profile persistido determinan rol y tenant; Owner no concede permiso. Admin/QA pueden usar Repository y upload de su tenant; Member no accede a documentos ni originales.
+- El ciclo S1-02 usa reserva idempotente service-only, intento temporal por transferencia, verificación de bytes/hash y publicación inmutable del original canónico. Las rutas y hashes no se exponen a la UI ni a consultas públicas.
+- Upload y procesamiento no son equivalentes: S1-02 deja `processing_status = uploaded`, sin estado funcional ni puntero activo. Parser, embeddings, chunks y activación transaccional permanecen en S1-04; Retry Processing sigue en S1-07.
+- La recuperación y limpieza trabajan sobre el intento temporal exacto; nunca eliminan documentos/versiones o un canónico. Otro Admin/QA del mismo tenant puede reanudar tras comprobar hash/tamaño persistidos con RPC service-only. La reconciliación legacy precede cualquier apertura.
+- El bucket local `documents` limita a 10 MiB y las cargas del navegador van directo a Storage para no cruzar el límite de body de 4.5 MB de Vercel. El `42P10` del volumen local anterior se resolvió con un proyecto local aislado que aplicó la migración administrada de Storage; la aceptación actual prueba Storage real y carga de 10 MiB. Consulta el acta vigente; no debilitar RLS ni modificar índices internos administrados por Storage.
+- La instalación local actual contiene migraciones S1-02 hasta `20261003214934`. Se validaron instalación limpia y upgrade desde Dev 2. Esto no implica aplicación cloud. No usar `--linked`, `db push` remoto, seed o reset cloud como verificación local.

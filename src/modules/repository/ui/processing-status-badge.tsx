@@ -1,42 +1,63 @@
-import type { ProcessingStatus } from "@/types/contracts";
+import type { ProcessingStatus, UploadState } from "@/types/contracts";
 
 interface Props {
-    status: ProcessingStatus | null;
+    hasVersion: boolean;
+    processingStatus: ProcessingStatus | null;
+    uploadState: UploadState | null;
 }
 
-export function ProcessingStatusBadge({ status }: Props) {
-    if (!status) {
-        return <span className="text-xs text-zinc-400">Sin versión</span>;
+export function ProcessingStatusBadge({ hasVersion, processingStatus, uploadState }: Props) {
+    if (!hasVersion) {
+        return <span className="text-xs text-zinc-400">No version</span>;
     }
 
-    switch (status) {
+    if (uploadState === null) {
+        return <span className="text-xs text-amber-700">Needs reconciliation</span>;
+    }
+
+    switch (uploadState) {
+        case "pending":
+            return <span className="text-xs text-amber-700">Upload incomplete</span>;
+        case "verifying":
+            return <span className="text-xs text-amber-700">Verifying</span>;
+        case "rejected":
+            return <span className="text-xs text-rose-700">Upload rejected</span>;
+        case "recovering":
+            return <span className="text-xs text-amber-700">Recovering</span>;
+        case "confirmed":
+            break;
+    }
+
+    switch (processingStatus) {
         case "ready":
             return (
                 <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-600/20">
                     <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                    Listo
+                    Ready
                 </span>
             );
         case "processing":
             return (
                 <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-inset ring-amber-600/20">
                     <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500" />
-                    Procesando...
+                    Processing
                 </span>
             );
         case "processing_failed":
             return (
                 <span className="inline-flex items-center gap-1.5 rounded-full bg-rose-50 px-2.5 py-0.5 text-xs font-medium text-rose-700 ring-1 ring-inset ring-rose-600/20">
                     <span className="h-1.5 w-1.5 rounded-full bg-rose-500" />
-                    Falló
+                    Processing failed
                 </span>
             );
         case "uploaded":
             return (
                 <span className="inline-flex items-center gap-1.5 rounded-full bg-zinc-50 px-2.5 py-0.5 text-xs font-medium text-zinc-700 ring-1 ring-inset ring-zinc-600/20">
                     <span className="h-1.5 w-1.5 rounded-full bg-zinc-400" />
-                    Cargado
+                    Uploaded — processing pending
                 </span>
             );
+        default:
+            return <span className="text-xs text-amber-700">Needs reconciliation</span>;
     }
 }

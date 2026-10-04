@@ -23,6 +23,25 @@ async function run() {
   const apiKey = status.PUBLISHABLE_KEY ?? status.ANON_KEY;
   assert.ok(apiKey, "Local publishable/anon key is required");
 
+  // Seed originals start as legacy rows with no invented hash. Reconcile one
+  // workspace at a time using a persisted Admin fixture before signed reads.
+  for (const actorUserId of [
+    "10000000-0000-4000-8000-000000000001",
+    "10000000-0000-4000-8000-000000000004",
+  ]) {
+    let summary;
+    try {
+      const output = execFileSync(process.execPath, [
+        resolve("scripts/reconcile-legacy-uploads.mjs"),
+        "--target", "local", "--mode", "apply", "--actor-user-id", actorUserId,
+      ], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+      summary = JSON.parse(output);
+    } catch {
+      throw new Error("Local legacy fixture reconciliation failed.");
+    }
+    assert.equal(summary.failed, 0, "Legacy fixture inspection must complete without technical failures");
+  }
+
   async function request(path, token, options = {}) {
     return fetch(`${base}${path}`, {
       ...options,
@@ -84,67 +103,22 @@ async function run() {
   });
   assert.ok(!publicFile.ok, "Private bucket must not expose public originals");
 
-  // S1-03: reserve a document via the RPC, upload the original to the
-  // returned path, and confirm the denials. No paths, JWTs, or contents
-  // are printed below — only status assertions.
-  const markdown = "# Upload smoke test\n";
-  const smokeDocument = "20000000-0000-4000-8000-0000000000f1";
-  const smokeVersion = "30000000-0000-4000-8000-0000000000f1";
-  const qaToken = tokens[1];
-  const reserve = await request("/rest/v1/rpc/reserve_document", qaToken, {
+  // The old browser-callable reservation RPC must stay closed after cutover.
+  const legacyReserve = await request("/rest/v1/rpc/reserve_document", tokens[1], {
     method: "POST",
     body: JSON.stringify({
-      p_document_id: smokeDocument,
-      p_version_id: smokeVersion,
-      p_name: "S1-03 smoke",
+      p_document_id: "20000000-0000-4000-8000-0000000000f1",
+      p_version_id: "30000000-0000-4000-8000-0000000000f1",
+      p_name: "Legacy RPC denial",
       p_category: "SOP",
       p_owner_id: "10000000-0000-4000-8000-000000000002",
       p_extension: "md",
-      p_size_bytes: markdown.length,
+      p_size_bytes: 1,
     }),
   });
-  assert.equal(reserve.status, 200, "QA Lead reserve_document failed");
-  const smokePath = await reserve.json();
-  assert.equal(typeof smokePath, "string", "RPC must return the storage path");
+  assert.ok(legacyReserve.status >= 400 && legacyReserve.status < 500, "Legacy browser-callable reserve must be denied");
 
-  const upload = await request(`/storage/v1/object/documents/${smokePath}`, qaToken, {
-    method: "POST",
-    headers: { "Content-Type": "text/markdown" },
-    body: markdown,
-  });
-  assert.equal(upload.status, 200, "Original upload to the reserved path failed");
-
-  const smokeSign = await sign(qaToken, smokePath);
-  assert.equal(smokeSign.status, 200, "Signing the uploaded original failed");
-  const { signedURL: smokeURL } = await smokeSign.json();
-  assert.ok(smokeURL, "Signing must return a URL");
-  const smokeDownload = await fetch(new URL(`/storage/v1${smokeURL}`, base), {
-    signal: AbortSignal.timeout(15000),
-  });
-  assert.equal(smokeDownload.status, 200, "Uploaded original must be downloadable");
-  assert.ok((await smokeDownload.text()).startsWith("# "), "Uploaded content mismatch");
-
-  const memberReserve = await request("/rest/v1/rpc/reserve_document", tokens[2], {
-    method: "POST",
-    body: JSON.stringify({
-      p_document_id: "20000000-0000-4000-8000-0000000000f2",
-      p_version_id: "30000000-0000-4000-8000-0000000000f2",
-      p_name: "Member attempt",
-      p_category: "Other",
-      p_owner_id: "10000000-0000-4000-8000-000000000003",
-      p_extension: "md",
-      p_size_bytes: markdown.length,
-    }),
-  });
-  assert.ok(memberReserve.status >= 400 && memberReserve.status < 500, "Member reserve must be denied");
-
-  const crossTenantSign = await sign(tokens[3], smokePath);
-  assert.ok(
-    crossTenantSign.status >= 400 && crossTenantSign.status < 500,
-    "Cross-tenant signing must be denied",
-  );
-
-  console.log("PASS: 4 Auth logins, REST isolation, 3 signed downloads, 3 signing denials, private bucket, S1-03 reserve+upload+deny.");
+  console.log("PASS: legacy reconciliation, 4 Auth logins, REST isolation, 3 signed downloads, 3 signing denials, private bucket, legacy reserve denied.");
 }
 
 run().catch((error) => {
