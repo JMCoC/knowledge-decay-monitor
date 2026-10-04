@@ -30,6 +30,7 @@ export function readLocalSupabaseRuntime() {
   }
 
   const publishableKey = status.PUBLISHABLE_KEY ?? status.ANON_KEY;
+  const serviceRoleKey = status.SERVICE_ROLE_KEY;
   const mailpitUrl = status.MAILPIT_URL ?? status.INBUCKET_URL;
   let parsedMailpitUrl;
   try {
@@ -51,6 +52,7 @@ export function readLocalSupabaseRuntime() {
   return {
     apiUrl: LOCAL_API_URL,
     publishableKey,
+    serviceRoleKey,
     mailpitUrl: LOCAL_MAILPIT_URL,
   };
 }
