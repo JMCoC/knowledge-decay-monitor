@@ -5,6 +5,7 @@
 /.pnp
 .pnp.*
 .yarn/*
+
 !.yarn/patches
 !.yarn/plugins
 !.yarn/releases
@@ -12,11 +13,8 @@
 
 # testing
 /coverage
-/test-results
-/playwright-report
-/.artifacts
 
-# next.js
+# Next.js
 /.next/
 /out/
 
@@ -57,3 +55,4 @@ supabase-debug.txt
 tickets.txt
 knowledge-decay-monitor-prd-final.md
 PR_DESCRIPTION.md
+migracionPasos.txt
