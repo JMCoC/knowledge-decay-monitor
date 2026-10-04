@@ -50,9 +50,16 @@ next-env.d.ts
 /blob-report/
 /playwright/.cache/
 
+# Local test artifacts
+/.artifacts/
+
 # Local debug & notes
 supabase-debug.txt
 tickets.txt
 knowledge-decay-monitor-prd-final.md
 PR_DESCRIPTION.md
 migracionPasos.txt
+database-output.txt
+e2e-output.txt
+integration-output.txt
+vitest-output.txt

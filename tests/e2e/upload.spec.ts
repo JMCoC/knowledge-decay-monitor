@@ -71,7 +71,7 @@ test.describe("Repository upload", () => {
       mimeType: "text/markdown",
       buffer: Buffer.from("a"),
     });
-    await expect(page.getByLabel("Category").first()).toBeVisible();
+    await expect(page.getByRole("region", { name: "Upload documents" }).getByLabel("Category").first()).toBeVisible();
     await expect(page.getByLabel("Owner").first()).toBeVisible();
     await expect(page.getByRole("button", { name: "Upload files" })).toBeVisible();
   });
@@ -125,7 +125,7 @@ test.describe("Repository upload", () => {
         buffer: bytes,
       });
       await page.getByLabel("Document name").fill(documentName);
-      await page.getByLabel("Category").selectOption("SOP");
+      await page.getByRole("region", { name: "Upload documents" }).getByLabel("Category").selectOption("SOP");
       await page.getByRole("button", { name: "Upload files" }).click();
       const uploadRegion = page.getByRole("region", { name: "Upload documents" });
       await expect(uploadRegion.getByText("Upload incomplete", { exact: true })).toBeVisible({ timeout: 30_000 });
@@ -242,7 +242,7 @@ test.describe("Repository upload", () => {
       await expect(page.getByLabel("Document name")).toHaveCount(10);
       for (const [index, name] of batchNames.entries()) {
         await page.getByLabel("Document name").nth(index).fill(name);
-        await page.getByLabel("Category").nth(index).selectOption("SOP");
+        await page.getByRole("region", { name: "Upload documents" }).getByLabel("Category").nth(index).selectOption("SOP");
       }
       const batchUpload = page.getByRole("button", { name: "Upload files" });
       await expect(batchUpload).toBeEnabled();
@@ -265,7 +265,7 @@ test.describe("Repository upload", () => {
       });
       await expect(page.getByLabel("Document name")).toHaveCount(1);
       await page.getByLabel("Document name").fill(maxFileName);
-      await page.getByLabel("Category").selectOption("SOP");
+      await page.getByRole("region", { name: "Upload documents" }).getByLabel("Category").selectOption("SOP");
       const maximumSizeUpload = page.getByRole("button", { name: "Upload files" });
       await expect(maximumSizeUpload).toBeEnabled();
       await maximumSizeUpload.click();

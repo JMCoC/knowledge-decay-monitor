@@ -5,12 +5,23 @@ import { requireDocumentActor } from "@/modules/identity";
 import { listEligibleOwners } from "@/modules/workspace";
 import { UploadPanel } from "@/modules/ingestion/ui/upload-panel";
 import { RecoverUploadButton } from "@/modules/ingestion/ui/recover-upload-button";
+import { RepositoryFilters } from "@/modules/repository/ui/repository-filters";
+import { hasRepositoryFilters, parseRepositorySearchParams } from "@/modules/repository/utils/search-params";
+
+type PageProps = {
+    searchParams: Promise<Record<string, string | string[] | undefined>>;
+};
 
 export const runtime = "nodejs";
 export const maxDuration = 90;
 
-export default async function RepositoryPage() {
-    const result = await listRepositoryDocuments();
+export default async function RepositoryPage({ searchParams }: PageProps) {
+    const params = await searchParams;
+    const query = parseRepositorySearchParams(params);
+    const [result, ownersResult] = await Promise.all([
+        listRepositoryDocuments(query),
+        listEligibleOwners(),
+    ]);
 
     if (!result.ok) {
         return (
@@ -28,7 +39,6 @@ export default async function RepositoryPage() {
     }
 
     const actor = await requireDocumentActor().catch(() => null);
-    const ownersResult = actor ? await listEligibleOwners() : null;
 
     return (
         <div className="mx-auto w-full max-w-6xl">
@@ -46,6 +56,12 @@ export default async function RepositoryPage() {
                     ownersError={ownersResult && !ownersResult.ok ? ownersResult.error.message : undefined}
                 />
             )}
+
+            <RepositoryFilters owners={ownersResult?.ok ? ownersResult.data : []} />
+
+            <p className="mt-4 text-sm text-zinc-500" aria-live="polite">
+                {result.data.total} {result.data.total === 1 ? "document" : "documents"}
+            </p>
 
             <div className="mt-8 overflow-hidden rounded-lg border bg-white">
                 <table className="w-full text-left text-sm">
@@ -105,7 +121,20 @@ export default async function RepositoryPage() {
                                     colSpan={6}
                                     className="px-4 py-8 text-center text-zinc-500"
                                 >
-                                    No documents found.
+                                    {hasRepositoryFilters(query) ? (
+                                        <span className="inline-flex flex-col items-center gap-2">
+                                            <span className="font-medium text-zinc-700">No documents found</span>
+                                            <span>No documents match the selected filters.</span>
+                                            <a href="/repository" className="font-medium text-blue-700 hover:underline">Clear filters</a>
+                                        </span>
+                                    ) : result.data.total > 0 ? (
+                                        <span className="font-medium text-zinc-700">No documents on this page.</span>
+                                    ) : (
+                                        <span className="inline-flex flex-col items-center gap-2">
+                                            <span className="font-medium text-zinc-700">No documents in your workspace yet.</span>
+                                            <span>Upload your first document above to get started.</span>
+                                        </span>
+                                    )}
                                 </td>
                             </tr>
                         )}
