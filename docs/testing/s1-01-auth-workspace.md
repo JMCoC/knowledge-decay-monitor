@@ -53,7 +53,7 @@ El proveedor Email debe estar habilitado y la confirmación de email desactivada
 Supabase local intercepta los mensajes en Mailpit (`http://127.0.0.1:54324`); no los entrega a direcciones externas. La plantilla vive en `supabase/templates/recovery.html` y `supabase/config.toml` la carga mediante `content_path`. El enlace debe conservar este formato, con `&amp;` en el HTML:
 
 ```text
-{{ .SiteURL }}/auth/callback?token_hash={{ .TokenHash }}&amp;type=recovery
+{{ .RedirectTo }}?token_hash={{ .TokenHash }}&amp;type=recovery
 ```
 
 Si se cambia `config.toml` o la plantilla, reiniciar el stack local para que Auth recargue la configuración:

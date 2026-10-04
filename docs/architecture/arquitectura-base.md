@@ -310,7 +310,7 @@ La base común fija el comportamiento, pero el Día Cero no eligió el runtime d
 | Runtime de parsing y embeddings | Compatibilidad real con PDF/DOCX/Markdown y `gte-small`; límites de tiempo/memoria para archivos permitidos | Antes del primer pipeline real |
 | Disparo y recuperación del trabajo | Cómo se inicia, se evita doble ejecución y se recupera una interrupción sin depender de que el navegador siga abierto | Antes de integrar procesamiento/retry |
 | Finalización transaccional | Operación que persiste chunks y estados/puntero de manera consistente; prueba de fallo | Antes de declarar v1 `ready` |
-| Compensación de upload | **Cerrada en S1-03**: Día Cero no otorga `DELETE` sobre `documents` ni `document_versions`, así que una reserva huérfana no se deshace. La limitación se declara (el Repository muestra el documento con `processing_status = uploaded` sin objeto); S1-07 lo marcará `processing_failed`; el cierre real llega con el Purge Worker en Sprint 5. Ver spec S1-03 §10.1. | Cerrada |
+| Compensación de upload | S1-02 añade intentos inmutables, estados persistidos, recuperación idempotente y limpieza de temporales retirados por ruta exacta. No borra el documento, la versión ni un original canónico; una carga pendiente sigue visible como `uploaded` y no inicia procesamiento. Storage y Postgres continúan sin transacción distribuida; todo resultado ambiguo se reconcilia antes de retry/limpieza. | Implementación y aceptación local de Storage aprobadas; aceptación cloud pendiente |
 
 No se promete una cola durable, un scheduler, Realtime o un worker desplegado que aún no existen. La elección debe documentarse con su evidencia y, si altera límites o despliegue, mediante otro ADR. Replace File conserva la ambigüedad identificada en S1-07; no se implementa una semántica por suposición.
 
@@ -321,8 +321,19 @@ No se promete una cola durable, un scheduler, Realtime o un worker desplegado qu
 | Esquema, RLS, seed, Storage local y contratos de tipos | Archivos existentes del Día Cero |
 | Validación del Día Cero | Evidencia registrada el 2026-09-25: 78 pruebas SQL, comprobaciones HTTP, TypeScript y lint; no se reejecutaron para esta documentación |
 | Módulos y dependencias descritos aquí | Base de diseño para implementar tickets; sin mecanismos automáticos nuevos de enforcement |
-| Auth/Workspace desde navegador | Walking Skeleton pendiente |
-| Upload/procesamiento/Repository desde navegador | Slice pendiente |
+| Auth/Workspace desde navegador | S1-01 local implementado; aceptación hosted pendiente |
+| Upload/Repository desde navegador | S1-02 local implementado, incluida recuperación cross-session y bytes directos a Storage; validación cloud pendiente |
 | GitHub Actions y controles obligatorios de integración | S1-08 pendiente; acordar personas reales para los roles Dev 1/2/3 |
 
 Consultar la [evidencia del Día Cero](day-zero-verification.md) y su [guía operativa](day-zero-protocol.md#4-guía-de-arranque-día-cero--cinco-pasos) para preparar el entorno. Esta actividad es documental: no requiere crear servicios externos ni modificar la base existente.
+
+## 9. Actualización S1-02 — 2026-10-03
+
+Esta sección actualiza las decisiones del diseño base que S1-02 implementa. Las tablas anteriores describen el diseño inicial y su evidencia histórica; para el ciclo de carga/Repository prevalece la [spec S1-02](../superpowers/specs/2026-10-02-s1-02-tenant-isolation-integration-design.md) y la aceptación vigente de [S1-02](../testing/s1-02-acceptance.md).
+
+- **Autorización:** `getUser()` verifica Auth y el rol/tenant se deriva del Profile persistido. Admin y QA Lead operan documentos de su Workspace; Member no lista, abre ni sube documentos aunque sea Owner. Owner es metadata, nunca capacidad.
+- **Reserva y upload:** el servidor usa RPC acotadas con `service_role` y revalida Profile; la clave service no sale del servidor. El navegador envía bytes directamente al bucket privado `documents`, evitando enviar archivos de 10 MiB al límite de body de 4.5 MB de Vercel. La ruta temporal incluye un `attempt_id`; el servidor verifica tamaño/hash reales antes de publicar sin sobrescritura la ruta canónica. Otra sesión Admin/QA puede recuperar la fila; el backend valida hash/tamaño persistidos antes de emitir un target temporal.
+- **Estados:** `upload_state` es independiente de `processing_status` y `version_status`. El fin de upload deja la versión `uploaded`, `version_status = NULL` y `active_version_id = NULL`. Parsing, chunks, embeddings, activación y Retry Processing siguen en S1-04/S1-07.
+- **Compensación:** recuperar puede retirar solo el intento temporal exacto y crear un intento nuevo bajo CAS. Cleanup nunca borra un canónico ni elimina la fila negocio. Datos legacy permanecen bloqueados hasta reconciliarse.
+- **Repository:** consulta la vista `security_invoker` con sesión/RLS y latest version antes de filtrar; abre solo una versión confirmada mediante URL firmada de 300 segundos.
+- **Límite de aceptación:** el `42P10` local se resolvió conservando el volumen anterior y usando un project id local separado, donde la migración administrada vigente de Storage creó el índice esperado; no se editó `storage.objects`. Las suites de integración pasan con Storage real, incluida carga de 10 MiB y descarga canónica. Esto no valida Vercel ni Supabase cloud: el ticket global queda abierto hasta migrar/reconciliar cloud y repetir allí la ruta completa.
