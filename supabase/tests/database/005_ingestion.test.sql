@@ -14,12 +14,20 @@ select throws_ok($$select public.reserve_document(
 select set_config('request.jwt.claims', '{"sub":"10000000-0000-4000-8000-000000000001","role":"authenticated"}', true);
 select is((select count(*) from documents), 3::bigint, 'Member reservation created no document');
 
--- An Admin of Workspace A can reserve, and the RPC builds the path itself.
+-- The legacy RPC is revoked for every authenticated role after cutover.
 select set_config('request.jwt.claims', '{"sub":"10000000-0000-4000-8000-000000000001","role":"authenticated"}', true);
+select throws_ok($$select public.reserve_document(
+  gen_random_uuid(), gen_random_uuid(), 'Runbook', 'SOP',
+  '10000000-0000-4000-8000-000000000003', 'md', 2048)$$,
+  '42501', null, 'Admin cannot invoke the retired reservation RPC');
+reset role;
+
+-- Exercise the immutable Dev 2 RPC as a privileged fixture helper so its
+-- validation and path constraints remain covered; it is not an app entrypoint.
 select lives_ok($$select public.reserve_document(
   '20000000-0000-4000-8000-0000000000f1', '30000000-0000-4000-8000-0000000000f1',
   '  Runbook  ', 'SOP', '10000000-0000-4000-8000-000000000003', 'md', 2048)$$,
-  'Admin reserves a document and its first version');
+  'Privileged fixture uses the immutable legacy reservation RPC');
 select is((select name from documents where id = '20000000-0000-4000-8000-0000000000f1'), 'Runbook',
   'The RPC trims the document name');
 select is((select storage_path from document_versions where id = '30000000-0000-4000-8000-0000000000f1'),
@@ -27,16 +35,17 @@ select is((select storage_path from document_versions where id = '30000000-0000-
   'The RPC builds the storage path in SQL');
 select is((select version_number from document_versions where id = '30000000-0000-4000-8000-0000000000f1'), 1,
   'The reserved version is number one');
--- The RPC hardcodes version_number 1, so any other number is only reachable
--- by direct insert — and the version_reserve WITH CHECK rejects it even for
--- an Admin. The path below satisfies storage_path_matches_identity on
--- purpose, so the only possible failure is the policy itself (42501).
+-- Authenticated callers cannot insert a version directly, even with a valid
+-- canonical path and version number.
+set local role authenticated;
+select set_config('request.jwt.claims', '{"sub":"10000000-0000-4000-8000-000000000001","role":"authenticated"}', true);
 select throws_ok($$insert into public.document_versions
   (id, document_id, version_number, storage_path, size_bytes) values
   ('30000000-0000-4000-8000-0000000000f9', '20000000-0000-4000-8000-0000000000f1', 2,
    'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/20000000-0000-4000-8000-0000000000f1/30000000-0000-4000-8000-0000000000f9/original.md',
    2048)$$,
-  '42501', null, 'A version_number other than 1 is rejected by version_reserve');
+  '42501', null, 'Authenticated users cannot insert document versions directly');
+reset role;
 select is((select processing_status::text from document_versions where id = '30000000-0000-4000-8000-0000000000f1'), 'uploaded',
   'The reserved version starts as uploaded');
 select is((select version_status from document_versions where id = '30000000-0000-4000-8000-0000000000f1'), null,
@@ -45,10 +54,18 @@ select is((select active_version_id from documents where id = '20000000-0000-400
   'The reserved document has no active pointer');
 select is((select size_bytes from document_versions where id = '30000000-0000-4000-8000-0000000000f1'), 2048::bigint,
   'The RPC records the declared size for finalizeUpload to compare against');
+insert into public.document_versions(
+  id,workspace_id,document_id,version_number,storage_path,processing_status,size_bytes
+) values (
+  '30000000-0000-4000-8000-0000000000f4','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  '20000000-0000-4000-8000-000000000002',2,
+  'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/20000000-0000-4000-8000-000000000002/30000000-0000-4000-8000-0000000000f4/original.md',
+  'uploaded',null
+);
 select is((select size_bytes from public.document_versions
-  where storage_path = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/20000000-0000-4000-8000-000000000001/30000000-0000-4000-8000-000000000001/original.md'),
+  where id = '30000000-0000-4000-8000-0000000000f4'),
   null,
-  'A Day Cero seed row keeps a null size, which finalize compares by existence alone');
+  'A new legacy version can retain a null size until reconciled');
 
 -- Review Focus #2: the extension allowlist is enforced in SQL, not only in Zod.
 select throws_ok($$select public.reserve_document(
@@ -88,6 +105,7 @@ select throws_ok($$select public.reserve_document(
   '23503', null, 'A Workspace B profile cannot be the owner of a Workspace A document');
 
 -- An authenticated user of another tenant cannot write into Workspace A.
+set local role authenticated;
 select set_config('request.jwt.claims', '{"sub":"10000000-0000-4000-8000-000000000004","role":"authenticated"}', true);
 select throws_ok($$insert into public.documents (id, workspace_id, name, category, owner_id)
   values (gen_random_uuid(), 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'Attack', 'Other',
@@ -99,6 +117,7 @@ select set_config('request.jwt.claims', '{"sub":"10000000-0000-4000-8000-0000000
 -- contributed nothing.
 select is((select count(*) from documents where workspace_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'), 4::bigint,
   'No document was created in Workspace A by the B caller');
+reset role;
 
 -- Review Focus #5: the original is immutable once uploaded.
 set local role authenticated;
@@ -106,22 +125,26 @@ select set_config('request.jwt.claims',
   '{"sub":"10000000-0000-4000-8000-000000000001","role":"authenticated"}',
   true);
 
--- Admin A uploads the reserved original. The INSERT passes because
--- document_original_upload requires a version in 'uploaded' state,
--- which the reserve_document test above just created.
-select lives_ok($$insert into storage.objects(bucket_id, name) values
+-- The old canonical upload route is denied; only an attempt-specific path
+-- issued through the server reservation may use Storage INSERT.
+select throws_ok($$insert into storage.objects(bucket_id, name) values
   ('documents','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/20000000-0000-4000-8000-0000000000f1/30000000-0000-4000-8000-0000000000f1/original.md')$$,
-  'Admin uploads the reserved original');
+  '42501', null, 'Admin cannot upload directly to a canonical original path');
+reset role;
+insert into storage.objects(bucket_id, name) values
+  ('documents','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/20000000-0000-4000-8000-0000000000f1/30000000-0000-4000-8000-0000000000f1/original.md');
+set local role authenticated;
+select set_config('request.jwt.claims',
+  '{"sub":"10000000-0000-4000-8000-000000000001","role":"authenticated"}', true);
 
 select is((select count(*) from storage.objects
   where bucket_id = 'documents'
     and name = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/20000000-0000-4000-8000-0000000000f1/30000000-0000-4000-8000-0000000000f1/original.md'),
-  1::bigint,
-  'Exactly one object exists at the reserved path');
+  0::bigint,
+  'An unconfirmed canonical object cannot be read');
 
--- No UPDATE policy on the bucket, so a direct modification is
--- silently denied by RLS: the statement runs, affects 0 rows, and
--- the original path stays as is.
+-- No UPDATE policy on the bucket, and the unconfirmed original is not
+-- SELECT-visible to the client: this request affects no visible row.
 select lives_ok($$update storage.objects set name = name || '-tampered'
   where bucket_id = 'documents'
     and name = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/20000000-0000-4000-8000-0000000000f1/30000000-0000-4000-8000-0000000000f1/original.md'$$,
@@ -130,10 +153,15 @@ select lives_ok($$update storage.objects set name = name || '-tampered'
 select is((select count(*) from storage.objects
   where bucket_id = 'documents'
     and name = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/20000000-0000-4000-8000-0000000000f1/30000000-0000-4000-8000-0000000000f1/original.md'),
-  1::bigint,
-  'The original path is unchanged after the UPDATE attempt');
+  0::bigint,
+  'The unconfirmed original stays hidden after an UPDATE attempt');
 
 reset role;
+select is((select count(*) from storage.objects
+  where bucket_id = 'documents'
+    and name = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/20000000-0000-4000-8000-0000000000f1/30000000-0000-4000-8000-0000000000f1/original.md'),
+  1::bigint,
+  'The privileged fixture object remains at its canonical path');
 select lives_ok($$update document_versions set processing_status = 'processing'
   where id = '30000000-0000-4000-8000-0000000000f1'$$);
 
@@ -144,17 +172,16 @@ select throws_ok($$update document_versions set size_bytes = 10485761 where id =
   '23514', null, 'size_bytes cannot exceed the bucket limit');
 select lives_ok($$update document_versions set size_bytes = 10485760 where id = '30000000-0000-4000-8000-000000000001'$$);
 
-select is((select count(*) from pg_policies where tablename = 'documents'), 3::bigint,
-  'The RPC added no policy to documents');
+select is((select count(*) from pg_policies where tablename = 'documents'), 2::bigint,
+  'Documents retain only the read and metadata-update policies');
 select is((select count(*) from pg_policies where schemaname = 'public' and policyname = 'reserve_document'), 0::bigint,
   'The RPC added no policy named reserve_document');
--- Day Cero ships exactly SELECT + INSERT on the bucket (document_original_read,
--- document_original_upload). Scoped by policy name so Supabase's own default
--- storage policies cannot break this assertion.
+-- Only SELECT of confirmed canonical originals remains under the original
+-- policy name; attempts have their own operation-scoped INSERT policy.
 select is((select string_agg(cmd::text, ',' order by cmd::text) from pg_policies
   where schemaname = 'storage' and tablename = 'objects' and policyname like 'document_original\_%'),
-  'INSERT,SELECT',
-  'The documents bucket has no UPDATE or DELETE policy: originals are immutable');
+  'SELECT',
+  'Canonical originals are readable only through the confirmed-read policy');
 
 select * from finish();
 rollback;
