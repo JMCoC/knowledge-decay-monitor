@@ -36,14 +36,17 @@ const SIGNATURE_PREFIX: Record<AllowedExtension, readonly number[] | null> = {
  * what rejects garbage, because `atob` throws on invalid input rather than
  * skipping characters the way a lenient decoder would.
  */
-const SIGNATURE_BASE64 = /^[A-Za-z0-9+/]{11}=$/;
+const SIGNATURE_BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
 
 const SQLSTATE_TO_ACTION_CODE: Record<string, ActionErrorCode> = {
   "22023": "INVALID_INPUT",
   "23503": "INVALID_INPUT",
   "42501": "FORBIDDEN",
+  "40001": "CONFLICT",
+  "55000": "CONFLICT",
+  "P0002": "NOT_FOUND",
   "23514": "INTERNAL_ERROR",
-  "23505": "INTERNAL_ERROR",
+  "23505": "CONFLICT",
 };
 
 /**
@@ -83,19 +86,25 @@ export function isDeclaredMimeConsistent(
  * `Uint8Array` is what `Buffer` extends, so the tests can still pass `Buffer`
  * values in without a cast.
  */
-export function decodeSignature(signature: string): Uint8Array | null {
-  if (!SIGNATURE_BASE64.test(signature)) {
+export function decodeSignature(signature: string, fileSizeBytes = 8): Uint8Array | null {
+  if (!Number.isSafeInteger(fileSizeBytes) || fileSizeBytes < 1) {
     return null;
   }
-  // The pattern already pins this at 12 characters, so the check below cannot
-  // fail. It stays because a decoder that silently returns the wrong length is
-  // the kind of bug that only shows up in production.
-  const binary = atob(signature);
-  if (binary.length !== 8) {
+  const expectedLength = Math.min(8, fileSizeBytes);
+  if (signature.length !== Math.ceil(expectedLength / 3) * 4 || !SIGNATURE_BASE64.test(signature)) {
     return null;
   }
-  const bytes = new Uint8Array(8);
-  for (let index = 0; index < 8; index += 1) {
+  let binary: string;
+  try {
+    binary = atob(signature);
+  } catch {
+    return null;
+  }
+  if (binary.length !== expectedLength || btoa(binary) !== signature) {
+    return null;
+  }
+  const bytes = new Uint8Array(expectedLength);
+  for (let index = 0; index < expectedLength; index += 1) {
     bytes[index] = binary.charCodeAt(index);
   }
   return bytes;

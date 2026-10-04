@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { uploadBatchSchema, uploadItemSchema, finalizeBatchSchema } from "@/modules/ingestion/schemas";
+import {
+  finalizeUploadSchema,
+  uploadBatchSchema,
+  uploadItemSchema,
+  uploadReferenceSchema,
+} from "@/modules/ingestion/schemas";
 
 const validItem = {
   metadata: {
@@ -11,6 +16,8 @@ const validItem = {
   declaredMimeType: "application/pdf",
   sizeBytes: 2048,
   signature: "JVBERi0xMjM=",
+  sha256: "b".repeat(64),
+  idempotencyKey: "550e8400-e29b-41d4-a716-446655440000",
 };
 
 describe("uploadItemSchema", () => {
@@ -61,6 +68,28 @@ describe("uploadItemSchema", () => {
         metadata: { ...validItem.metadata, ownerId: "not-a-uuid" },
       }).success,
     ).toBe(false);
+  });
+
+  it("requires a UUID idempotency key and a lowercase SHA-256 digest", () => {
+    expect(uploadItemSchema.safeParse({ ...validItem, idempotencyKey: "retry-later" }).success).toBe(false);
+    expect(uploadItemSchema.safeParse({ ...validItem, sha256: "A".repeat(64) }).success).toBe(false);
+    expect(uploadItemSchema.safeParse({ ...validItem, sha256: "b".repeat(63) }).success).toBe(false);
+  });
+
+  it("rejects browser-supplied tenant or actor authority fields", () => {
+    expect(uploadItemSchema.safeParse({ ...validItem, workspaceId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }).success).toBe(false);
+    expect(uploadItemSchema.safeParse({ ...validItem, role: "Admin" }).success).toBe(false);
+    expect(uploadItemSchema.safeParse({ ...validItem, metadata: { ...validItem.metadata, actor: {} } }).success).toBe(false);
+  });
+
+  it("accepts a valid one-byte Markdown document with a one-byte signature", () => {
+    expect(uploadItemSchema.safeParse({
+      ...validItem,
+      fileName: "a.md",
+      declaredMimeType: "text/markdown",
+      sizeBytes: 1,
+      signature: "YQ==",
+    }).success).toBe(true);
   });
 
   it("rejects a size outside the bucket limit", () => {
@@ -116,27 +145,48 @@ describe("uploadBatchSchema", () => {
   });
 });
 
-describe("finalizeBatchSchema", () => {
-  it("accepts one to ten uuids", () => {
-    const id = "30000000-0000-4000-8000-000000000001";
-    expect(finalizeBatchSchema.safeParse([id]).success).toBe(true);
-    // Ten distinct ids, not ten copies of one. The schema refuses duplicates,
-    // so a repeated literal here would be asserting the opposite of the
-    // behaviour the refinement exists for.
-    const ten = Array.from(
-      { length: 10 },
-      (_, index) => `30000000-0000-4000-8000-00000000000${index}`,
-    );
-    expect(finalizeBatchSchema.safeParse(ten).success).toBe(true);
+describe("uploadReferenceSchema", () => {
+  it("accepts a one-byte reference and the ten-MiB boundary", () => {
+    expect(uploadReferenceSchema.safeParse({ sizeBytes: 1, sha256: "a".repeat(64), signature: "YQ==" }).success).toBe(true);
+    expect(uploadReferenceSchema.safeParse({ sizeBytes: 10_485_760, sha256: "a".repeat(64), signature: "AAAAAAAAAAA=" }).success).toBe(true);
   });
 
-  it("rejects a non-uuid and an empty batch", () => {
-    expect(finalizeBatchSchema.safeParse(["30000000-0000-4000-8000-000000000001x"]).success).toBe(false);
-    expect(finalizeBatchSchema.safeParse([]).success).toBe(false);
+  it("rejects zero bytes, an oversized reference, malformed hashes and non-canonical base64", () => {
+    for (const reference of [
+      { sizeBytes: 0, sha256: "a".repeat(64), signature: "YQ==" },
+      { sizeBytes: 10_485_761, sha256: "a".repeat(64), signature: "YQ==" },
+      { sizeBytes: 1, sha256: "A".repeat(64), signature: "YQ==" },
+      { sizeBytes: 1, sha256: "a".repeat(64), signature: "YR==" },
+    ]) {
+      expect(uploadReferenceSchema.safeParse(reference).success).toBe(false);
+    }
   });
 
-  it("rejects the same version twice in one call", () => {
-    const id = "30000000-0000-4000-8000-000000000001";
-    expect(finalizeBatchSchema.safeParse([id, id]).success).toBe(false);
+  it("rejects unknown authority fields", () => {
+    expect(uploadReferenceSchema.safeParse({
+      sizeBytes: 1,
+      sha256: "a".repeat(64),
+      signature: "YQ==",
+      workspaceId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    }).success).toBe(false);
+  });
+});
+
+describe("finalizeUploadSchema", () => {
+  it("accepts only the version and current attempt UUID", () => {
+    expect(finalizeUploadSchema.safeParse({
+      versionId: "30000000-0000-4000-8000-000000000001",
+      attemptId: "50000000-0000-4000-8000-000000000001",
+    }).success).toBe(true);
+  });
+
+  it("rejects malformed ids and extra caller-supplied paths or roles", () => {
+    const valid = {
+      versionId: "30000000-0000-4000-8000-000000000001",
+      attemptId: "50000000-0000-4000-8000-000000000001",
+    };
+    expect(finalizeUploadSchema.safeParse({ ...valid, attemptId: "not-a-uuid" }).success).toBe(false);
+    expect(finalizeUploadSchema.safeParse({ ...valid, storagePath: "arbitrary" }).success).toBe(false);
+    expect(finalizeUploadSchema.safeParse({ ...valid, role: "Admin" }).success).toBe(false);
   });
 });

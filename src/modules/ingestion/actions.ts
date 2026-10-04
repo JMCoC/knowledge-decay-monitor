@@ -1,204 +1,155 @@
 "use server";
 
-import * as Sentry from "@sentry/nextjs";
-import { IdentityError, requireActor } from "@/modules/identity";
-import { createReadOnlyClient } from "@/lib/supabase/server";
+import { IdentityError, requireDocumentActor } from "@/modules/identity";
 import type {
   ActionErrorCode,
   ActionResult,
   Actor,
-  FinalizeItemResult,
   UploadItemInput,
   UploadItemResult,
+  UploadReference,
+  UploadSnapshot,
+  UploadTarget,
 } from "@/types/contracts";
-import { startProcessing } from "./processing";
-import { finalizeBatchSchema, uploadBatchSchema, uploadItemSchema } from "./schemas";
-import { actionCodeForSqlstate, canonicalMimeFor, extensionFromFileName } from "./validation";
+import { z } from "zod";
+import {
+  computeRequestFingerprint,
+  finalizeUploadRecord,
+  getUploadSnapshot,
+  reserveUploadRecord,
+  recoverUploadRecord,
+  resumeUploadRecord,
+  UploadStoreError,
+} from "./upload-store";
+import {
+  finalizeUploadSchema,
+  uploadBatchSchema,
+  uploadItemSchema,
+  uploadReferenceSchema,
+} from "./schemas";
+import { actionCodeForSqlstate, extensionFromFileName } from "./validation";
+import { captureOperationFailure } from "@/lib/observability/operation-events";
 
 const GENERIC_OWNER_MESSAGE = "The selected owner is not available.";
-const MISSING_OBJECT_MESSAGE = "The file did not reach storage. Try the upload again.";
-const SIZE_MISMATCH_MESSAGE = "The stored file does not match the file you selected.";
+const GENERIC_UPLOAD_MESSAGE = "This file cannot be uploaded.";
+const GENERIC_INTERNAL_MESSAGE = "Something went wrong. Try again.";
+const VERSION_ID_SCHEMA = z.string().uuid();
 
-function internalError(): ActionResult<never> {
-  return {
-    ok: false,
-    error: { code: "INTERNAL_ERROR", message: "Something went wrong. Try again." },
-  };
+type FailedResult = { ok: false; error: { code: ActionErrorCode; message: string } };
+
+function failure(code: ActionErrorCode, message: string): FailedResult {
+  return { ok: false, error: { code, message } };
 }
 
-function reportToSentry(
-  operation: "ingestion.reserve" | "ingestion.finalize",
-  error: unknown,
-  tags: Record<string, string | number>,
-) {
-  Sentry.captureException(error, {
-    tags: { operation, ...tags },
-  });
-}
-
-type Gate = { actor: Actor } | { failure: ActionResult<never> };
-
-/**
- * The single identity + role gate for both actions (decision B2.2).
- * requireActor() resolves any workspace member, including Member, so the
- * privileged-role check lives here: identity does not know which roles each
- * action accepts. RLS in Day Cero is scoped by tenant, not by role, so this
- * guard is not redundant with it — a Member of Workspace A can read a
- * version of Workspace A, and without the check could close someone else's
- * reservation and get `ok: true` back.
- *
- * WORKSPACE_REQUIRED (signed in, no workspace yet) maps to FORBIDDEN
- * (decision B2.3): it is a normal account state, not a defect, so it must
- * not reach Sentry.
- */
-async function requirePrivilegedActor(
-  operation: "ingestion.reserve" | "ingestion.finalize",
-  tags: Record<string, string | number>,
-): Promise<Gate> {
-  try {
-    const actor = await requireActor();
-    if (actor.role !== "Admin" && actor.role !== "QA Lead") {
-      return {
-        failure: {
-          ok: false,
-          error: { code: "FORBIDDEN", message: "Only Admins and QA Leads can upload." },
-        },
-      };
-    }
-    return { actor };
-  } catch (error) {
-    if (error instanceof IdentityError) {
-      if (error.code === "WORKSPACE_REQUIRED") {
-        return {
-          failure: {
-            ok: false,
-            error: { code: "FORBIDDEN", message: "Set up your workspace before uploading." },
-          },
-        };
-      }
-      return { failure: { ok: false, error: { code: error.code, message: error.message } } };
-    }
-    reportToSentry(operation, error, tags);
-    return { failure: internalError() };
+function identityFailure(error: unknown): FailedResult | null {
+  if (!(error instanceof IdentityError)) return null;
+  switch (error.code) {
+    case "UNAUTHENTICATED":
+      return failure("UNAUTHENTICATED", "Please sign in before uploading.");
+    case "FORBIDDEN":
+    case "WORKSPACE_REQUIRED":
+      return failure("FORBIDDEN", "Only Admins and QA Leads can manage documents.");
+    default:
+      return failure("INTERNAL_ERROR", GENERIC_INTERNAL_MESSAGE);
   }
 }
 
-/**
- * Reserves every item in the batch. One call so the server sees the whole batch
- * and can reject it in one trip; the loop is per item so one bad file cannot
- * take the others down.
- */
-export async function reserveUpload(
-  items: UploadItemInput[],
-): Promise<ActionResult<UploadItemResult[]>> {
+function storeErrorCode(error: unknown): ActionErrorCode {
+  if (!(error instanceof UploadStoreError)) return "INTERNAL_ERROR";
+  if (!error.sqlstate) return "INTERNAL_ERROR";
+  return actionCodeForSqlstate(error.sqlstate) ?? "INTERNAL_ERROR";
+}
+
+function storeErrorMessage(code: ActionErrorCode, options: { ownerFailure?: boolean } = {}): string {
+  const ownerFailure = options.ownerFailure ?? false;
+  if (ownerFailure && code === "INVALID_INPUT") return GENERIC_OWNER_MESSAGE;
+  if (code === "NOT_FOUND") return "That upload is no longer available.";
+  if (code === "CONFLICT") return "The upload changed or is already being processed. Refresh and try again.";
+  if (code === "FORBIDDEN") return "Only Admins and QA Leads can manage documents.";
+  if (code === "INVALID_INPUT") return "The upload details are invalid.";
+  return GENERIC_UPLOAD_MESSAGE;
+}
+
+async function documentActor(): Promise<Actor | FailedResult> {
+  try {
+    return await requireDocumentActor();
+  } catch (error) {
+    return identityFailure(error) ?? failure("INTERNAL_ERROR", GENERIC_INTERNAL_MESSAGE);
+  }
+}
+
+function isFailure(value: Actor | FailedResult): value is FailedResult {
+  return "ok" in value;
+}
+
+export async function reserveUpload(items: UploadItemInput[]): Promise<ActionResult<UploadItemResult[]>> {
   const batch = uploadBatchSchema.safeParse(items);
   if (!batch.success) {
-    return {
-      ok: false,
-      error: {
-        code: "INVALID_INPUT",
-        message: "Select between 1 and 10 PDF, DOCX or Markdown files.",
-      },
-    };
+    return failure("INVALID_INPUT", "Select between 1 and 10 PDF, DOCX or Markdown files.");
   }
 
-  let actor: Actor;
-  {
-    const gate = await requirePrivilegedActor("ingestion.reserve", {
-      batch_size: batch.data.length,
-    });
-    if ("failure" in gate) return gate.failure;
-    actor = gate.actor;
-  }
+  const actor = await documentActor();
+  if (isFailure(actor)) return actor;
 
-  const supabase = await createReadOnlyClient();
   const results: UploadItemResult[] = [];
-
   for (const [index, entry] of batch.data.entries()) {
-    const item = uploadItemSchema.safeParse(entry);
-    if (!item.success) {
+    const parsed = uploadItemSchema.safeParse(entry);
+    if (!parsed.success) {
       results.push({
         index,
         outcome: {
           ok: false,
-          error: {
-            code: "INVALID_INPUT",
-            message: item.error.issues[0]?.message ?? "This file cannot be uploaded.",
-          },
+          error: { code: "INVALID_INPUT", message: "This file does not match the upload requirements." },
         },
       });
       continue;
     }
 
-    const extension = extensionFromFileName(item.data.fileName);
-    if (extension === null) {
+    const item = parsed.data;
+    const extension = extensionFromFileName(item.fileName);
+    if (!extension) {
       results.push({
         index,
-        outcome: {
-          ok: false,
-          error: {
-            code: "INVALID_INPUT",
-            message: "Only PDF, DOCX and Markdown files are accepted.",
-          },
-        },
+        outcome: { ok: false, error: { code: "INVALID_INPUT", message: "Only PDF, DOCX and Markdown are accepted." } },
       });
       continue;
     }
 
-    const documentId = crypto.randomUUID();
-    const versionId = crypto.randomUUID();
-
-    // A rejected RPC arrives as { error }; a dead connection throws. Both
-    // are item-level failures: the envelope stays ok (spec §8.2).
-    let rpcResult: Awaited<ReturnType<typeof supabase.rpc>>;
     try {
-      rpcResult = await supabase.rpc("reserve_document", {
-        p_document_id: documentId,
-        p_version_id: versionId,
-        p_name: item.data.metadata.name,
-        p_category: item.data.metadata.category,
-        p_owner_id: item.data.metadata.ownerId,
-        p_extension: extension,
-        p_size_bytes: item.data.sizeBytes,
+      const requestFingerprint = await computeRequestFingerprint(item, extension);
+      const reservation = await reserveUploadRecord({
+        userId: actor.userId,
+        idempotencyKey: item.idempotencyKey,
+        requestFingerprint,
+        name: item.metadata.name,
+        category: item.metadata.category,
+        ownerId: item.metadata.ownerId,
+        extension,
+        sizeBytes: item.sizeBytes,
+        sha256: item.sha256,
+      });
+      results.push({
+        index,
+        outcome: {
+          ok: true,
+          documentId: reservation.documentId,
+          target: {
+            versionId: reservation.versionId,
+            attemptId: reservation.attemptId,
+            storagePath: reservation.storagePath,
+            canonicalMimeType: reservation.canonicalMimeType,
+          },
+        },
       });
     } catch (error) {
-      reportToSentry("ingestion.reserve", error, {
-        workspace_id: actor.workspaceId,
-        user_id: actor.userId,
-        role: actor.role,
-        document_id: documentId,
-        version_id: versionId,
-        item_index: index,
-        batch_size: batch.data.length,
-      });
-      results.push({
-        index,
-        outcome: {
-          ok: false,
-          error: { code: "INTERNAL_ERROR", message: "This file cannot be uploaded." },
-        },
-      });
-      continue;
-    }
-
-    const { data, error } = rpcResult;
-    // No row, no error, no path is an impossible server state. Reported as
-    // a defect, never surfaced as detail.
-    if (error || data === null) {
-      const code: ActionErrorCode = error
-        ? (actionCodeForSqlstate(error.code) ?? "INTERNAL_ERROR")
-        : "INTERNAL_ERROR";
+      const denied = identityFailure(error);
+      if (denied) {
+        results.push({ index, outcome: { ok: false, error: denied.error } });
+        continue;
+      }
+      const code = storeErrorCode(error);
       if (code === "INTERNAL_ERROR") {
-        reportToSentry("ingestion.reserve", error ?? new Error("reserve_document returned null data"), {
-          workspace_id: actor.workspaceId,
-          user_id: actor.userId,
-          role: actor.role,
-          document_id: documentId,
-          version_id: versionId,
-          item_index: index,
-          batch_size: batch.data.length,
-          sqlstate: error?.code ?? "null-data",
-        });
+        captureOperationFailure({ module: "ingestion", operation: "reserve", code, correlationId: crypto.randomUUID() });
       }
       results.push({
         index,
@@ -206,148 +157,112 @@ export async function reserveUpload(
           ok: false,
           error: {
             code,
-            // A foreign owner gets the same message as a malformed one, so the
-            // response cannot be used to enumerate ids across tenants.
-            message: code === "INVALID_INPUT" ? GENERIC_OWNER_MESSAGE : "This file cannot be uploaded.",
+            message: storeErrorMessage(code, { ownerFailure: error instanceof UploadStoreError && error.sqlstate === "22023" }),
           },
         },
       });
-      continue;
     }
-
-    results.push({
-      index,
-      outcome: {
-        ok: true,
-        documentId,
-        versionId,
-        storagePath: data,
-        canonicalMimeType: canonicalMimeFor(extension),
-      },
-    });
   }
-
   return { ok: true, data: results };
 }
 
-/**
- * Read-only. Confirms in the server what the browser claimed, and is the call
- * site S1-04 replaces without touching the rest of this file. An ok result
- * means the bytes are in place, not that the document is valid: `list()` reads
- * object metadata, never the content.
- */
-export async function finalizeUpload(
-  versionIds: string[],
-): Promise<ActionResult<FinalizeItemResult[]>> {
-  const batch = finalizeBatchSchema.safeParse(versionIds);
-  if (!batch.success) {
-    return {
-      ok: false,
-      error: { code: "INVALID_INPUT", message: "Nothing to confirm." },
-    };
+export async function getUploadState(versionId: string): Promise<ActionResult<UploadSnapshot>> {
+  if (!VERSION_ID_SCHEMA.safeParse(versionId).success) {
+    return failure("INVALID_INPUT", "The version ID is invalid.");
   }
-
-  let actor: Actor;
-  {
-    const gate = await requirePrivilegedActor("ingestion.finalize", {
-      batch_size: batch.data.length,
-    });
-    if ("failure" in gate) return gate.failure;
-    actor = gate.actor;
+  const actor = await documentActor();
+  if (isFailure(actor)) return actor;
+  try {
+    const snapshot = await getUploadSnapshot(actor.userId, versionId);
+    return snapshot
+      ? { ok: true, data: snapshot }
+      : failure("NOT_FOUND", "That upload is no longer available.");
+  } catch (error) {
+    const denied = identityFailure(error);
+    if (denied) return denied;
+    const code = storeErrorCode(error);
+    if (code === "INTERNAL_ERROR") {
+      captureOperationFailure({ module: "ingestion", operation: "resume", code, correlationId: crypto.randomUUID(), versionId });
+    }
+    return failure(code, storeErrorMessage(code));
   }
+}
 
-  const supabase = await createReadOnlyClient();
-  const results: FinalizeItemResult[] = [];
-
-  for (const versionId of batch.data) {
-    // A dead connection throws instead of returning { error }. Either way
-    // the failure is per version, and the envelope stays ok (spec §8.2).
-    try {
-      const { data: rawVersion, error: readError } = await supabase
-        .from("document_versions")
-        .select("id, storage_path, size_bytes")
-        .eq("id", versionId)
-        .maybeSingle();
-
-      if (readError) {
-        reportToSentry("ingestion.finalize", readError, {
-          workspace_id: actor.workspaceId,
-          user_id: actor.userId,
-          version_id: versionId,
-        });
-        results.push({
-          versionId,
-          outcome: { ok: false, error: { code: "INTERNAL_ERROR", message: "Could not confirm the upload." } },
-        });
-        continue;
-      }
-
-      // RLS already scoped the read to the caller's tenant, so a null row is
-      // either an unknown id or another tenant's. Both answer the same way.
-      const version = rawVersion;
-      if (!version) {
-        results.push({
-          versionId,
-          outcome: { ok: false, error: { code: "NOT_FOUND", message: "That upload is no longer available." } },
-        });
-        continue;
-      }
-
-      const storagePath: string = version.storage_path;
-      const lastSlash = storagePath.lastIndexOf("/");
-      const prefix = storagePath.slice(0, lastSlash);
-      const fileName = storagePath.slice(lastSlash + 1);
-
-      const { data: objects, error: listError } = await supabase.storage
-        .from("documents")
-        .list(prefix);
-
-      if (listError) {
-        reportToSentry("ingestion.finalize", listError, {
-          workspace_id: actor.workspaceId,
-          user_id: actor.userId,
-          version_id: versionId,
-        });
-        results.push({
-          versionId,
-          outcome: { ok: false, error: { code: "INTERNAL_ERROR", message: "Could not confirm the upload." } },
-        });
-        continue;
-      }
-
-      const entries = (objects ?? []) as unknown as Array<{ name: string; size: number }>;
-      const stored = entries.find((object) => object.name === fileName);
-      if (!stored) {
-        results.push({
-          versionId,
-          outcome: { ok: false, error: { code: "INVALID_INPUT", message: MISSING_OBJECT_MESSAGE } },
-        });
-        continue;
-      }
-
-      const recordedSize: number | null = version.size_bytes;
-      if (recordedSize !== null && stored.size !== recordedSize) {
-        results.push({
-          versionId,
-          outcome: { ok: false, error: { code: "INVALID_INPUT", message: SIZE_MISMATCH_MESSAGE } },
-        });
-        continue;
-      }
-
-      const processingStatus = await startProcessing(versionId, supabase);
-      results.push({ versionId, outcome: { ok: true, processingStatus } });
-    } catch (error) {
-      reportToSentry("ingestion.finalize", error, {
-        workspace_id: actor.workspaceId,
-        user_id: actor.userId,
-        version_id: versionId,
-      });
-      results.push({
-        versionId,
-        outcome: { ok: false, error: { code: "INTERNAL_ERROR", message: "Could not confirm the upload." } },
+export async function finalizeUpload(input: {
+  versionId: string;
+  attemptId: string;
+}): Promise<ActionResult<UploadSnapshot>> {
+  const parsed = finalizeUploadSchema.safeParse(input);
+  if (!parsed.success) return failure("INVALID_INPUT", "The upload reference is invalid.");
+  const actor = await documentActor();
+  if (isFailure(actor)) return actor;
+  try {
+    return { ok: true, data: await finalizeUploadRecord(actor.userId, parsed.data.versionId, parsed.data.attemptId) };
+  } catch (error) {
+    const denied = identityFailure(error);
+    if (denied) return denied;
+    const code = storeErrorCode(error);
+    if (code === "INTERNAL_ERROR") {
+      captureOperationFailure({
+        module: "ingestion",
+        operation: "verify",
+        code,
+        correlationId: crypto.randomUUID(),
+        versionId: parsed.data.versionId,
+        attemptId: parsed.data.attemptId,
       });
     }
+    return failure(code, storeErrorMessage(code));
+  }
+}
+
+export async function resumeUpload(
+  versionId: string,
+  reference?: UploadReference,
+): Promise<ActionResult<UploadTarget | UploadSnapshot>> {
+  if (!VERSION_ID_SCHEMA.safeParse(versionId).success) {
+    return failure("INVALID_INPUT", "The version ID is invalid.");
+  }
+  let validatedReference: UploadReference | undefined;
+  if (reference !== undefined) {
+    const parsedReference = uploadReferenceSchema.safeParse(reference);
+    if (!parsedReference.success) return failure("INVALID_INPUT", "The selected file reference is invalid.");
+    validatedReference = parsedReference.data;
   }
 
-  return { ok: true, data: results };
+  const actor = await documentActor();
+  if (isFailure(actor)) return actor;
+  try {
+    const result = await resumeUploadRecord(actor.userId, versionId, validatedReference);
+    return result
+      ? { ok: true, data: result }
+      : failure("NOT_FOUND", "That upload is no longer available.");
+  } catch (error) {
+    const denied = identityFailure(error);
+    if (denied) return denied;
+    const code = storeErrorCode(error);
+    if (code === "INTERNAL_ERROR") {
+      captureOperationFailure({ module: "ingestion", operation: "resume", code, correlationId: crypto.randomUUID(), versionId });
+    }
+    return failure(code, storeErrorMessage(code));
+  }
+}
+
+export async function recoverUpload(versionId: string): Promise<ActionResult<UploadSnapshot>> {
+  if (!VERSION_ID_SCHEMA.safeParse(versionId).success) {
+    return failure("INVALID_INPUT", "The version ID is invalid.");
+  }
+  const actor = await documentActor();
+  if (isFailure(actor)) return actor;
+  try {
+    return { ok: true, data: await recoverUploadRecord(actor.userId, versionId) };
+  } catch (error) {
+    const denied = identityFailure(error);
+    if (denied) return denied;
+    const code = storeErrorCode(error);
+    if (code === "INTERNAL_ERROR") {
+      captureOperationFailure({ module: "ingestion", operation: "recover", code, correlationId: crypto.randomUUID(), versionId });
+    }
+    return failure(code, storeErrorMessage(code));
+  }
 }

@@ -22,7 +22,7 @@ const DOCUMENT_CATEGORIES = [
   "Other",
 ] as const satisfies readonly DocumentCategory[];
 
-const uploadMetadataSchema = z.object({
+const uploadMetadataSchema = z.strictObject({
   name: z.string().trim().min(1).max(200),
   category: z.enum(DOCUMENT_CATEGORIES),
   ownerId: z.string().uuid(),
@@ -32,9 +32,17 @@ const sizeSchema = z.number().refine(isValidFileSize, {
   message: `A file must be between 1 byte and ${MAX_FILE_SIZE_BYTES} bytes.`,
 });
 
-const signatureSchema = z.string().refine((value) => decodeSignature(value) !== null, {
-  message: "The signature must be the first 8 bytes of the file, base64 encoded.",
-});
+const sha256Schema = z.string().regex(/^[0-9a-f]{64}$/);
+
+export const uploadReferenceSchema = z
+  .strictObject({
+    sizeBytes: z.number().int().min(1).max(MAX_FILE_SIZE_BYTES),
+    sha256: sha256Schema,
+    signature: z.string(),
+  })
+  .refine((reference) => decodeSignature(reference.signature, reference.sizeBytes) !== null, {
+    message: "The signature must be the first min(8, size) bytes, base64 encoded.",
+  });
 
 /**
  * One message per rule, evaluated by three independent refinements rather than
@@ -42,12 +50,17 @@ const signatureSchema = z.string().refine((value) => decodeSignature(value) !== 
  * carries its own message instead of a `path` the action would have to map.
  */
 export const uploadItemSchema = z
-  .object({
+  .strictObject({
     metadata: uploadMetadataSchema,
     fileName: z.string().min(1).max(255),
     declaredMimeType: z.string().min(1).max(128),
     sizeBytes: sizeSchema,
-    signature: signatureSchema,
+    signature: z.string(),
+    sha256: sha256Schema,
+    idempotencyKey: z.string().uuid(),
+  })
+  .refine((item) => decodeSignature(item.signature, item.sizeBytes) !== null, {
+    message: "The signature must be the first min(8, size) bytes, base64 encoded.",
   })
   .refine((item) => extensionFromFileName(item.fileName) !== null, {
     message: "Only PDF, DOCX and Markdown files are accepted.",
@@ -78,10 +91,7 @@ export const uploadItemSchema = z
  */
 export const uploadBatchSchema = z.array(z.unknown()).min(1).max(MAX_BATCH_ITEMS);
 
-export const finalizeBatchSchema = z
-  .array(z.string().uuid())
-  .min(1)
-  .max(MAX_BATCH_ITEMS)
-  .refine((ids) => new Set(ids).size === ids.length, {
-    message: "A version can only be finalized once per call.",
-  });
+export const finalizeUploadSchema = z.strictObject({
+  versionId: z.string().uuid(),
+  attemptId: z.string().uuid(),
+});
