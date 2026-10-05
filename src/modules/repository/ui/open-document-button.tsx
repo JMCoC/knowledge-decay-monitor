@@ -1,6 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import type { ActionError } from "@/types/contracts";
+import { OperationError } from "@/components/operation-error";
+import { captureClientTransportFailure } from "@/lib/observability/client-failure";
 import { getDocumentOriginalUrlAction } from "@/modules/repository";
 
 interface Props {
@@ -10,7 +13,7 @@ interface Props {
 
 export function OpenDocumentButton({ versionId, fileName }: Props) {
     const [isLoading, setIsLoading] = useState(false);
-    const [errorMsg, setErrorMsg] = useState<string | null>(null);
+    const [error, setError] = useState<ActionError | null>(null);
 
     if (!versionId) {
         return <span className="text-xs text-zinc-400">—</span>;
@@ -19,11 +22,14 @@ export function OpenDocumentButton({ versionId, fileName }: Props) {
     async function handleOpen() {
         if (!versionId || isLoading) return;
 
-        setErrorMsg(null);
+        setError(null);
 
         const targetWindow = window.open("", "_blank");
         if (!targetWindow) {
-            setErrorMsg("Your browser blocked the new tab. Allow pop-ups and try again.");
+            setError({
+                code: "INTERNAL_ERROR",
+                message: "Your browser blocked the new tab. Allow pop-ups and try again.",
+            });
             return;
         }
 
@@ -34,14 +40,14 @@ export function OpenDocumentButton({ versionId, fileName }: Props) {
 
             if (!result.ok) {
                 targetWindow.close();
-                setErrorMsg(result.error.message);
+                setError(result.error);
                 return;
             }
 
             targetWindow.location.href = result.data.url;
         } catch {
             targetWindow.close();
-            setErrorMsg("We couldn't connect to open the file.");
+            setError(captureClientTransportFailure());
         } finally {
             setIsLoading(false);
         }
@@ -65,8 +71,10 @@ export function OpenDocumentButton({ versionId, fileName }: Props) {
                     "Open file"
                 )}
             </button>
-            {errorMsg && (
-                <span className="text-[11px] text-red-600 font-medium">{errorMsg}</span>
+            {error && (
+                <div className="text-[11px] text-red-600 font-medium">
+                    <OperationError error={error} />
+                </div>
             )}
         </div>
     );

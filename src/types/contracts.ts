@@ -35,16 +35,16 @@ export type ActionErrorCode =
   | "PROCESSING_FAILED"
   | "INTERNAL_ERROR";
 
+export type ActionError = {
+  code: ActionErrorCode;
+  /** Controlled user-facing text, never an exception or provider payload. */
+  message: string;
+  correlationId?: string;
+};
+
 export type ActionResult<T> =
   | { ok: true; data: T }
-  | {
-      ok: false;
-      error: {
-        code: ActionErrorCode;
-        /** Controlled user-facing text, never an exception or provider payload. */
-        message: string;
-      };
-    };
+  | { ok: false; error: ActionError };
 
 export interface CreateWorkspaceInput {
   name: string;
@@ -105,7 +105,7 @@ export interface UploadItemResult {
         documentId: string;
         target: UploadTarget;
       }
-    | { ok: false; error: { code: ActionErrorCode; message: string } };
+    | { ok: false; error: ActionError };
 }
 
 /** Undefined means no filter; null explicitly means Unassigned/no version status. */

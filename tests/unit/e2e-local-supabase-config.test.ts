@@ -16,4 +16,24 @@ describe("local E2E Supabase configuration", () => {
       }),
     ).toThrow("Local Supabase test environment is missing or has the wrong API URL.");
   });
+
+  it("accepts the local public URL and publishable key", () => {
+    expect(
+      localSupabaseTestConfig({
+        KDM_LOCAL_SUPABASE_URL: "http://127.0.0.1:54321",
+        NEXT_PUBLIC_SUPABASE_URL: "http://127.0.0.1:54321",
+        NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "local-publishable-fixture",
+      }),
+    ).toEqual({ url: "http://127.0.0.1:54321", publishableKey: "local-publishable-fixture" });
+  });
+
+  it("rejects a remote public URL even when the local marker is present", () => {
+    expect(() =>
+      localSupabaseTestConfig({
+        KDM_LOCAL_SUPABASE_URL: "http://127.0.0.1:54321",
+        NEXT_PUBLIC_SUPABASE_URL: "https://example.invalid",
+        NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "synthetic-fixture",
+      }),
+    ).toThrow("Local Supabase test environment is missing or has the wrong API URL.");
+  });
 });

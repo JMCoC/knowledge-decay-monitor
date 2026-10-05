@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   createWritableClient: vi.fn(),
   reportAuthFailure: vi.fn(),
 }));
+const correlationId = "40000000-0000-4000-8000-000000000009";
 type AuthMockResult = {
   data: { user: { id: string } | null; session: unknown | null };
   error: Error | null;
@@ -53,7 +54,10 @@ function createClient({
 
 describe("Identity Auth actions", () => {
   beforeEach(() => vi.clearAllMocks());
-  afterEach(() => vi.unstubAllEnvs());
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
 
   it("does not claim registration succeeded when Auth returned no session", async () => {
     mocks.createWritableClient.mockResolvedValue(
@@ -104,6 +108,7 @@ describe("Identity Auth actions", () => {
   });
 
   it("does not route a valid login to onboarding when Profile lookup fails", async () => {
+    vi.stubGlobal("crypto", { randomUUID: () => correlationId });
     mocks.createWritableClient.mockResolvedValue(
       createClient({ profileResult: { data: null, error: new Error("database unavailable") } }),
     );
@@ -112,9 +117,14 @@ describe("Identity Auth actions", () => {
 
     expect(result).toEqual({
       ok: false,
-      error: { code: "INTERNAL_ERROR", message: "We couldn't sign you in. Try again." },
+      error: { code: "INTERNAL_ERROR", message: "We couldn't sign you in. Try again.", correlationId },
     });
     expect(JSON.stringify(result)).not.toContain("onboarding");
+    expect(mocks.reportAuthFailure).toHaveBeenCalledWith({
+      operation: "login",
+      code: "PROFILE_LOOKUP_FAILED",
+      correlationId,
+    });
   });
 
   it("does not claim logout succeeded when Auth sign-out fails", async () => {
@@ -122,7 +132,7 @@ describe("Identity Auth actions", () => {
       createClient({ signOutResult: { error: new Error("provider unavailable") } }),
     );
 
-    await expect(logout()).resolves.toEqual({
+    await expect(logout()).resolves.toMatchObject({
       ok: false,
       error: { code: "INTERNAL_ERROR", message: "We couldn't sign you out. Try again." },
     });

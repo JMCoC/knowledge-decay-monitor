@@ -3,6 +3,9 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
+import type { ActionError } from "../../types/contracts";
+import { OperationError } from "../../components/operation-error";
+import { captureClientTransportFailure } from "../../lib/observability/client-failure";
 import { login, register } from "./actions";
 import { loginSchema, registerSchema } from "./schemas";
 
@@ -16,18 +19,21 @@ export function AuthForm({ mode }: AuthFormProps) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<ActionError | null>(null);
   const [pending, setPending] = useState(false);
   const isRegister = mode === "register";
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setMessage(null);
+    setError(null);
 
     if (isRegister) {
       const parsed = registerSchema.safeParse({ email, password, confirmPassword });
       if (!parsed.success) {
-        setMessage(parsed.error.issues[0]?.message ?? "Please check the information and try again.");
+        setError({
+          code: "INVALID_INPUT",
+          message: parsed.error.issues[0]?.message ?? "Please check the information and try again.",
+        });
         return;
       }
 
@@ -35,13 +41,13 @@ export function AuthForm({ mode }: AuthFormProps) {
       try {
         const result = await register(parsed.data);
         if (!result.ok) {
-          setMessage(result.error.message);
+          setError(result.error);
           return;
         }
         router.replace(result.data.destination);
         router.refresh();
       } catch {
-        setMessage("We couldn't create your account. Try again.");
+        setError(captureClientTransportFailure());
       } finally {
         setPending(false);
       }
@@ -50,7 +56,10 @@ export function AuthForm({ mode }: AuthFormProps) {
 
     const parsed = loginSchema.safeParse({ email, password });
     if (!parsed.success) {
-      setMessage(parsed.error.issues[0]?.message ?? "Please check your email and password.");
+      setError({
+        code: "INVALID_INPUT",
+        message: parsed.error.issues[0]?.message ?? "Please check your email and password.",
+      });
       return;
     }
 
@@ -58,13 +67,13 @@ export function AuthForm({ mode }: AuthFormProps) {
     try {
       const result = await login(parsed.data);
       if (!result.ok) {
-        setMessage(result.error.message);
+        setError(result.error);
         return;
       }
       router.replace(result.data.destination);
       router.refresh();
     } catch {
-      setMessage("We couldn't sign you in. Try again.");
+      setError(captureClientTransportFailure());
     } finally {
       setPending(false);
     }
@@ -143,10 +152,10 @@ export function AuthForm({ mode }: AuthFormProps) {
           </div>
         ) : null}
 
-        {message ? (
-          <p id="auth-message" role="alert" className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-800">
-            {message}
-          </p>
+        {error ? (
+          <div id="auth-message" className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-800">
+            <OperationError error={error} />
+          </div>
         ) : null}
 
         <button

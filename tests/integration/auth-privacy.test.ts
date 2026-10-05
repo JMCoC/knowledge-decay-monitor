@@ -5,6 +5,8 @@ import {
   reportAuthFailure,
 } from "../../src/lib/observability/auth-events";
 import { captureOperationFailure } from "../../src/lib/observability/operation-events";
+import { wrapSafeTransport } from "../../src/lib/observability/safe-transport";
+import type { TelemetryContext } from "../../src/lib/observability/safe-event";
 
 const correlationId = "d2131057-f063-4b12-bafe-746728e8d7ad";
 const sentinels = [
@@ -16,20 +18,27 @@ const sentinels = [
 ];
 const callbackUrl = `http://127.0.0.1:3000/auth/callback?token_hash=${sentinels[2]}&type=recovery`;
 const envelopes: unknown[] = [];
+const telemetryContext: TelemetryContext = {
+  environment: "development",
+  release: "0000000000000000000000000000000000000000",
+  runtime: "server",
+};
 
 beforeAll(() => {
   Sentry.init({
     dsn: "https://public@example.ingest.sentry.io/1",
-    enabled: true,
-    defaultIntegrations: false,
     ...authSafeSentryOptions,
-    transport: () => ({
-      send: async (envelope: unknown) => {
-        envelopes.push(envelope);
-        return { statusCode: 200 };
-      },
-      flush: async () => true,
-    }),
+    transport: () =>
+      wrapSafeTransport(
+        {
+          send: async (envelope: unknown) => {
+            envelopes.push(envelope);
+            return { statusCode: 200 };
+          },
+          flush: async () => true,
+        } as never,
+        telemetryContext,
+      ),
   });
 });
 
@@ -73,12 +82,15 @@ describe("Auth telemetry transport privacy", () => {
       .filter(([headers]) => (headers as { type?: string }).type === "event");
     expect(sentItems).toHaveLength(2);
     expect(sentItems[0]?.[1]).toMatchObject({
-      message: "Authentication operation failed",
-      level: "warning",
+      message: "Product operation failed",
+      level: "error",
       tags: {
+        module: "identity",
         operation: "recovery",
         code: "PROVIDER_ERROR",
         correlation_id: correlationId,
+        runtime: "server",
+        synthetic: "false",
       },
     });
     expect(sentItems[0]?.[1]).not.toHaveProperty("request");

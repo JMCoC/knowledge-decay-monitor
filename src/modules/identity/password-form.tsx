@@ -3,6 +3,9 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
+import type { ActionError } from "../../types/contracts";
+import { OperationError } from "../../components/operation-error";
+import { captureClientTransportFailure } from "../../lib/observability/client-failure";
 import { requestPasswordReset, updatePassword } from "./actions";
 import { forgotPasswordSchema, resetPasswordSchema } from "./schemas";
 
@@ -19,8 +22,10 @@ export function PasswordForm({ mode, invalidLink = false }: PasswordFormProps) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [message, setMessage] = useState<string | null>(
-    invalidLink ? "This reset link is invalid or has expired. Request a new one." : null,
+  const [error, setError] = useState<ActionError | null>(
+    invalidLink
+      ? { code: "INVALID_INPUT", message: "This reset link is invalid or has expired. Request a new one." }
+      : null,
   );
   const [accepted, setAccepted] = useState(false);
   const [updated, setUpdated] = useState(false);
@@ -28,12 +33,12 @@ export function PasswordForm({ mode, invalidLink = false }: PasswordFormProps) {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setMessage(null);
+    setError(null);
 
     if (mode === "forgot") {
       const parsed = forgotPasswordSchema.safeParse({ email });
       if (!parsed.success) {
-        setMessage(parsed.error.issues[0]?.message ?? "Enter a valid email address.");
+        setError({ code: "INVALID_INPUT", message: parsed.error.issues[0]?.message ?? "Enter a valid email address." });
         return;
       }
 
@@ -41,12 +46,12 @@ export function PasswordForm({ mode, invalidLink = false }: PasswordFormProps) {
       try {
         const result = await requestPasswordReset(parsed.data);
         if (!result.ok) {
-          setMessage(result.error.message);
+          setError(result.error);
           return;
         }
         setAccepted(true);
       } catch {
-        setMessage("We couldn't send reset instructions. Try again.");
+        setError(captureClientTransportFailure());
       } finally {
         setPending(false);
       }
@@ -55,7 +60,7 @@ export function PasswordForm({ mode, invalidLink = false }: PasswordFormProps) {
 
     const parsed = resetPasswordSchema.safeParse({ password, confirmPassword });
     if (!parsed.success) {
-      setMessage(parsed.error.issues[0]?.message ?? "Please check your new password.");
+      setError({ code: "INVALID_INPUT", message: parsed.error.issues[0]?.message ?? "Please check your new password." });
       return;
     }
 
@@ -68,12 +73,12 @@ export function PasswordForm({ mode, invalidLink = false }: PasswordFormProps) {
           router.refresh();
           return;
         }
-        setMessage(result.error.message);
+        setError(result.error);
         return;
       }
       setUpdated(true);
     } catch {
-      setMessage("We couldn't update your password. Try again.");
+      setError(captureClientTransportFailure());
     } finally {
       setPending(false);
     }
@@ -178,10 +183,10 @@ export function PasswordForm({ mode, invalidLink = false }: PasswordFormProps) {
           </>
         )}
 
-        {message ? (
-          <p role="alert" className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-800">
-            {message}
-          </p>
+        {error ? (
+          <div className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-800">
+            <OperationError error={error} />
+          </div>
         ) : null}
 
         <button

@@ -3,7 +3,9 @@
 import { useState, type ChangeEvent } from "react";
 import { useRouter } from "next/navigation";
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
-import type { UploadSnapshot, UploadTarget } from "@/types/contracts";
+import type { ActionError, UploadSnapshot, UploadTarget } from "@/types/contracts";
+import { OperationError } from "@/components/operation-error";
+import { captureClientTransportFailure } from "@/lib/observability/client-failure";
 import { finalizeUpload, getUploadState, recoverUpload, resumeUpload } from "../index";
 import { canonicalMimeFor, extensionFromFileName } from "../validation";
 import { createUploadReference } from "./upload-session";
@@ -26,15 +28,17 @@ export function RecoverUploadButton({ versionId }: Props) {
   const [isBusy, setIsBusy] = useState(false);
   const [needsFile, setNeedsFile] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [operationError, setOperationError] = useState<ActionError | null>(null);
 
   async function beginRecovery() {
     if (isBusy) return;
     setIsBusy(true);
     setMessage(null);
+    setOperationError(null);
     try {
       const current = await getUploadState(versionId);
       if (!current.ok) {
-        setMessage(current.error.message);
+        setOperationError(current.error);
         return;
       }
       if (current.data.uploadState === "confirmed") {
@@ -47,7 +51,7 @@ export function RecoverUploadButton({ versionId }: Props) {
       if (snapshot.canRecover) {
         const recovered = await recoverUpload(versionId);
         if (!recovered.ok) {
-          setMessage(recovered.error.message);
+          setOperationError(recovered.error);
           return;
         }
         snapshot = recovered.data;
@@ -60,7 +64,7 @@ export function RecoverUploadButton({ versionId }: Props) {
 
       const resumed = await resumeUpload(versionId);
       if (!resumed.ok) {
-        setMessage(resumed.error.message);
+        setOperationError(resumed.error);
         return;
       }
       if (isSnapshot(resumed.data) && resumed.data.uploadState === "confirmed") {
@@ -75,7 +79,7 @@ export function RecoverUploadButton({ versionId }: Props) {
       }
       setMessage("This upload is still being verified. Try again shortly.");
     } catch {
-      setMessage("We couldn't recover this upload. Try again.");
+      setOperationError(captureClientTransportFailure());
     } finally {
       setIsBusy(false);
     }
@@ -88,11 +92,15 @@ export function RecoverUploadButton({ versionId }: Props) {
 
     setIsBusy(true);
     setMessage(null);
+    setOperationError(null);
     try {
       const reference = await createUploadReference(file);
       let resumed = await resumeUpload(versionId, reference);
       if (!resumed.ok) {
-        setMessage("The selected file does not match this upload or it can no longer be resumed.");
+        setOperationError({
+          ...resumed.error,
+          message: "The selected file does not match this upload or it can no longer be resumed.",
+        });
         return;
       }
       if (isSnapshot(resumed.data) && resumed.data.uploadState === "confirmed") {
@@ -109,7 +117,7 @@ export function RecoverUploadButton({ versionId }: Props) {
       if (!target) {
         resumed = await resumeUpload(versionId);
         if (!resumed.ok) {
-          setMessage("We couldn't prepare this upload for recovery. Try again.");
+          setOperationError(resumed.error);
           return;
         }
         if (isSnapshot(resumed.data) && resumed.data.uploadState === "confirmed") {
@@ -143,6 +151,9 @@ export function RecoverUploadButton({ versionId }: Props) {
           router.refresh();
         } else {
           setMessage("The transfer did not complete. You can select the original file to try again.");
+          setOperationError(
+            reconciled && !reconciled.ok ? reconciled.error : captureClientTransportFailure(),
+          );
         }
         return;
       }
@@ -161,9 +172,12 @@ export function RecoverUploadButton({ versionId }: Props) {
         router.refresh();
         return;
       }
+      if (!finalized.ok) setOperationError(finalized.error);
+      else if (!reconciled) setOperationError(captureClientTransportFailure());
+      else if (!reconciled.ok) setOperationError(reconciled.error);
       setMessage("The upload is not confirmed yet. Try again shortly.");
     } catch {
-      setMessage("The selected file could not be prepared for recovery.");
+      setOperationError(captureClientTransportFailure());
     } finally {
       setIsBusy(false);
     }
@@ -192,6 +206,11 @@ export function RecoverUploadButton({ versionId }: Props) {
         </label>
       )}
       {message && <span role="status" className="max-w-56 text-xs text-zinc-600">{message}</span>}
+      {operationError && (
+        <div className="max-w-56 text-xs text-red-700">
+          <OperationError error={operationError} />
+        </div>
+      )}
     </div>
   );
 }

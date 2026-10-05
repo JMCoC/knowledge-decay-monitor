@@ -3,7 +3,7 @@
 import { AuthApiError } from "@supabase/supabase-js";
 import type { ActionResult } from "../../types/contracts";
 import { getAppOrigin } from "../../lib/app-origin";
-import { reportAuthFailure } from "../../lib/observability/auth-events";
+import { reportAuthFailure, type AuthOperation } from "../../lib/observability/auth-events";
 import { createWritableClient } from "../../lib/supabase/server";
 import { IdentityError } from "./errors";
 import { getIdentityContext, requireAuthenticatedUser } from "./session";
@@ -20,15 +20,45 @@ import {
 
 export type AuthDestination = "/onboarding" | "/app";
 type AuthActionResult = ActionResult<{ destination: AuthDestination }>;
+type AuthActionFailure = Extract<AuthActionResult, { ok: false }>;
 
 function failure(
   code: "UNAUTHENTICATED" | "INVALID_INPUT" | "INTERNAL_ERROR",
   message: string,
-): AuthActionResult {
-  return { ok: false, error: { code, message } };
+  correlationId?: string,
+): AuthActionFailure {
+  return { ok: false, error: { code, message, ...(correlationId ? { correlationId } : {}) } };
 }
 
-function identityFailure(error: unknown, message: string): AuthActionResult {
+function reportFailure(operation: AuthOperation, code: string): string {
+  const correlationId = crypto.randomUUID();
+  try {
+    reportAuthFailure({ operation, code, correlationId });
+  } catch {
+    // Telemetry must not change the controlled product result.
+  }
+  return correlationId;
+}
+
+function reportedFailure(
+  operation: AuthOperation,
+  code: string,
+  message: string,
+): AuthActionFailure {
+  return failure("INTERNAL_ERROR", message, reportFailure(operation, code));
+}
+
+function attachFailureReference(
+  result: AuthActionResult,
+  operation: AuthOperation,
+  code: string,
+): AuthActionResult {
+  if (result.ok || result.error.code !== "INTERNAL_ERROR") return result;
+  const correlationId = reportFailure(operation, code);
+  return { ...result, error: { ...result.error, correlationId } };
+}
+
+function identityFailure(error: unknown, message: string): AuthActionFailure {
   if (error instanceof IdentityError && error.code === "UNAUTHENTICATED") {
     return failure("UNAUTHENTICATED", "Please sign in to continue.");
   }
@@ -62,21 +92,24 @@ export async function register(input: RegisterInput): Promise<AuthActionResult> 
       password: parsed.data.password,
     });
     if (error) {
-      reportAuthFailure({ operation: "register", code: "PROVIDER_ERROR", correlationId: crypto.randomUUID() });
-      return failure("INTERNAL_ERROR", "We couldn't create your account. Try again.");
+      return reportedFailure("register", "PROVIDER_ERROR", "We couldn't create your account. Try again.");
     }
 
     // Local S1 Auth disables email confirmation; without a session, onboarding
     // must not be presented as if the user were authenticated.
     if (!data.session) {
-      reportAuthFailure({ operation: "register", code: "SESSION_UNAVAILABLE", correlationId: crypto.randomUUID() });
-      return failure("INTERNAL_ERROR", "We couldn't start your session. Try again.");
+      return reportedFailure("register", "SESSION_UNAVAILABLE", "We couldn't start your session. Try again.");
     }
 
-    return await getDestination(client);
+    return attachFailureReference(
+      await getDestination(client),
+      "register",
+      "PROFILE_LOOKUP_FAILED",
+    );
   } catch (error) {
-    reportAuthFailure({ operation: "register", code: "INTERNAL_ERROR", correlationId: crypto.randomUUID() });
-    return identityFailure(error, "We couldn't create your account. Try again.");
+    const mapped = identityFailure(error, "We couldn't create your account. Try again.");
+    if (mapped.error.code === "UNAUTHENTICATED") return mapped;
+    return reportedFailure("register", "INTERNAL_ERROR", "We couldn't create your account. Try again.");
   }
 }
 
@@ -95,23 +128,24 @@ export async function login(input: LoginInput): Promise<AuthActionResult> {
       return failure("UNAUTHENTICATED", "Invalid email or password.");
     }
     if (error) {
-      reportAuthFailure({ operation: "login", code: "PROVIDER_ERROR", correlationId: crypto.randomUUID() });
-      return failure("INTERNAL_ERROR", "We couldn't sign you in. Try again.");
+      return reportedFailure("login", "PROVIDER_ERROR", "We couldn't sign you in. Try again.");
     }
 
     try {
-      const result = await getDestination(client);
-      if (!result.ok && result.error.code === "INTERNAL_ERROR") {
-        reportAuthFailure({ operation: "login", code: "PROFILE_LOOKUP_FAILED", correlationId: crypto.randomUUID() });
-      }
-      return result;
-    } catch {
-      reportAuthFailure({ operation: "login", code: "PROFILE_LOOKUP_FAILED", correlationId: crypto.randomUUID() });
-      return failure("INTERNAL_ERROR", "We couldn't sign you in. Try again.");
+      return attachFailureReference(
+        await getDestination(client),
+        "login",
+        "PROFILE_LOOKUP_FAILED",
+      );
+    } catch (error) {
+      const mapped = identityFailure(error, "We couldn't sign you in. Try again.");
+      if (mapped.error.code === "UNAUTHENTICATED") return mapped;
+      return reportedFailure("login", "PROFILE_LOOKUP_FAILED", "We couldn't sign you in. Try again.");
     }
   } catch (error) {
-    reportAuthFailure({ operation: "login", code: "INTERNAL_ERROR", correlationId: crypto.randomUUID() });
-    return identityFailure(error, "We couldn't sign you in. Try again.");
+    const mapped = identityFailure(error, "We couldn't sign you in. Try again.");
+    if (mapped.error.code === "UNAUTHENTICATED") return mapped;
+    return reportedFailure("login", "INTERNAL_ERROR", "We couldn't sign you in. Try again.");
   }
 }
 
@@ -120,19 +154,11 @@ export async function logout(): Promise<ActionResult<{ destination: "/login" }>>
     const client = await createWritableClient();
     const { error } = await client.auth.signOut({ scope: "local" });
     if (error) {
-      reportAuthFailure({ operation: "logout", code: "PROVIDER_ERROR", correlationId: crypto.randomUUID() });
-      return {
-        ok: false,
-        error: { code: "INTERNAL_ERROR", message: "We couldn't sign you out. Try again." },
-      };
+      return reportedFailure("logout", "PROVIDER_ERROR", "We couldn't sign you out. Try again.");
     }
     return { ok: true, data: { destination: "/login" } };
   } catch {
-    reportAuthFailure({ operation: "logout", code: "INTERNAL_ERROR", correlationId: crypto.randomUUID() });
-    return {
-      ok: false,
-      error: { code: "INTERNAL_ERROR", message: "We couldn't sign you out. Try again." },
-    };
+    return reportedFailure("logout", "INTERNAL_ERROR", "We couldn't sign you out. Try again.");
   }
 }
 
@@ -150,19 +176,11 @@ export async function requestPasswordReset(
       redirectTo: `${getAppOrigin()}/auth/callback`,
     });
     if (error) {
-      reportAuthFailure({ operation: "recovery", code: "PROVIDER_ERROR", correlationId: crypto.randomUUID() });
-      return {
-        ok: false,
-        error: { code: "INTERNAL_ERROR", message: "We couldn't send reset instructions. Try again." },
-      };
+      return reportedFailure("recovery", "PROVIDER_ERROR", "We couldn't send reset instructions. Try again.");
     }
     return { ok: true, data: { accepted: true } };
   } catch {
-    reportAuthFailure({ operation: "recovery", code: "INTERNAL_ERROR", correlationId: crypto.randomUUID() });
-    return {
-      ok: false,
-      error: { code: "INTERNAL_ERROR", message: "We couldn't send reset instructions. Try again." },
-    };
+    return reportedFailure("recovery", "INTERNAL_ERROR", "We couldn't send reset instructions. Try again.");
   }
 }
 
@@ -179,11 +197,7 @@ export async function updatePassword(
     await requireAuthenticatedUser(client);
     const { error } = await client.auth.updateUser({ password: parsed.data.password });
     if (error) {
-      reportAuthFailure({ operation: "password-update", code: "PROVIDER_ERROR", correlationId: crypto.randomUUID() });
-      return {
-        ok: false,
-        error: { code: "INTERNAL_ERROR", message: "We couldn't update your password. Try again." },
-      };
+      return reportedFailure("password-update", "PROVIDER_ERROR", "We couldn't update your password. Try again.");
     }
     return { ok: true, data: { updated: true } };
   } catch (error) {
@@ -193,10 +207,6 @@ export async function updatePassword(
         error: { code: "UNAUTHENTICATED", message: "Your session expired. Request a new reset link." },
       };
     }
-    reportAuthFailure({ operation: "password-update", code: "INTERNAL_ERROR", correlationId: crypto.randomUUID() });
-    return {
-      ok: false,
-      error: { code: "INTERNAL_ERROR", message: "We couldn't update your password. Try again." },
-    };
+    return reportedFailure("password-update", "INTERNAL_ERROR", "We couldn't update your password. Try again.");
   }
 }
