@@ -9,6 +9,27 @@ import { repositoryQuerySchema } from "../schemas";
 
 type DbClient = SupabaseClient<Database>;
 
+async function countRepositoryDocuments(supabase: DbClient, query: RepositoryQuery) {
+  let request = supabase
+    .from("repository_documents")
+    .select("id", { count: "exact", head: true });
+
+  if (query.name) request = request.ilike("name", `%${escapeLikeLiteral(query.name)}%`);
+  if (query.category !== undefined) request = request.eq("category", query.category);
+  if (query.ownerId !== undefined) {
+    request = query.ownerId === null
+      ? request.is("owner_id", null)
+      : request.eq("owner_id", query.ownerId);
+  }
+  if (query.versionStatus !== undefined) {
+    request = query.versionStatus === null
+      ? request.is("latest_version_status", null)
+      : request.eq("latest_version_status", query.versionStatus);
+  }
+
+  return request;
+}
+
 export function escapeLikeLiteral(value: string): string {
   return value.replace(/[\\%_]/g, "\\$&");
 }
@@ -44,6 +65,13 @@ export async function findRepositoryDocuments(supabase: DbClient, query: Reposit
   }
 
   const { data, error, count } = await request;
+  if (error?.code === "PGRST103") {
+    // PostgREST rejects ranges beyond the last row instead of returning an empty page.
+    // Preserve normal pagination semantics while keeping the exact count and RLS filters.
+    const { count: total, error: countError } = await countRepositoryDocuments(supabase, parsed);
+    if (countError) throw new Error("Repository count query failed.");
+    return { data: [], total: total ?? 0, page, pageSize };
+  }
   if (error) throw new Error("Repository query failed.");
   return { data: data ?? [], total: count ?? 0, page, pageSize };
 }

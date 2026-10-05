@@ -47,7 +47,7 @@ export default defineConfig({
     command: `"${node}" "${nextCli}" start --hostname 127.0.0.1 --port 3000`,
     cwd: PROJECT_ROOT,
     url: `${LOCAL_APP_ORIGIN}/login`,
-    reuseExistingServer: false,
+    reuseExistingServer: !process.env.CI,
     timeout: 120_000,
     stdout: "ignore",
     stderr: "ignore",

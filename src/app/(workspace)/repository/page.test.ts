@@ -43,6 +43,10 @@ vi.mock("@/modules/repository/ui/open-document-button", () => ({
     OpenDocumentButton: () => createElement("span", null, "open"),
 }));
 
+vi.mock("@/modules/repository/ui/repository-filters", () => ({
+    RepositoryFilters: () => createElement("section", { "data-testid": "repository-filters" }),
+}));
+
 import RepositoryPage from "./page";
 
 describe("RepositoryPage", () => {
@@ -56,7 +60,7 @@ describe("RepositoryPage", () => {
             error: { code: "INTERNAL_ERROR", message: "Repository unavailable." },
         });
 
-        const markup = renderToStaticMarkup(await RepositoryPage());
+        const markup = renderToStaticMarkup(await RepositoryPage({ searchParams: Promise.resolve({}) }));
 
         expect(markup).toContain("Repository unavailable.");
         expect(markup).toContain('role="alert"');
@@ -108,7 +112,7 @@ describe("RepositoryPage", () => {
             },
         });
 
-        const markup = renderToStaticMarkup(await RepositoryPage());
+        const markup = renderToStaticMarkup(await RepositoryPage({ searchParams: Promise.resolve({}) }));
 
         expect(markup).toContain("Runbook");
         expect(markup).toContain("Workspace Admin");
@@ -125,7 +129,7 @@ describe("RepositoryPage", () => {
             error: { code: "FORBIDDEN", message: "You don't have permission to access documents." },
         });
 
-        const markup = renderToStaticMarkup(await RepositoryPage());
+        const markup = renderToStaticMarkup(await RepositoryPage({ searchParams: Promise.resolve({}) }));
 
         expect(markup).toContain("You don&#x27;t have permission to access documents.");
         expect(markup).not.toContain("upload-panel");

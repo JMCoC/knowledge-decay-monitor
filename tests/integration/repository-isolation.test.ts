@@ -90,14 +90,14 @@ describe("Repository isolation against local PostgREST", () => {
           id: documentAWithoutVersions,
           workspace_id: workspaceA,
           name: "Shared Runbook",
-          category: "SOP" as const,
-          owner_id: adminA.userId,
+          category: "Policy" as const,
+          owner_id: null,
           created_at: sameTimestamp,
         },
         {
           id: documentB,
           workspace_id: workspaceB,
-          name: "Shared Runbook",
+          name: "Workspace B Private Runbook",
           category: "SOP" as const,
           owner_id: adminB.userId,
           created_at: sameTimestamp,
@@ -132,7 +132,7 @@ describe("Repository isolation against local PostgREST", () => {
       expect(versionsError).toBeNull();
 
       const firstPage = await findRepositoryDocuments(adminA.client, {
-        name: "Shared Runbook",
+        name: "shared runbook",
         page: 1,
         pageSize: 1,
       });
@@ -148,6 +148,26 @@ describe("Repository isolation against local PostgREST", () => {
       expect(firstPage.data[0].id).not.toBeNull();
       expect(secondPage.data[0].id).not.toBeNull();
       expect(String(firstPage.data[0].id).localeCompare(String(secondPage.data[0].id))).toBeGreaterThan(0);
+
+      const outOfRangePage = await findRepositoryDocuments(adminA.client, { page: 3 });
+      expect(outOfRangePage).toMatchObject({ data: [], total: 2, page: 3, pageSize: 25 });
+
+      const categoryFilter = await findRepositoryDocuments(adminA.client, { category: "Policy" });
+      expect(categoryFilter).toMatchObject({ total: 1, data: [{ id: documentAWithoutVersions }] });
+
+      const ownerFilter = await findRepositoryDocuments(adminA.client, { ownerId: member.userId });
+      expect(ownerFilter).toMatchObject({ total: 1, data: [{ id: documentA }] });
+
+      const unassignedFilter = await findRepositoryDocuments(adminA.client, { ownerId: null });
+      expect(unassignedFilter).toMatchObject({ total: 1, data: [{ id: documentAWithoutVersions, owner_id: null }] });
+
+      const combinedFilter = await findRepositoryDocuments(adminA.client, {
+        name: "shared", category: "Policy", ownerId: null,
+      });
+      expect(combinedFilter).toMatchObject({ total: 1, data: [{ id: documentAWithoutVersions }] });
+
+      const noMatches = await findRepositoryDocuments(adminA.client, { name: "no matching document" });
+      expect(noMatches).toMatchObject({ data: [], total: 0 });
 
       const activeOnly = await findRepositoryDocuments(adminA.client, {
         name: "Shared Runbook",
@@ -166,8 +186,13 @@ describe("Repository isolation against local PostgREST", () => {
         latest_version_status: null,
       });
 
+      const privateWorkspaceBSearchAsA = await findRepositoryDocuments(adminA.client, {
+        name: "Workspace B Private Runbook",
+      });
+      expect(privateWorkspaceBSearchAsA).toMatchObject({ data: [], total: 0 });
+
       const workspaceBResult = await findRepositoryDocuments(adminB.client, {
-        name: "Shared Runbook",
+        name: "Workspace B Private Runbook",
       });
       expect(workspaceBResult).toMatchObject({
         total: 1,
