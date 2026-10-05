@@ -101,7 +101,7 @@ function processFailureReason(result) {
     [/specified token is not valid|invalid token|no existing credentials|unauthorized/i, "authentication_failed"],
     [/forbidden|not authorized|permission denied|does not have access/i, "access_denied"],
     [/rate.?limit|too many requests/i, "rate_limited"],
-    [/unknown or unexpected option|unknown option/i, "invalid_cli_arguments"],
+    [/unknown or unexpected option|unknown option|--skip-domain.*only be used with production deployments/i, "invalid_cli_arguments"],
     [/ENOTFOUND|ECONNRESET|ECONNREFUSED|fetch failed/i, "network_failure"],
   ];
   return categories.find(([pattern]) => pattern.test(output))?.[1] ?? "unclassified_cli_failure";
@@ -459,7 +459,6 @@ export function runDeployment(
     const deployArgs = [
       "--prebuilt",
       "--no-wait",
-      "--skip-domain",
       "--yes",
       "--json",
       "--scope",
@@ -470,7 +469,7 @@ export function runDeployment(
       `APP_ORIGIN=${appOrigin}`,
       "--env",
       "KDM_DISABLE_SENTRY=0",
-      ...(target === "production" ? ["--prod"] : ["--target=preview"]),
+      ...(target === "production" ? ["--prod", "--skip-domain"] : ["--target=preview"]),
       "--meta",
       `githubCommitSha=${decision.sha}`,
       "--meta",

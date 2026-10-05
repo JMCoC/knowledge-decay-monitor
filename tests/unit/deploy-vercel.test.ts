@@ -197,7 +197,8 @@ describe("Vercel deploy runner", () => {
     });
     const deploy = calls[2];
     expect(deploy.args).toContain("--prebuilt");
-    expect(deploy.args).toContain("--skip-domain");
+    // Vercel CLI 62.2.0 rejects --skip-domain for non-production targets.
+    expect(deploy.args).not.toContain("--skip-domain");
     expect(deploy.args).not.toContain("--prod");
     expect(deploy.options.env?.SENTRY_AUTH_TOKEN).toBeUndefined();
     expect(deploy.options.env?.GH_TOKEN).toBeUndefined();
@@ -268,6 +269,7 @@ describe("Vercel deploy runner", () => {
   });
 
   it.each([
+    ['The `--skip-domain` option can only be used with production deployments.', "invalid_cli_arguments"],
     ['Error: No prebuilt output found in ".vercel/output"', "prebuilt_output_missing"],
     ['Prebuilt deployment cannot be created because vercel build failed with error', "prebuilt_build_failed"],
     ['https://vercel.link/prebuilt-environment-mismatch', "prebuilt_target_mismatch"],

@@ -4,7 +4,7 @@
 
 El workflow `Sprint 1` produce `quality.outputs.tested_sha` desde el checkout exacto usado por `Quality gates`. Preview y Production se ejecutan en jobs separados y vuelven a hacer checkout de ese SHA. Preview solo acepta PR abiertos, no draft, del mismo repositorio; Production solo acepta un push a `main`. Cada job vuelve a comprobar la revisión actual y el permiso `write`, `maintain` o `admin` del actor original y del actor que disparó un rerun antes de usar secretos de Vercel.
 
-El ejecutor fija `vercel@62.2.0`, selecciona explícitamente el proyecto, construye desde el checkout validado y crea un deployment prebuilt sin asignar dominio. Antes de publicar, `vercel inspect --json --wait` debe confirmar el proyecto, `READY`, URL y metadatos del SHA. Un Preview recibe el alias `kdm-pr-<pr>-kdm17.vercel.app` solo después de volver a validar el PR; Production se promueve solo después de volver a validar `main`.
+El ejecutor fija `vercel@62.2.0`, selecciona explícitamente el proyecto y construye desde el checkout validado. Production crea un deployment prebuilt con `--prod --skip-domain`, sin asignar sus dominios hasta la promoción. Preview usa `--target=preview`: la CLI rechaza `--skip-domain` para este entorno. Vercel puede asignar la URL y aliases automáticos de Preview antes de nuestra inspección. El alias controlado `kdm-pr-<pr>-kdm17.vercel.app` se asigna solo después de que `vercel inspect --json --wait` confirme proyecto, `READY`, URL y metadatos del SHA, y de volver a validar el PR. Production se promueve solo después de las verificaciones equivalentes y de volver a validar `main`.
 
 La configuración versionada `vercel.json` desactiva deployments Git automáticos cuando Vercel la adopte. Por sí sola no confirma que la integración Git, los hooks ni los despliegues anteriores estén desactivados en el proyecto remoto.
 
@@ -26,7 +26,7 @@ Los jobs no exportan las variables de Sentry a `Quality gates`. El build fija `N
 
 ## Revisión de la CLI fijada
 
-La ayuda de `vercel@62.2.0` confirmó los flags usados: `pull --environment --project --scope --yes`; `build --target/--prod --project --scope --yes`; `deploy --prebuilt --target/--prod --skip-domain --no-wait --json --env --meta --project --scope --yes`; `inspect --json --wait --timeout --scope`; `alias set`; `promote --yes --scope`. La descarga solo consultó ayuda; no hizo login ni creó deployments.
+La revisión inicial de ayuda confirmó la existencia de los flags, pero no sus combinaciones válidas. La reproducción posterior con `vercel@62.2.0 deploy --skip-domain --target=preview` y un token ficticio confirmó el rechazo local: `The --skip-domain option can only be used with production deployments`. No creó ningún deployment. El ejecutor usa `--skip-domain` exclusivamente con `--prod`; Preview usa `--target=preview`. Ambos conservan `--prebuilt --no-wait --json --env --meta --project --scope --yes`. La inspección usa `inspect --json --wait --timeout --scope`, seguida de `alias set` o `promote --yes --scope` según el entorno. Las pruebas del ejecutor verifican esta separación; la aceptación remota requiere un nuevo run con el cambio.
 
 Referencias oficiales: [Vercel CLI en CI](https://github.com/vercel/vercel/blob/main/skills/vercel-cli/references/ci-automation.md), [inspección de deployments](https://github.com/vercel/vercel/blob/main/skills/vercel-cli/references/monitoring-and-debugging.md) y [`git.deploymentEnabled`](https://vercel.com/docs/project-configuration#git).
 
