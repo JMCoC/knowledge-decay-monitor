@@ -326,7 +326,7 @@ function parseCreatedDeployment(output) {
 }
 
 function inspectReadyDeployment(output, created, decision, env) {
-  const result = parseJson(output, "Vercel inspect");
+  const result = parseJson(output, "Vercel deployment metadata");
   const deployment = result?.deployment ?? result;
   const inspectionUrl = normalizedVercelUrl(deployment?.url);
   const metadata = deployment?.meta;
@@ -341,7 +341,7 @@ function inspectReadyDeployment(output, created, decision, env) {
     metadata?.kdmRepository !== REPOSITORY ||
     metadata?.kdmTarget !== decision.target
   ) {
-    throw new Error("Vercel deployment did not match the tested project, SHA, target, and READY state.");
+    throw new DeploymentDiagnosticError("reason=deployment_provenance_mismatch");
   }
 }
 
@@ -483,15 +483,25 @@ export function runDeployment(
       vercelCommand(spawnCommand, "deploy", deployArgs, env, stage),
     );
 
-    stage = "Vercel READY and source verification";
-    const inspection = vercelCommand(
+    stage = "Vercel READY wait";
+    vercelCommand(
       spawnCommand,
       "inspect",
       [created.url, "--json", "--wait", "--timeout", "15m", "--scope", VERCEL_SCOPE],
       env,
       stage,
     );
-    inspectReadyDeployment(inspection, created, decision, env);
+    // inspect --json omits projectId and meta in CLI 62.2.0. Read the
+    // full API object after waiting; never print this provider response.
+    stage = "Vercel source verification";
+    const metadata = vercelCommand(
+      spawnCommand,
+      "api",
+      [`/v13/deployments/${created.id}`, "--method", "GET", "--raw", "--scope", VERCEL_SCOPE],
+      env,
+      stage,
+    );
+    inspectReadyDeployment(metadata, created, decision, env);
 
     stage = "GitHub pre-publication revision check";
     const beforePublish = currentDeploymentDecision(target, env, spawnCommand, projectRoot);

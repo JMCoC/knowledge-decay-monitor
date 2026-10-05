@@ -103,6 +103,14 @@ function createHarness({
         };
       }
       if (operation === "inspect") {
+        // CLI 62.2.0 deliberately omits projectId and meta from inspect JSON.
+        return {
+          status: 0,
+          stdout: JSON.stringify({ id: deploymentId, name: "knowledge-decay-monitor", url: deploymentUrl, target, readyState, createdAt: 1 }),
+          stderr: "",
+        };
+      }
+      if (operation === "api") {
         return {
           status: 0,
           stdout: JSON.stringify({
@@ -181,7 +189,9 @@ describe("Vercel deploy runner", () => {
 
     expect(harness.run()).toBe(0);
     const calls = vercelCalls(harness.calls);
-    expect(calls.map(operation)).toEqual(["pull", "build", "deploy", "inspect", "alias"]);
+    expect(calls.map(operation)).toEqual(["pull", "build", "deploy", "inspect", "api", "alias"]);
+    expect(calls[4].args).toContain(`/v13/deployments/${deploymentId}`);
+    expect(calls[4].args).toContain("GET");
 
     const pull = calls[0];
     expect(pull.args).toContain("--environment=preview");
@@ -211,7 +221,7 @@ describe("Vercel deploy runner", () => {
 
     expect(harness.run()).toBe(0);
     const calls = vercelCalls(harness.calls);
-    expect(calls.map(operation)).toEqual(["pull", "build", "deploy", "inspect", "promote"]);
+    expect(calls.map(operation)).toEqual(["pull", "build", "deploy", "inspect", "api", "promote"]);
     expect(calls[0].args).toContain("--environment=production");
     expect(calls[1].args).toContain("--prod");
     expect(calls[1].options.env?.NEXT_PUBLIC_KDM_SENTRY_TARGET).toBe("production");
@@ -219,7 +229,7 @@ describe("Vercel deploy runner", () => {
     expect(calls[2].args).toContain("--prod");
     expect(calls[2].args).toContain("--skip-domain");
     expect(calls[2].options.env?.SENTRY_AUTH_TOKEN).toBeUndefined();
-    expect(calls[4].args).toContain(deploymentUrl);
+    expect(calls[5].args).toContain(deploymentUrl);
   });
 
   it("does not create a deployment if the production APP_ORIGIN is local or invalid", () => {
@@ -235,7 +245,7 @@ describe("Vercel deploy runner", () => {
 
     expect(harness.run()).toBe(1);
     const calls = vercelCalls(harness.calls);
-    expect(calls.map(operation)).toEqual(["pull", "build", "deploy", "inspect"]);
+    expect(calls.map(operation)).toEqual(["pull", "build", "deploy", "inspect", "api"]);
     expect(harness.logs.join("\n")).not.toMatch(/VERCEL_TOKEN_SENTINEL|SENTRY_TOKEN_SENTINEL/);
   });
 
@@ -247,7 +257,17 @@ describe("Vercel deploy runner", () => {
     const harness = createHarness(override);
 
     expect(harness.run()).toBe(1);
-    expect(vercelCalls(harness.calls).map(operation)).toEqual(["pull", "build", "deploy", "inspect"]);
+    expect(vercelCalls(harness.calls).map(operation)).toEqual(["pull", "build", "deploy", "inspect", "api"]);
+  });
+
+  it.each([
+    [1, ""],
+    [0, JSON.stringify({ id: deploymentId, url: deploymentUrl, projectId, readyState: "READY" })],
+  ])("does not publish when deployment metadata is unavailable", (failureStatus, failureStdout) => {
+    const harness = createHarness({ failOperation: "api", failureStatus, failureStdout });
+    expect(harness.run()).toBe(1);
+    expect(vercelCalls(harness.calls).map(operation)).toEqual(["pull", "build", "deploy", "inspect", "api"]);
+    expect(harness.logs.join("\n")).not.toContain("SENTINEL");
   });
 
   it("suppresses CLI output that may contain credentials", () => {
