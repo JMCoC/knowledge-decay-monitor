@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
-import type { DocumentCategory, EligibleOwner } from "@/types/contracts";
+import type { ActionError, DocumentCategory, EligibleOwner } from "@/types/contracts";
+import { OperationError } from "@/components/operation-error";
+import { captureClientTransportFailure } from "@/lib/observability/client-failure";
 import {
   finalizeUpload,
   getUploadState,
@@ -40,12 +42,13 @@ interface DraftFile {
   category: DocumentCategory | "";
   ownerId: string;
   status: UploadSessionStatus | null;
+  error?: ActionError;
 }
 
 interface Props {
   userId: string;
   owners: EligibleOwner[];
-  ownersError?: string;
+  ownersError?: ActionError;
 }
 
 const STATUS_LABELS: Record<UploadSessionStatus, string> = {
@@ -171,7 +174,7 @@ export function UploadPanel({ userId, owners, ownersError }: Props) {
       return;
     }
     if (owners.length === 0 || ownersError) {
-      setFileError(ownersError ?? "No eligible workspace owners are available.");
+        setFileError(ownersError?.message ?? "No eligible workspace owners are available.");
       return;
     }
     if (!persistenceRef.current) {
@@ -210,11 +213,13 @@ export function UploadPanel({ userId, owners, ownersError }: Props) {
         recoverUpload,
         savePending: updatePending,
         clearPending,
-        setStatus: (index, status) => updateDraft(index, { status }),
+        captureTransportFailure: captureClientTransportFailure,
+        setStatus: (index, status, error) => updateDraft(index, { status, error }),
       });
       setDrafts((current) => current.map((draft, index) => ({
         ...draft,
         status: outcomes[index]?.status ?? "upload_incomplete",
+        error: outcomes[index]?.error,
       })));
     } catch {
       setFileError("The upload could not be prepared. Check the file and try again.");
@@ -258,7 +263,11 @@ export function UploadPanel({ userId, owners, ownersError }: Props) {
           {pendingUploads.length} upload{pendingUploads.length === 1 ? "" : "s"} may need attention. Select the same files and choose Resume selected files, or choose Upload files for new documents.
         </p>
       )}
-      {ownersError && <p role="alert" className="mt-4 text-sm text-red-700">{ownersError}</p>}
+      {ownersError && (
+        <div className="mt-4 text-sm text-red-700">
+          <OperationError error={ownersError} />
+        </div>
+      )}
       {storageError && <p role="alert" className="mt-4 text-sm text-red-700">{storageError}</p>}
       {fileError && <p role="alert" className="mt-4 text-sm text-red-700">{fileError}</p>}
 
@@ -308,6 +317,11 @@ export function UploadPanel({ userId, owners, ownersError }: Props) {
                 <p className="mt-3 text-sm text-zinc-700" role="status" aria-live="polite">
                   {STATUS_LABELS[draft.status]}
                 </p>
+              )}
+              {draft.error && (
+                <div className="mt-3 text-sm text-red-700">
+                  <OperationError error={draft.error} />
+                </div>
               )}
             </article>
           ))}

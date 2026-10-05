@@ -20,7 +20,7 @@ import {
 
 const versionIdSchema = z.string().uuid({ message: "The version ID is invalid." });
 
-function identityFailure(error: unknown): ActionResult<never> | null {
+function identityFailure(error: unknown): Extract<ActionResult<never>, { ok: false }> | null {
     if (!(error instanceof IdentityError)) return null;
     const code = error.code === "WORKSPACE_REQUIRED" ? "FORBIDDEN" : error.code;
     if (code !== "UNAUTHENTICATED" && code !== "FORBIDDEN" && code !== "INTERNAL_ERROR") return null;
@@ -36,6 +36,33 @@ function identityFailure(error: unknown): ActionResult<never> | null {
                         : "We couldn't verify your access to the Repository.",
         },
     };
+}
+
+function reportRepositoryFailure(operation: "list" | "open"): string {
+    const correlationId = crypto.randomUUID();
+    try {
+        captureOperationFailure({
+            module: "repository",
+            operation,
+            code: "INTERNAL_ERROR",
+            correlationId,
+        });
+    } catch {
+        // Telemetry must not change the controlled product result.
+    }
+    return correlationId;
+}
+
+function unexpectedFailure(
+    error: unknown,
+    operation: "list" | "open",
+    message: string,
+): ActionResult<never> {
+    const mapped = identityFailure(error);
+    if (mapped && mapped.error.code !== "INTERNAL_ERROR") return mapped;
+    const correlationId = reportRepositoryFailure(operation);
+    if (mapped) return { ...mapped, error: { ...mapped.error, correlationId } };
+    return { ok: false, error: { code: "INTERNAL_ERROR", message, correlationId } };
 }
 
 export function createRepositoryService(identity: Pick<IdentityApi, "requireDocumentActor">): RepositoryApi {
@@ -99,22 +126,7 @@ export function createRepositoryService(identity: Pick<IdentityApi, "requireDocu
                     },
                 };
             } catch (error) {
-                const denied = identityFailure(error);
-                if (denied) return denied;
-                captureOperationFailure({
-                    module: "repository",
-                    operation: "list",
-                    code: "INTERNAL_ERROR",
-                    correlationId: crypto.randomUUID(),
-                });
-
-                return {
-                    ok: false,
-                    error: {
-                        code: "INTERNAL_ERROR",
-                        message: "We couldn't load the Repository.",
-                    },
-                };
+                return unexpectedFailure(error, "list", "We couldn't load the Repository.");
             }
         },
 
@@ -160,18 +172,13 @@ export function createRepositoryService(identity: Pick<IdentityApi, "requireDocu
                 );
 
                 if (!signed) {
-                    captureOperationFailure({
-                        module: "repository",
-                        operation: "open",
-                        code: "INTERNAL_ERROR",
-                        correlationId: crypto.randomUUID(),
-                        versionId: parseResult.data,
-                    });
+                    const correlationId = reportRepositoryFailure("open");
                     return {
                         ok: false,
                         error: {
                             code: "INTERNAL_ERROR",
                             message: "We couldn't create a secure link to the file.",
+                            correlationId,
                         },
                     };
                 }
@@ -181,23 +188,7 @@ export function createRepositoryService(identity: Pick<IdentityApi, "requireDocu
                     data: signed,
                 };
             } catch (error) {
-                const denied = identityFailure(error);
-                if (denied) return denied;
-                captureOperationFailure({
-                    module: "repository",
-                    operation: "open",
-                    code: "INTERNAL_ERROR",
-                    correlationId: crypto.randomUUID(),
-                    versionId,
-                });
-
-                return {
-                    ok: false,
-                    error: {
-                        code: "INTERNAL_ERROR",
-                        message: "We couldn't open the file.",
-                    },
-                };
+                return unexpectedFailure(error, "open", "We couldn't open the file.");
             }
         },
     };

@@ -1,6 +1,7 @@
 import "server-only";
 
 import type { ActionResult, EligibleOwner, Workspace } from "../../types/contracts";
+import { captureOperationFailure } from "../../lib/observability/operation-events";
 import { createReadOnlyClient } from "../../lib/supabase/server";
 import { IdentityError, getIdentityContext, requireDocumentActor } from "../identity";
 
@@ -39,9 +40,10 @@ export async function listEligibleOwners(): Promise<ActionResult<EligibleOwner[]
       .order("id", { ascending: true });
 
     if (error || !data) {
+      const correlationId = reportOwnerFailure();
       return {
         ok: false,
-        error: { code: "INTERNAL_ERROR", message: "We couldn't load the workspace owners." },
+        error: { code: "INTERNAL_ERROR", message: "We couldn't load the workspace owners.", correlationId },
       };
     }
 
@@ -53,6 +55,7 @@ export async function listEligibleOwners(): Promise<ActionResult<EligibleOwner[]
     if (error instanceof IdentityError) {
       const code = error.code === "WORKSPACE_REQUIRED" ? "FORBIDDEN" : error.code;
       if (code === "UNAUTHENTICATED" || code === "FORBIDDEN" || code === "INTERNAL_ERROR") {
+        const correlationId = code === "INTERNAL_ERROR" ? reportOwnerFailure() : undefined;
         return {
           ok: false,
           error: {
@@ -63,13 +66,30 @@ export async function listEligibleOwners(): Promise<ActionResult<EligibleOwner[]
                 : code === "FORBIDDEN"
                   ? "You don't have permission to list owners."
                   : "We couldn't load the workspace owners.",
+            ...(correlationId ? { correlationId } : {}),
           },
         };
       }
     }
+    const correlationId = reportOwnerFailure();
     return {
       ok: false,
-      error: { code: "INTERNAL_ERROR", message: "We couldn't load the workspace owners." },
+      error: { code: "INTERNAL_ERROR", message: "We couldn't load the workspace owners.", correlationId },
     };
   }
+}
+
+function reportOwnerFailure(): string {
+  const correlationId = crypto.randomUUID();
+  try {
+    captureOperationFailure({
+      module: "workspace",
+      operation: "owners",
+      code: "INTERNAL_ERROR",
+      correlationId,
+    });
+  } catch {
+    // Telemetry must not change the controlled product result.
+  }
+  return correlationId;
 }

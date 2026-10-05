@@ -7,8 +7,9 @@ export function localSupabaseTestConfig(
   env: Record<string, string | undefined> = process.env,
 ) {
   const url = env.KDM_LOCAL_SUPABASE_URL;
+  const publicUrl = env.NEXT_PUBLIC_SUPABASE_URL;
   const publishableKey = env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
-  if (url !== LOCAL_SUPABASE_URL || !publishableKey) {
+  if (url !== LOCAL_SUPABASE_URL || publicUrl !== LOCAL_SUPABASE_URL || !publishableKey) {
     throw new Error("Local Supabase test environment is missing or has the wrong API URL.");
   }
   return { url, publishableKey };

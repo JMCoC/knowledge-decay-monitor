@@ -2,6 +2,7 @@
 
 import { IdentityError, requireDocumentActor } from "@/modules/identity";
 import type {
+  ActionError,
   ActionErrorCode,
   ActionResult,
   Actor,
@@ -35,10 +36,26 @@ const GENERIC_UPLOAD_MESSAGE = "This file cannot be uploaded.";
 const GENERIC_INTERNAL_MESSAGE = "Something went wrong. Try again.";
 const VERSION_ID_SCHEMA = z.string().uuid();
 
-type FailedResult = { ok: false; error: { code: ActionErrorCode; message: string } };
+type FailedResult = { ok: false; error: ActionError };
+type IngestionOperation = "reserve" | "verify" | "resume" | "recover";
 
-function failure(code: ActionErrorCode, message: string): FailedResult {
-  return { ok: false, error: { code, message } };
+function failure(code: ActionErrorCode, message: string, correlationId?: string): FailedResult {
+  return { ok: false, error: { code, message, ...(correlationId ? { correlationId } : {}) } };
+}
+
+function reportInternalFailure(operation: IngestionOperation, message: string): FailedResult {
+  const correlationId = crypto.randomUUID();
+  try {
+    captureOperationFailure({
+      module: "ingestion",
+      operation,
+      code: "INTERNAL_ERROR",
+      correlationId,
+    });
+  } catch {
+    // Telemetry must not change the controlled product result.
+  }
+  return failure("INTERNAL_ERROR", message, correlationId);
 }
 
 function identityFailure(error: unknown): FailedResult | null {
@@ -70,11 +87,13 @@ function storeErrorMessage(code: ActionErrorCode, options: { ownerFailure?: bool
   return GENERIC_UPLOAD_MESSAGE;
 }
 
-async function documentActor(): Promise<Actor | FailedResult> {
+async function documentActor(operation: IngestionOperation): Promise<Actor | FailedResult> {
   try {
     return await requireDocumentActor();
   } catch (error) {
-    return identityFailure(error) ?? failure("INTERNAL_ERROR", GENERIC_INTERNAL_MESSAGE);
+    const denied = identityFailure(error);
+    if (denied && denied.error.code !== "INTERNAL_ERROR") return denied;
+    return reportInternalFailure(operation, denied?.error.message ?? GENERIC_INTERNAL_MESSAGE);
   }
 }
 
@@ -88,7 +107,7 @@ export async function reserveUpload(items: UploadItemInput[]): Promise<ActionRes
     return failure("INVALID_INPUT", "Select between 1 and 10 PDF, DOCX or Markdown files.");
   }
 
-  const actor = await documentActor();
+  const actor = await documentActor("reserve");
   if (isFailure(actor)) return actor;
 
   const results: UploadItemResult[] = [];
@@ -148,17 +167,15 @@ export async function reserveUpload(items: UploadItemInput[]): Promise<ActionRes
         continue;
       }
       const code = storeErrorCode(error);
-      if (code === "INTERNAL_ERROR") {
-        captureOperationFailure({ module: "ingestion", operation: "reserve", code, correlationId: crypto.randomUUID() });
-      }
+      const message = storeErrorMessage(code, { ownerFailure: error instanceof UploadStoreError && error.sqlstate === "22023" });
+      const failureResult = code === "INTERNAL_ERROR"
+        ? reportInternalFailure("reserve", message)
+        : failure(code, message);
       results.push({
         index,
         outcome: {
           ok: false,
-          error: {
-            code,
-            message: storeErrorMessage(code, { ownerFailure: error instanceof UploadStoreError && error.sqlstate === "22023" }),
-          },
+          error: failureResult.error,
         },
       });
     }
@@ -170,7 +187,7 @@ export async function getUploadState(versionId: string): Promise<ActionResult<Up
   if (!VERSION_ID_SCHEMA.safeParse(versionId).success) {
     return failure("INVALID_INPUT", "The version ID is invalid.");
   }
-  const actor = await documentActor();
+  const actor = await documentActor("resume");
   if (isFailure(actor)) return actor;
   try {
     const snapshot = await getUploadSnapshot(actor.userId, versionId);
@@ -181,10 +198,9 @@ export async function getUploadState(versionId: string): Promise<ActionResult<Up
     const denied = identityFailure(error);
     if (denied) return denied;
     const code = storeErrorCode(error);
-    if (code === "INTERNAL_ERROR") {
-      captureOperationFailure({ module: "ingestion", operation: "resume", code, correlationId: crypto.randomUUID(), versionId });
-    }
-    return failure(code, storeErrorMessage(code));
+    return code === "INTERNAL_ERROR"
+      ? reportInternalFailure("resume", storeErrorMessage(code))
+      : failure(code, storeErrorMessage(code));
   }
 }
 
@@ -194,7 +210,7 @@ export async function finalizeUpload(input: {
 }): Promise<ActionResult<UploadSnapshot>> {
   const parsed = finalizeUploadSchema.safeParse(input);
   if (!parsed.success) return failure("INVALID_INPUT", "The upload reference is invalid.");
-  const actor = await documentActor();
+  const actor = await documentActor("verify");
   if (isFailure(actor)) return actor;
   try {
     return { ok: true, data: await finalizeUploadRecord(actor.userId, parsed.data.versionId, parsed.data.attemptId) };
@@ -202,17 +218,9 @@ export async function finalizeUpload(input: {
     const denied = identityFailure(error);
     if (denied) return denied;
     const code = storeErrorCode(error);
-    if (code === "INTERNAL_ERROR") {
-      captureOperationFailure({
-        module: "ingestion",
-        operation: "verify",
-        code,
-        correlationId: crypto.randomUUID(),
-        versionId: parsed.data.versionId,
-        attemptId: parsed.data.attemptId,
-      });
-    }
-    return failure(code, storeErrorMessage(code));
+    return code === "INTERNAL_ERROR"
+      ? reportInternalFailure("verify", storeErrorMessage(code))
+      : failure(code, storeErrorMessage(code));
   }
 }
 
@@ -230,7 +238,7 @@ export async function resumeUpload(
     validatedReference = parsedReference.data;
   }
 
-  const actor = await documentActor();
+  const actor = await documentActor("resume");
   if (isFailure(actor)) return actor;
   try {
     const result = await resumeUploadRecord(actor.userId, versionId, validatedReference);
@@ -241,10 +249,9 @@ export async function resumeUpload(
     const denied = identityFailure(error);
     if (denied) return denied;
     const code = storeErrorCode(error);
-    if (code === "INTERNAL_ERROR") {
-      captureOperationFailure({ module: "ingestion", operation: "resume", code, correlationId: crypto.randomUUID(), versionId });
-    }
-    return failure(code, storeErrorMessage(code));
+    return code === "INTERNAL_ERROR"
+      ? reportInternalFailure("resume", storeErrorMessage(code))
+      : failure(code, storeErrorMessage(code));
   }
 }
 
@@ -252,7 +259,7 @@ export async function recoverUpload(versionId: string): Promise<ActionResult<Upl
   if (!VERSION_ID_SCHEMA.safeParse(versionId).success) {
     return failure("INVALID_INPUT", "The version ID is invalid.");
   }
-  const actor = await documentActor();
+  const actor = await documentActor("recover");
   if (isFailure(actor)) return actor;
   try {
     return { ok: true, data: await recoverUploadRecord(actor.userId, versionId) };
@@ -260,9 +267,8 @@ export async function recoverUpload(versionId: string): Promise<ActionResult<Upl
     const denied = identityFailure(error);
     if (denied) return denied;
     const code = storeErrorCode(error);
-    if (code === "INTERNAL_ERROR") {
-      captureOperationFailure({ module: "ingestion", operation: "recover", code, correlationId: crypto.randomUUID(), versionId });
-    }
-    return failure(code, storeErrorMessage(code));
+    return code === "INTERNAL_ERROR"
+      ? reportInternalFailure("recover", storeErrorMessage(code))
+      : failure(code, storeErrorMessage(code));
   }
 }

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRepositoryService } from "./repository.service";
 import type { Actor } from "@/types/contracts";
 import { IdentityError } from "@/modules/identity/errors";
@@ -14,8 +14,13 @@ vi.mock("../infrastructure/repository.repository", () => ({
     findVersionStoragePath: vi.fn(),
     createDocumentSignedUrl: vi.fn(),
 }));
+vi.mock("@/lib/observability/operation-events", () => ({
+    captureOperationFailure: vi.fn(),
+}));
 
 vi.mock("server-only", () => ({}));
+
+import { captureOperationFailure } from "@/lib/observability/operation-events";
 
 describe("RepositoryService - S1-05", () => {
     const adminActor: Actor = {
@@ -30,17 +35,12 @@ describe("RepositoryService - S1-05", () => {
         role: "QA Lead",
     };
 
-    const memberActor: Actor = {
-        userId: "33333333-3333-4333-8333-333333333333",
-        workspaceId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-        role: "Member",
-    };
-
     const validVersionId = "30000000-0000-4000-8000-000000000001";
 
     beforeEach(() => {
         vi.clearAllMocks();
     });
+    afterEach(() => vi.unstubAllGlobals());
 
     describe("listDocuments", () => {
         it("debe permitir listar documentos a un Admin", async () => {
@@ -132,6 +132,7 @@ describe("RepositoryService - S1-05", () => {
             if (!result.ok) {
                 expect(result.error.code).toBe("FORBIDDEN");
             }
+            expect(captureOperationFailure).not.toHaveBeenCalled();
         });
 
         it("debe retornar UNAUTHENTICATED si no hay sesión activa", async () => {
@@ -146,6 +147,26 @@ describe("RepositoryService - S1-05", () => {
             if (!result.ok) {
                 expect(result.error.code).toBe("UNAUTHENTICATED");
             }
+        });
+
+        it("returns the same support reference as an unexpected list failure", async () => {
+            const correlationId = "40000000-0000-4000-8000-000000000009";
+            vi.stubGlobal("crypto", { randomUUID: () => correlationId });
+            const mockIdentity = { requireDocumentActor: vi.fn().mockResolvedValue(adminActor) };
+            vi.mocked(repoInfra.findRepositoryDocuments).mockRejectedValue(new Error("PRIVATE_DB_SENTINEL"));
+
+            const result = await createRepositoryService(mockIdentity).listDocuments({});
+
+            expect(result).toMatchObject({
+                ok: false,
+                error: { code: "INTERNAL_ERROR", correlationId },
+            });
+            expect(captureOperationFailure).toHaveBeenCalledWith({
+                module: "repository",
+                operation: "list",
+                code: "INTERNAL_ERROR",
+                correlationId,
+            });
         });
     });
 
@@ -219,6 +240,8 @@ describe("RepositoryService - S1-05", () => {
         });
 
         it("returns INTERNAL_ERROR instead of treating infrastructure failure as an empty repository", async () => {
+            const correlationId = "40000000-0000-4000-8000-000000000009";
+            vi.stubGlobal("crypto", { randomUUID: () => correlationId });
             const mockIdentity = { requireDocumentActor: vi.fn().mockResolvedValue(adminActor) };
             vi.mocked(repoInfra.findVersionStoragePath).mockRejectedValue(
                 new Error("Database connection lost"),
@@ -231,7 +254,14 @@ describe("RepositoryService - S1-05", () => {
             if (!result.ok) {
                 expect(result.error.code).toBe("INTERNAL_ERROR");
                 expect(result.error.message).toBe("We couldn't open the file.");
+                expect(result.error.correlationId).toBe(correlationId);
             }
+            expect(captureOperationFailure).toHaveBeenCalledWith({
+                module: "repository",
+                operation: "open",
+                code: "INTERNAL_ERROR",
+                correlationId,
+            });
         });
     });
 });

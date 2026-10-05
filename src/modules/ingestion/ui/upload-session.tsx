@@ -1,4 +1,5 @@
 import type {
+  ActionError,
   ActionResult,
   UploadItemInput,
   UploadItemResult,
@@ -51,12 +52,14 @@ export interface UploadSessionDependencies {
   recoverUpload(versionId: string): Promise<ActionResult<UploadSnapshot>>;
   savePending(record: PendingUploadRecord): void;
   clearPending(idempotencyKey: string): void;
-  setStatus?(index: number, status: UploadSessionStatus): void;
+  setStatus?(index: number, status: UploadSessionStatus, error?: ActionError): void;
+  captureTransportFailure?(): ActionError;
 }
 
 export interface UploadBatchResult {
   index: number;
   status: UploadSessionStatus;
+  error?: ActionError;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -202,7 +205,21 @@ function statusForSnapshot(snapshot: UploadSnapshot): UploadSessionStatus {
 type ReconcileResult =
   | { kind: "complete"; status: UploadSessionStatus }
   | { kind: "retry"; target: UploadTarget }
-  | { kind: "stop"; status: UploadSessionStatus };
+  | { kind: "stop"; status: UploadSessionStatus; error?: ActionError };
+
+function transportFailure(deps: UploadSessionDependencies): ActionError {
+  try {
+    return deps.captureTransportFailure?.() ?? {
+      code: "INTERNAL_ERROR",
+      message: "We couldn't confirm the operation. Refresh and try again.",
+    };
+  } catch {
+    return {
+      code: "INTERNAL_ERROR",
+      message: "We couldn't confirm the operation. Refresh and try again.",
+    };
+  }
+}
 
 async function reconcileAmbiguousUpload(
   item: PreparedUpload,
@@ -211,18 +228,29 @@ async function reconcileAmbiguousUpload(
   deps: UploadSessionDependencies,
 ): Promise<ReconcileResult> {
   let state = await deps.getUploadState(target.versionId).catch(() => null);
-  if (!state?.ok) return { kind: "stop", status: "upload_incomplete" };
+  if (!state) return { kind: "stop", status: "upload_incomplete", error: transportFailure(deps) };
+  if (!state.ok) return { kind: "stop", status: "upload_incomplete", error: state.error };
   if (state.data.uploadState === "confirmed") {
     deps.clearPending(item.idempotencyKey);
     return { kind: "complete", status: "uploaded_processing_pending" };
   }
-  if (state.data.uploadState === null) return { kind: "stop", status: "needs_reconciliation" };
+  if (state.data.uploadState === null) {
+    return {
+      kind: "stop",
+      status: "needs_reconciliation",
+      error: {
+        code: "INTERNAL_ERROR",
+        message: "We couldn't confirm the operation. Refresh and try again.",
+      },
+    };
+  }
   if (state.data.uploadState === "rejected") return { kind: "stop", status: "upload_rejected" };
 
   if (state.data.canRecover) {
     deps.setStatus?.(index, "recovering");
     const recovered = await deps.recoverUpload(target.versionId).catch(() => null);
-    if (!recovered?.ok) return { kind: "stop", status: "upload_incomplete" };
+    if (!recovered) return { kind: "stop", status: "upload_incomplete", error: transportFailure(deps) };
+    if (!recovered.ok) return { kind: "stop", status: "upload_incomplete", error: recovered.error };
     state = recovered;
     if (state.data.uploadState === "confirmed") {
       deps.clearPending(item.idempotencyKey);
@@ -233,7 +261,8 @@ async function reconcileAmbiguousUpload(
 
   if (!state.data.canResume) return { kind: "stop", status: statusForSnapshot(state.data) };
   const resumed = await deps.resumeUpload(target.versionId, item.reference).catch(() => null);
-  if (!resumed?.ok) return { kind: "stop", status: "upload_incomplete" };
+  if (!resumed) return { kind: "stop", status: "upload_incomplete", error: transportFailure(deps) };
+  if (!resumed.ok) return { kind: "stop", status: "upload_incomplete", error: resumed.error };
   if (isTarget(resumed.data)) return { kind: "retry", target: resumed.data };
   if (resumed.data.uploadState === "confirmed") {
     deps.clearPending(item.idempotencyKey);
@@ -249,6 +278,7 @@ async function reconcileAmbiguousUpload(
     return {
       kind: "stop",
       status: recovered?.ok ? statusForSnapshot(recovered.data) : "upload_incomplete",
+      error: recovered ? (recovered.ok ? undefined : recovered.error) : transportFailure(deps),
     };
   }
   return { kind: "stop", status: statusForSnapshot(resumed.data) };
@@ -259,12 +289,12 @@ export async function runUploadBatch(
   deps: UploadSessionDependencies,
 ): Promise<UploadBatchResult[]> {
   const results: UploadBatchResult[] = items.map((_, index) => ({ index, status: "preparing" }));
-  const setStatus = (index: number, status: UploadSessionStatus) => {
-    results[index] = { index, status };
-    deps.setStatus?.(index, status);
+  const setStatus = (index: number, status: UploadSessionStatus, error?: ActionError) => {
+    results[index] = { index, status, ...(error ? { error } : {}) };
+    deps.setStatus?.(index, status, error);
   };
-  const finishAll = (status: UploadSessionStatus) => items.map((_, index) => {
-    setStatus(index, status);
+  const finishAll = (status: UploadSessionStatus, error?: ActionError) => items.map((_, index) => {
+    setStatus(index, status, error);
     return results[index]!;
   });
 
@@ -296,9 +326,9 @@ export async function runUploadBatch(
       };
     }));
   } catch {
-    return finishAll("upload_incomplete");
+    return finishAll("upload_incomplete", transportFailure(deps));
   }
-  if (!reservation.ok) return finishAll("upload_incomplete");
+  if (!reservation.ok) return finishAll("upload_incomplete", reservation.error);
 
   const entries = new Map(reservation.data.map((entry) => [entry.index, entry.outcome]));
   let finalizationQueue = Promise.resolve();
@@ -316,11 +346,15 @@ export async function runUploadBatch(
       if (!item) return;
       const outcome = entries.get(index);
       if (!outcome) {
-        setStatus(index, "upload_incomplete");
+        setStatus(index, "upload_incomplete", transportFailure(deps));
         continue;
       }
       if (!outcome.ok) {
-        setStatus(index, outcome.error.code === "INVALID_INPUT" ? "upload_rejected" : "upload_incomplete");
+        setStatus(
+          index,
+          outcome.error.code === "INVALID_INPUT" ? "upload_rejected" : "upload_incomplete",
+          outcome.error,
+        );
         continue;
       }
 
@@ -346,13 +380,14 @@ export async function runUploadBatch(
         const reconciled = await reconcileAmbiguousUpload(item, currentTarget, index, deps).catch(() => ({
           kind: "stop" as const,
           status: "upload_incomplete" as const,
+          error: transportFailure(deps),
         }));
         if (reconciled.kind === "complete") {
           setStatus(index, reconciled.status);
           continue;
         }
         if (reconciled.kind !== "retry") {
-          setStatus(index, reconciled.status);
+          setStatus(index, reconciled.status, reconciled.error ?? transportFailure(deps));
           continue;
         }
         currentTarget = reconciled.target;
@@ -364,9 +399,14 @@ export async function runUploadBatch(
           const afterRetry = await reconcileAmbiguousUpload(item, currentTarget, index, deps).catch(() => ({
             kind: "stop" as const,
             status: "upload_incomplete" as const,
+            error: transportFailure(deps),
           }));
           if (afterRetry.kind === "complete") setStatus(index, afterRetry.status);
-          else setStatus(index, afterRetry.kind === "stop" ? afterRetry.status : "upload_incomplete");
+          else setStatus(
+            index,
+            afterRetry.kind === "stop" ? afterRetry.status : "upload_incomplete",
+            afterRetry.kind === "stop" ? afterRetry.error ?? transportFailure(deps) : transportFailure(deps),
+          );
           continue;
         }
       }
@@ -390,9 +430,16 @@ export async function runUploadBatch(
       const reconciled = await reconcileAmbiguousUpload(item, currentTarget, index, deps).catch(() => ({
         kind: "stop" as const,
         status: "upload_incomplete" as const,
+        error: transportFailure(deps),
       }));
       if (reconciled.kind === "complete") setStatus(index, reconciled.status);
-      else setStatus(index, reconciled.kind === "stop" ? reconciled.status : "upload_incomplete");
+      else setStatus(
+        index,
+        reconciled.kind === "stop" ? reconciled.status : "upload_incomplete",
+        reconciled.kind === "stop"
+          ? reconciled.error ?? (finalized ? finalized.error : transportFailure(deps))
+          : transportFailure(deps),
+      );
     }
   });
   await Promise.all(workers);

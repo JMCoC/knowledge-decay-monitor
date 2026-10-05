@@ -1,8 +1,9 @@
-name: S1-01 Auth and Workspace
+name: Sprint 1
 
 on:
   pull_request:
     branches: [develop, main]
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [develop, main]
 
@@ -10,12 +11,23 @@ permissions:
   contents: read
 
 jobs:
-  auth-workspace:
+  quality:
+    name: Quality gates
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    outputs:
+      tested_sha: ${{ steps.revision.outputs.sha }}
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Record tested source SHA
+        id: revision
+        shell: bash
+        run: printf 'sha=%s\n' "$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -50,7 +62,7 @@ jobs:
       - name: Local fixture regression
         run: pnpm test:fixtures
 
-      - name: Auth and bootstrap integration
+      - name: Integration tests
         run: pnpm test:integration
 
       - name: Production build
@@ -59,8 +71,8 @@ jobs:
       - name: Install Chromium and system dependencies
         run: pnpm exec playwright install --with-deps chromium
 
-      - name: Auth and workspace browser tests
-        run: pnpm test:e2e:auth
+      - name: Local browser acceptance
+        run: pnpm test:e2e:local
 
       - name: Recovery template restart test
         run: pnpm test:auth:restart
@@ -68,3 +80,128 @@ jobs:
       - name: Stop disposable local Supabase
         if: always()
         run: node scripts/local-supabase-lifecycle.mjs stop
+
+  preview:
+    needs: quality
+    if: >-
+      ${{ needs.quality.result == 'success' && github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    environment: Preview
+    permissions:
+      contents: read
+      pull-requests: read
+    concurrency:
+      group: preview-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    steps:
+      - name: Check out tested source SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.quality.outputs.tested_sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.11.0
+          package-manager-cache: false
+
+      - name: Install pnpm
+        run: npm install --global pnpm@12.5.1
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify tested checkout
+        env:
+          TESTED_SHA: ${{ needs.quality.outputs.tested_sha }}
+        run: test "$(git rev-parse HEAD)" = "$TESTED_SHA"
+
+      - name: Verify current PR and actor permissions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          TESTED_SHA: ${{ needs.quality.outputs.tested_sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          KDM_DEPLOY_ENVIRONMENT: Preview
+        run: node scripts/deploy-vercel.mjs preview --preflight
+
+      - name: Deploy verified Preview
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          TESTED_SHA: ${{ needs.quality.outputs.tested_sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          KDM_DEPLOY_ENVIRONMENT: Preview
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: node scripts/deploy-vercel.mjs preview
+
+  production:
+    needs: quality
+    if: >-
+      ${{ needs.quality.result == 'success' && github.event_name == 'push' &&
+          github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    environment: Production
+    permissions:
+      contents: read
+    concurrency:
+      group: production
+      cancel-in-progress: false
+    steps:
+      - name: Check out tested source SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.quality.outputs.tested_sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.11.0
+          package-manager-cache: false
+
+      - name: Install pnpm
+        run: npm install --global pnpm@12.5.1
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify tested checkout
+        env:
+          TESTED_SHA: ${{ needs.quality.outputs.tested_sha }}
+        run: test "$(git rev-parse HEAD)" = "$TESTED_SHA"
+
+      - name: Verify current main and actor permissions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          TESTED_SHA: ${{ needs.quality.outputs.tested_sha }}
+          KDM_DEPLOY_ENVIRONMENT: Production
+        run: node scripts/deploy-vercel.mjs production --preflight
+
+      - name: Deploy verified Production
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          TESTED_SHA: ${{ needs.quality.outputs.tested_sha }}
+          KDM_DEPLOY_ENVIRONMENT: Production
+          APP_ORIGIN: ${{ vars.APP_ORIGIN }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: node scripts/deploy-vercel.mjs production

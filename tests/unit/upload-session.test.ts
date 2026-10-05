@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
+  ActionError,
   ActionResult,
   UploadItemResult,
   UploadSnapshot,
@@ -272,6 +273,76 @@ describe("browser upload session", () => {
     expect(mocks.dependencies.uploadToStorage).toHaveBeenNthCalledWith(2, retryTarget, item.file);
     expect(result[0]).toMatchObject({ status: "uploaded_processing_pending" });
     expect(mocks.clearPending).toHaveBeenCalledWith(key);
+  });
+
+  it("keeps a confirmed transfer successful after its response is lost", async () => {
+    const key = "550e8400-e29b-41d4-a716-446655440000";
+    const item = prepared(0, key);
+    const mocks = dependencies([item], {
+      uploadToStorage: vi.fn(async () => { throw new Error("response lost"); }),
+      getUploadState: vi.fn(async (versionId: string) =>
+        snapshotResult(confirmed(versionId, target(0).attemptId))),
+    });
+
+    const result = await runUploadBatch([item], mocks.dependencies);
+
+    expect(result[0]?.status).toBe("uploaded_processing_pending");
+    expect(mocks.dependencies.reserveUpload).toHaveBeenCalledTimes(1);
+    expect(mocks.dependencies.finalizeUpload).not.toHaveBeenCalled();
+    expect(mocks.clearPending).toHaveBeenCalledWith(key);
+  });
+
+  it("shows an uncertain finalize as controlled and never reports success without reconciliation", async () => {
+    const item = prepared(0);
+    const error: ActionError = {
+      code: "INTERNAL_ERROR",
+      message: "We couldn't confirm the operation. Refresh and try again.",
+      correlationId: "40000000-0000-4000-8000-000000000009",
+    };
+    const captureTransportFailure = vi.fn(() => error);
+    const mocks = dependencies([item], {
+      finalizeUpload: vi.fn(async () => { throw new Error("ACTION_RESPONSE_SENTINEL"); }),
+      getUploadState: vi.fn(async () => { throw new Error("RECONCILIATION_SENTINEL"); }),
+      captureTransportFailure,
+    });
+
+    const result = await runUploadBatch([item], mocks.dependencies);
+
+    expect(result[0]).toEqual({ index: 0, status: "upload_incomplete", error });
+    expect(result[0]?.status).not.toBe("uploaded_processing_pending");
+    expect(mocks.dependencies.reserveUpload).toHaveBeenCalledTimes(1);
+    expect(captureTransportFailure).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(result)).not.toMatch(/SENTINEL/);
+  });
+
+  it("keeps one failed reservation item separate from another confirmed item", async () => {
+    const items = [prepared(0), prepared(1)];
+    const itemError: ActionError = {
+      code: "INTERNAL_ERROR",
+      message: "The upload could not be confirmed.",
+      correlationId: "40000000-0000-4000-8000-000000000009",
+    };
+    const reservation: ActionResult<UploadItemResult[]> = {
+      ok: true,
+      data: [
+        { index: 0, outcome: { ok: false, error: itemError } },
+        {
+          index: 1,
+          outcome: {
+            ok: true,
+            documentId: "20000000-0000-4000-8000-000000000001",
+            target: target(1),
+          },
+        },
+      ],
+    };
+    const mocks = dependencies(items, { reserveUpload: vi.fn(async () => reservation) });
+
+    const result = await runUploadBatch(items, mocks.dependencies);
+
+    expect(result[0]).toEqual({ index: 0, status: "upload_incomplete", error: itemError });
+    expect(result[1]?.status).toBe("uploaded_processing_pending");
+    expect(mocks.dependencies.finalizeUpload).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the pending key when the reservation response is lost", async () => {
