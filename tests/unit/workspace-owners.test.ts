@@ -1,7 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Actor } from "../../src/types/contracts";
 
-const { createReadOnlyClient, requireDocumentActor, query } = vi.hoisted(() => {
+const { captureOperationFailure, createReadOnlyClient, requireDocumentActor, query } = vi.hoisted(() => {
   const query = {
     select: vi.fn(),
     eq: vi.fn(),
@@ -13,6 +13,7 @@ const { createReadOnlyClient, requireDocumentActor, query } = vi.hoisted(() => {
   query.order.mockImplementation(() => query);
   return {
     query,
+    captureOperationFailure: vi.fn(),
     createReadOnlyClient: vi.fn(),
     requireDocumentActor: vi.fn(),
   };
@@ -21,10 +22,12 @@ const { createReadOnlyClient, requireDocumentActor, query } = vi.hoisted(() => {
 vi.mock("../../src/modules/identity", () => ({ requireDocumentActor }));
 vi.mock("../../src/lib/supabase/server", () => ({ createReadOnlyClient }));
 vi.mock("server-only", () => ({}));
+vi.mock("../../src/lib/observability/operation-events", () => ({ captureOperationFailure }));
 
 import { listEligibleOwners } from "../../src/modules/workspace/queries";
 
 const actor: Actor = { userId: "admin-a", workspaceId: "workspace-a", role: "Admin" };
+const correlationId = "40000000-0000-4000-8000-000000000009";
 
 describe("workspace eligible owners", () => {
   beforeEach(() => {
@@ -35,6 +38,7 @@ describe("workspace eligible owners", () => {
     query.eq.mockImplementation(() => query);
     query.order.mockImplementation(() => query);
   });
+  afterEach(() => vi.unstubAllGlobals());
 
   it("returns only profile IDs and names from the verified workspace", async () => {
     query.then.mockImplementation((resolve: (value: unknown) => unknown) =>
@@ -54,13 +58,22 @@ describe("workspace eligible owners", () => {
   });
 
   it("returns an internal error when the profile query fails", async () => {
+    vi.stubGlobal("crypto", { randomUUID: () => correlationId });
     query.then.mockImplementation((resolve: (value: unknown) => unknown) =>
       Promise.resolve({ data: null, error: new Error("database detail") }).then(resolve),
     );
 
-    await expect(listEligibleOwners()).resolves.toMatchObject({
+    const result = await listEligibleOwners();
+
+    expect(result).toMatchObject({
       ok: false,
-      error: { code: "INTERNAL_ERROR", message: "We couldn't load the workspace owners." },
+      error: { code: "INTERNAL_ERROR", message: "We couldn't load the workspace owners.", correlationId },
+    });
+    expect(captureOperationFailure).toHaveBeenCalledWith({
+      module: "workspace",
+      operation: "owners",
+      code: "INTERNAL_ERROR",
+      correlationId,
     });
   });
 });

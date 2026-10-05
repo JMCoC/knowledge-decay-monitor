@@ -129,6 +129,10 @@ test.describe("Repository upload", () => {
       await page.getByRole("button", { name: "Upload files" }).click();
       const uploadRegion = page.getByRole("region", { name: "Upload documents" });
       await expect(uploadRegion.getByText("Upload incomplete", { exact: true })).toBeVisible({ timeout: 30_000 });
+      await expect(uploadRegion.getByRole("alert")).toContainText(
+        "We couldn't confirm the operation. Refresh and try again.",
+      );
+      await expect(uploadRegion.getByRole("alert")).toContainText(/Reference: [0-9a-f-]{36}/i);
       expect(interruptedTransfers).toBe(2);
 
       const { data: document, error: documentError } = await service.from("documents")
@@ -274,14 +278,14 @@ test.describe("Repository upload", () => {
       const service = serviceClient();
       const documents = await service.from("documents").select("id,name,active_version_id")
         .in("name", allNames);
-      expect(documents.error).toBeNull();
-      expect(documents.data).toHaveLength(11);
+      expect(documents.error === null).toBe(true);
+      expect(documents.data?.length === 11).toBe(true);
       expect(documents.data?.every((document) => document.active_version_id === null)).toBe(true);
       const versions = await service.from("document_versions")
         .select("id,document_id,processing_status,version_status,upload_state,storage_path")
         .in("document_id", documents.data?.map((document) => document.id) ?? []);
-      expect(versions.error).toBeNull();
-      expect(versions.data).toHaveLength(11);
+      expect(versions.error === null).toBe(true);
+      expect(versions.data?.length === 11).toBe(true);
       expect(versions.data?.every((version) =>
         version.processing_status === "uploaded"
         && version.version_status === null
@@ -293,7 +297,7 @@ test.describe("Repository upload", () => {
       expect(maximumVersion?.storage_path).toBeTruthy();
       if (!maximumVersion?.storage_path) throw new Error("The 10 MiB upload has no confirmed canonical path.");
       const downloaded = await service.storage.from("documents").download(maximumVersion.storage_path);
-      expect(downloaded.error).toBeNull();
+      expect(downloaded.error === null).toBe(true);
       if (!downloaded.data) throw new Error("The 10 MiB canonical original could not be opened.");
       const actualHash = createHash("sha256")
         .update(new Uint8Array(await downloaded.data.arrayBuffer()))

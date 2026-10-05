@@ -55,6 +55,27 @@ test.describe("Repository access", () => {
         )).toBeVisible();
     });
 
+    test("shows a controlled support reference when the open action response is lost", async ({ page, context }) => {
+        await loginAs(context, "admin.a@example.test");
+        await page.goto("/repository");
+        await page.route("**/*", async (route) => {
+            const request = route.request();
+            if (request.method() === "POST" && request.headers()["next-action"]) {
+                await route.abort();
+                return;
+            }
+            await route.continue();
+        });
+
+        await page.getByRole("button", { name: /Open file/i }).first().click();
+
+        const alert = page.getByRole("alert").filter({
+            hasText: "We couldn't confirm the operation. Refresh and try again.",
+        });
+        await expect(alert).toContainText("We couldn't confirm the operation. Refresh and try again.");
+        await expect(alert).toContainText(/Reference: [0-9a-f-]{36}/i);
+    });
+
     test("Workspace B cannot see Workspace A documents", async ({ page, context }) => {
         await loginAs(context, "admin.b@example.test");
         await page.goto("/repository");

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthSessionMissingError } from "@supabase/supabase-js";
 import {
   createWorkspace,
@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   createWritableClient: vi.fn(),
   reportAuthFailure: vi.fn(),
 }));
+const correlationId = "40000000-0000-4000-8000-000000000009";
 
 vi.mock("../../src/lib/supabase/server", () => ({
   createReadOnlyClient: mocks.createReadOnlyClient,
@@ -57,6 +58,7 @@ function createClient({
 
 describe("createWorkspace", () => {
   beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.unstubAllGlobals());
 
   it("rejects invalid or extra input before creating a client or calling the RPC", async () => {
     const result = await createWorkspace({
@@ -69,6 +71,7 @@ describe("createWorkspace", () => {
       ok: false,
       error: { code: "INVALID_INPUT", message: "Please check the workspace details and try again." },
     });
+    expect(mocks.reportAuthFailure).not.toHaveBeenCalled();
     expect(mocks.createWritableClient).not.toHaveBeenCalled();
   });
 
@@ -110,6 +113,7 @@ describe("createWorkspace", () => {
       error: { code: "UNAUTHENTICATED" },
     });
     expect(rpc).not.toHaveBeenCalled();
+    expect(mocks.reportAuthFailure).not.toHaveBeenCalled();
   });
 
   it("does not call a permission error unauthenticated while Auth still verifies the user", async () => {
@@ -125,7 +129,7 @@ describe("createWorkspace", () => {
   });
 
   it("reconciles an uncertain RPC response from the persisted Profile", async () => {
-    const { client } = createClient({
+    const { client, rpc } = createClient({
       rpcError: new Error("response lost"),
       profile: {
         id: "verified-user",
@@ -140,6 +144,27 @@ describe("createWorkspace", () => {
       ok: true,
       data: { workspaceId: "workspace-committed" },
     });
+    expect(rpc).toHaveBeenCalledTimes(1);
+    expect(mocks.reportAuthFailure).not.toHaveBeenCalled();
+  });
+
+  it("keeps an uncertain bootstrap pending when reconciliation cannot confirm persistence", async () => {
+    const { client, rpc } = createClient({
+      rpcError: new Error("RESPONSE_LOST_SENTINEL"),
+      profileError: new Error("DATABASE_SENTINEL"),
+    });
+    mocks.createWritableClient.mockResolvedValue(client);
+
+    const result = await createWorkspace({ name: "Acme", fullName: "Alex" });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "INTERNAL_ERROR", message: "We couldn't create your workspace. Try again." },
+    });
+    expect(result).not.toHaveProperty("data");
+    expect(rpc).toHaveBeenCalledTimes(1);
+    expect(mocks.reportAuthFailure).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(result)).not.toMatch(/SENTINEL/);
   });
 
   it("does not expose provider or database details on technical failures", async () => {
@@ -148,10 +173,11 @@ describe("createWorkspace", () => {
 
     const result = await createWorkspace({ name: "Acme", fullName: "Alex" });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       ok: false,
       error: { code: "INTERNAL_ERROR", message: "We couldn't create your workspace. Try again." },
     });
+    expect(result.ok ? undefined : result.error.correlationId).toEqual(expect.any(String));
     expect(JSON.stringify(result)).not.toContain("private SQL details");
   });
 
@@ -169,6 +195,29 @@ describe("createWorkspace", () => {
       correlationId: expect.stringMatching(/^[0-9a-f-]{36}$/i),
     });
     expect(JSON.stringify(mocks.reportAuthFailure.mock.calls)).not.toContain("TOKEN_SENTINEL");
+  });
+
+  it("returns the exact support reference sent with the bootstrap failure event", async () => {
+    vi.stubGlobal("crypto", { randomUUID: () => correlationId });
+    mocks.reportAuthFailure.mockImplementationOnce(() => {
+      throw new Error("PRIVATE_TELEMETRY_SENTINEL");
+    });
+    const { client } = createClient({
+      rpcResult: { data: null, error: { code: "XX000", message: "DATABASE_SENTINEL" } },
+    });
+    mocks.createWritableClient.mockResolvedValue(client);
+
+    const result = await createWorkspace({ name: "Acme", fullName: "Alex" });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "INTERNAL_ERROR", correlationId },
+    });
+    expect(mocks.reportAuthFailure).toHaveBeenCalledWith({
+      operation: "bootstrap",
+      code: "PROVIDER_ERROR",
+      correlationId,
+    });
   });
 
   it("reports ready only when reconciliation confirms a persisted Profile", async () => {

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UploadItemInput, UploadSnapshot } from "@/types/contracts";
 import {
   finalizeUpload,
@@ -14,6 +14,7 @@ const ids = vi.hoisted(() => ({
   document: "20000000-0000-4000-8000-000000000010",
   version: "30000000-0000-4000-8000-000000000010",
   attempt: "50000000-0000-4000-8000-000000000010",
+  correlation: "40000000-0000-4000-8000-000000000009",
 }));
 
 const mocks = vi.hoisted(() => {
@@ -36,6 +37,7 @@ const mocks = vi.hoisted(() => {
     resume: vi.fn(),
     recover: vi.fn(),
     reserveCalls: 0,
+    captureOperationFailure: vi.fn(),
     IdentityError,
     UploadStoreError,
   };
@@ -50,6 +52,9 @@ vi.mock("@/modules/identity", () => ({
 }));
 
 vi.mock("server-only", () => ({}));
+vi.mock("@/lib/observability/operation-events", () => ({
+  captureOperationFailure: mocks.captureOperationFailure,
+}));
 
 vi.mock("@/modules/ingestion/upload-store", () => ({
   UploadStoreError: mocks.UploadStoreError,
@@ -106,6 +111,8 @@ beforeEach(() => {
   mocks.reserveCalls = 0;
 });
 
+afterEach(() => vi.unstubAllGlobals());
+
 describe("reserveUpload", () => {
   it("returns the server-created temporary target, not a client-built canonical path", async () => {
     const result = await reserveUpload([validPdf]);
@@ -146,6 +153,7 @@ describe("reserveUpload", () => {
     const result = await reserveUpload([validPdf]);
     expect(result).toMatchObject({ ok: false, error: { code: "FORBIDDEN" } });
     expect(mocks.reserveCalls).toBe(0);
+    expect(mocks.captureOperationFailure).not.toHaveBeenCalled();
   });
 
   it("maps a foreign workspace owner without revealing which validation failed", async () => {
@@ -177,6 +185,24 @@ describe("reserveUpload", () => {
     expect(JSON.stringify(result)).not.toContain("private database detail");
   });
 
+  it("returns the same support reference as the failed item reservation event", async () => {
+    vi.stubGlobal("crypto", { randomUUID: () => ids.correlation });
+    mocks.reserve.mockRejectedValue(new UploadStoreError("XX000"));
+
+    const result = await reserveUpload([validPdf]);
+
+    expect(result).toMatchObject({
+      ok: true,
+      data: [{ outcome: { ok: false, error: { code: "INTERNAL_ERROR", correlationId: ids.correlation } } }],
+    });
+    expect(mocks.captureOperationFailure).toHaveBeenCalledWith({
+      module: "ingestion",
+      operation: "reserve",
+      code: "INTERNAL_ERROR",
+      correlationId: ids.correlation,
+    });
+  });
+
   it("isolates an invalid item and still reserves other valid items", async () => {
     const result = await reserveUpload([
       validPdf,
@@ -205,6 +231,45 @@ describe("getUploadState and finalizeUpload", () => {
     const result = await getUploadState(ids.version);
     expect(result).toMatchObject({ ok: false, error: { code: "INTERNAL_ERROR" } });
     expect(JSON.stringify(result)).not.toContain("08006");
+  });
+
+  it("returns the same support reference as the failed finalize event", async () => {
+    vi.stubGlobal("crypto", { randomUUID: () => ids.correlation });
+    mocks.finalize.mockRejectedValue(new UploadStoreError("XX000"));
+
+    const result = await finalizeUpload({ versionId: ids.version, attemptId: ids.attempt });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "INTERNAL_ERROR", correlationId: ids.correlation },
+    });
+    expect(mocks.captureOperationFailure).toHaveBeenCalledWith({
+      module: "ingestion",
+      operation: "verify",
+      code: "INTERNAL_ERROR",
+      correlationId: ids.correlation,
+    });
+    expect(mocks.captureOperationFailure.mock.calls[0]?.[0]).not.toHaveProperty("versionId");
+    expect(mocks.captureOperationFailure.mock.calls[0]?.[0]).not.toHaveProperty("attemptId");
+  });
+
+  it("captures an unexpected identity failure once at the action boundary", async () => {
+    vi.stubGlobal("crypto", { randomUUID: () => ids.correlation });
+    mocks.identityError = new IdentityError("INTERNAL_ERROR");
+
+    const result = await getUploadState(ids.version);
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "INTERNAL_ERROR", correlationId: ids.correlation },
+    });
+    expect(mocks.captureOperationFailure).toHaveBeenCalledTimes(1);
+    expect(mocks.captureOperationFailure).toHaveBeenCalledWith({
+      module: "ingestion",
+      operation: "resume",
+      code: "INTERNAL_ERROR",
+      correlationId: ids.correlation,
+    });
   });
 
   it("accepts only a version and attempt, then reauthorizes before finalization", async () => {

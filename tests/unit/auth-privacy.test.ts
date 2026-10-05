@@ -43,14 +43,17 @@ describe("Auth telemetry privacy", () => {
 
     expect(sentry.withScope).toHaveBeenCalledTimes(1);
     expect(sentry.scope.setTag.mock.calls).toEqual([
-      ["kdm.auth.safe", "true"],
+      ["kdm.safe", "true"],
+      ["module", "workspace"],
       ["operation", "bootstrap"],
       ["code", "INTERNAL_ERROR"],
       ["correlation_id", correlationId],
+      ["runtime", "server"],
+      ["synthetic", "false"],
     ]);
     expect(sentry.captureMessage).toHaveBeenCalledWith(
-      "Authentication operation failed",
-      "warning",
+      "Product operation failed",
+      "error",
     );
     expect(JSON.stringify(sentry.scope.setTag.mock.calls)).not.toContain("SENTINEL_924");
   });
@@ -66,12 +69,13 @@ describe("Auth telemetry privacy", () => {
 
   it("rebuilds an explicitly safe event without request, breadcrumb, or error payloads", () => {
     const event = {
-      event_id: "event-id",
+      event_id: "0123456789abcdef0123456789abcdef",
       timestamp: 1_790_000_000,
       level: "error",
       message: "untrusted message",
       tags: {
-        "kdm.auth.safe": "true",
+        "kdm.safe": "true",
+        module: "identity",
         operation: "recovery",
         code: "PROVIDER_ERROR",
         correlation_id: correlationId,
@@ -90,15 +94,20 @@ describe("Auth telemetry privacy", () => {
 
     expect(safeEvent).toEqual({
       type: undefined,
-      event_id: "event-id",
+      event_id: "0123456789abcdef0123456789abcdef",
       timestamp: 1_790_000_000,
-      level: "warning",
+      level: "error",
       platform: "javascript",
-      message: "Authentication operation failed",
+      message: "Product operation failed",
+      environment: "development",
+      release: "0000000000000000000000000000000000000000",
       tags: {
+        module: "identity",
         operation: "recovery",
         code: "PROVIDER_ERROR",
         correlation_id: correlationId,
+        runtime: "server",
+        synthetic: "false",
       },
     });
     expect(JSON.stringify(safeEvent)).not.toContain("SENTINEL_924");
@@ -109,9 +118,10 @@ describe("Auth telemetry privacy", () => {
     expect(
       filterSentryEvent({
         tags: {
-          "kdm.auth.safe": "true",
+          "kdm.safe": "true",
+          module: "identity",
           operation: "login",
-          code: "INVALID_INPUT",
+          code: "INTERNAL_ERROR",
           correlation_id: "not-a-uuid",
         },
       } as never),

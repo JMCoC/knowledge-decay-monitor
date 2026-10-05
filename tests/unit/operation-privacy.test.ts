@@ -21,12 +21,12 @@ const attemptId = "88725091-ae4b-47d2-88dc-490b0baf1072";
 describe("product operation telemetry privacy", () => {
   it("reconstructs an operation event from allowlisted fields only", () => {
     const event = {
-      event_id: "event-id",
+      event_id: "0123456789abcdef0123456789abcdef",
       timestamp: 1_790_000_000,
       level: "error",
       message: "untrusted provider message",
       tags: {
-        "kdm.operation.safe": "true",
+        "kdm.safe": "true",
         module: "ingestion",
         operation: "verify",
         code: "INTERNAL_ERROR",
@@ -46,16 +46,20 @@ describe("product operation telemetry privacy", () => {
 
     expect(safeEvent).toEqual({
       type: undefined,
-      event_id: "event-id",
+      event_id: "0123456789abcdef0123456789abcdef",
       timestamp: 1_790_000_000,
       level: "error",
       platform: "javascript",
       message: "Product operation failed",
+      environment: "development",
+      release: "0000000000000000000000000000000000000000",
       tags: {
         module: "ingestion",
         operation: "verify",
         code: "INTERNAL_ERROR",
         correlation_id: correlationId,
+        runtime: "server",
+        synthetic: "false",
         version_id: versionId,
         attempt_id: attemptId,
       },
@@ -74,11 +78,13 @@ describe("product operation telemetry privacy", () => {
     } as never);
 
     expect(sentry.scope.setTag.mock.calls).toEqual([
-      ["kdm.operation.safe", "true"],
+      ["kdm.safe", "true"],
       ["module", "repository"],
       ["operation", "open"],
       ["code", "INTERNAL_ERROR"],
       ["correlation_id", correlationId],
+      ["runtime", "server"],
+      ["synthetic", "false"],
       ["version_id", versionId],
     ]);
     expect(sentry.captureMessage).toHaveBeenCalledWith("Product operation failed", "error");
@@ -93,14 +99,14 @@ describe("product operation telemetry privacy", () => {
     expect(filterSentryEvent({ message: "automatic error" } as never)).toBeNull();
     expect(filterSentryEvent({
       tags: {
-        "kdm.operation.safe": "true",
+        "kdm.safe": "true",
         module: "ingestion",
         operation: "verify",
         code: "INTERNAL_ERROR",
         correlation_id: correlationId,
         version_id: "not-a-uuid",
       },
-    } as never)).toBeNull();
+    } as never)).not.toHaveProperty("tags.version_id");
     expect(sentry.withScope).toHaveBeenCalledTimes(1);
   });
 });

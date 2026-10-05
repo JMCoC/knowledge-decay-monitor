@@ -1,4 +1,5 @@
 import type {
+  ActionError,
   ActionErrorCode,
   ActionResult,
   IngestionApi,
@@ -21,6 +22,11 @@ const _finalize: IngestionApi["finalizeUpload"] = (input) =>
   });
 
 const _code: ActionErrorCode = "CONFLICT";
+const _failure: ActionError = {
+  code: "INTERNAL_ERROR",
+  message: "Something went wrong.",
+  correlationId: "40000000-0000-4000-8000-000000000009",
+};
 
 const _item: UploadItemInput = {
   metadata: { name: "Runbook", category: "SOP", ownerId: "u" },
@@ -56,4 +62,4 @@ const _snapshot: UploadSnapshot = {
   canRecover: false,
 };
 
-void [_finalize, _code, _item, _envelope, _snapshot];
+void [_finalize, _code, _failure, _item, _envelope, _snapshot];

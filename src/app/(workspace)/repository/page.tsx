@@ -1,4 +1,5 @@
 import { listRepositoryDocuments } from "@/modules/repository";
+import { OperationError } from "@/components/operation-error";
 import { ProcessingStatusBadge } from "@/modules/repository/ui/processing-status-badge";
 import { OpenDocumentButton } from "@/modules/repository/ui/open-document-button";
 import { requireDocumentActor } from "@/modules/identity";
@@ -32,7 +33,7 @@ export default async function RepositoryPage({ searchParams }: PageProps) {
                     role="alert"
                     className="mt-6 rounded-lg border border-red-200 bg-red-50 p-4 text-red-700"
                 >
-                    {result.error.message}
+                    <OperationError error={result.error} />
                 </div>
             </div>
         );
@@ -53,7 +54,7 @@ export default async function RepositoryPage({ searchParams }: PageProps) {
                 <UploadPanel
                     userId={actor.userId}
                     owners={ownersResult?.ok ? ownersResult.data : []}
-                    ownersError={ownersResult && !ownersResult.ok ? ownersResult.error.message : undefined}
+                    ownersError={ownersResult && !ownersResult.ok ? ownersResult.error : undefined}
                 />
             )}
 
