@@ -34,7 +34,9 @@ test("shows a controlled support reference when the login action response is los
   await page.getByLabel("Password", { exact: true }).fill(user.password);
   await page.getByRole("button", { name: "Sign in" }).click();
 
-  const alert = page.getByRole("alert");
+  const alert = page.getByRole("alert").filter({
+    hasText: "We couldn't confirm the operation. Refresh and try again.",
+  });
   await expect(alert).toContainText("We couldn't confirm the operation. Refresh and try again.");
   await expect(alert).toContainText(/Reference: [0-9a-f-]{36}/i);
   await expect(page).toHaveURL(/\/login$/);
@@ -57,7 +59,9 @@ test("keeps onboarding pending when the workspace action response is lost", asyn
   await page.getByLabel("Workspace name").fill(`KDM Pending ${randomUUID()}`);
   await page.getByRole("button", { name: "Create workspace" }).click();
 
-  const alert = page.getByRole("alert");
+  const alert = page.getByRole("alert").filter({
+    hasText: "We couldn't confirm the operation. Refresh and try again.",
+  });
   await expect(alert).toContainText("We couldn't confirm the operation. Refresh and try again.");
   await expect(alert).toContainText(/Reference: [0-9a-f-]{36}/i);
   await expect(page).toHaveURL(/\/onboarding$/);

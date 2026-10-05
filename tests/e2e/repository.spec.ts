@@ -69,7 +69,9 @@ test.describe("Repository access", () => {
 
         await page.getByRole("button", { name: /Open file/i }).first().click();
 
-        const alert = page.getByRole("alert");
+        const alert = page.getByRole("alert").filter({
+            hasText: "We couldn't confirm the operation. Refresh and try again.",
+        });
         await expect(alert).toContainText("We couldn't confirm the operation. Refresh and try again.");
         await expect(alert).toContainText(/Reference: [0-9a-f-]{36}/i);
     });
