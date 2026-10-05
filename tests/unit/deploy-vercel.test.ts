@@ -37,6 +37,9 @@ function createHarness({
   readyState = "READY",
   permission = "write",
   failOperation,
+  failureOutput = "VERCEL_TOKEN_SENTINEL SENTRY_TOKEN_SENTINEL",
+  failureStatus = 1,
+  failureStdout = "",
   preflight = false,
 }: {
   target?: "preview" | "production";
@@ -46,6 +49,9 @@ function createHarness({
   readyState?: string;
   permission?: string;
   failOperation?: string;
+  failureOutput?: string;
+  failureStatus?: number;
+  failureStdout?: string;
   preflight?: boolean;
 } = {}) {
   const calls: Array<{ command: string; args: string[]; options: { env?: Record<string, string | undefined>; shell?: boolean | string } }> = [];
@@ -87,7 +93,7 @@ function createHarness({
 
     if (command === "pnpm") {
       if (operation === failOperation) {
-        return { status: 1, stdout: "", stderr: "VERCEL_TOKEN_SENTINEL SENTRY_TOKEN_SENTINEL" };
+        return { status: failureStatus, stdout: failureStdout, stderr: failureOutput };
       }
       if (operation === "deploy") {
         return {
@@ -248,5 +254,39 @@ describe("Vercel deploy runner", () => {
 
     expect(harness.run()).toBe(1);
     expect(harness.logs.join("\n")).not.toMatch(/VERCEL_TOKEN_SENTINEL|SENTRY_TOKEN_SENTINEL|GH_TOKEN_SENTINEL/);
+  });
+
+  it.each([
+    ["private non-JSON output", "invalid_json_output"],
+    ['{"unexpected":"private"}', "invalid_deployment_reference"],
+  ])("distinguishes successful CLI execution from invalid deployment output: %s", (failureStdout, category) => {
+    const harness = createHarness({ failOperation: "deploy", failureStatus: 0, failureStdout });
+    expect(harness.run()).toBe(1);
+    expect(harness.logs.join("\n")).toContain(`reason=${category}`);
+    expect(harness.logs.join("\n")).not.toMatch(/private|SENTINEL/);
+    expect(vercelCalls(harness.calls).map(operation)).toEqual(["pull", "build", "deploy"]);
+  });
+
+  it.each([
+    ['Error: No prebuilt output found in ".vercel/output"', "prebuilt_output_missing"],
+    ['Prebuilt deployment cannot be created because vercel build failed with error', "prebuilt_build_failed"],
+    ['https://vercel.link/prebuilt-environment-mismatch', "prebuilt_target_mismatch"],
+    ['Error: Git author private@example.com must have access to the team', "git_author_access_denied"],
+    ['Error: The specified token is not valid', "authentication_failed"],
+    ['Error: Forbidden', "access_denied"],
+    ['Error: Rate limit exceeded', "rate_limited"],
+    ['Error: unknown or unexpected option: --private-value', "invalid_cli_arguments"],
+    ['Error: getaddrinfo ENOTFOUND private.example.com', "network_failure"],
+    ['unrecognized private provider response', "unclassified_cli_failure"],
+  ])("reports a safe deploy failure category for %s", (failureOutput, category) => {
+    const harness = createHarness({
+      failOperation: "deploy",
+      failureOutput: `${failureOutput}\nVERCEL_TOKEN_SENTINEL SENTRY_TOKEN_SENTINEL`,
+    });
+
+    expect(harness.run()).toBe(1);
+    expect(harness.logs.join("\n")).toContain(`reason=${category}; exit=1`);
+    expect(harness.logs.join("\n")).not.toMatch(/SENTINEL|private|provider response/);
+    expect(vercelCalls(harness.calls).map(operation)).toEqual(["pull", "build", "deploy"]);
   });
 });

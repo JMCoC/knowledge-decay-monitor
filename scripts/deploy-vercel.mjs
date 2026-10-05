@@ -15,6 +15,7 @@ const CHILD_TIMEOUT_MS = 15 * 60 * 1000;
  *   status: number | null;
  *   error?: Error;
  *   stdout: string | Buffer | null;
+ *   stderr?: string | Buffer | null;
  * }} SpawnCommand
  */
 
@@ -83,6 +84,29 @@ function vercelEnvironment(source, { build = false, sha, sentryTarget, appOrigin
   return result;
 }
 
+// Only these fixed classifications may reach CI logs. Never echo CLI output:
+// it can include downloaded configuration, provider payloads or credentials.
+class DeploymentDiagnosticError extends Error {}
+
+function processFailureReason(result) {
+  if (result?.error?.code === "ENOENT") return "executable_not_found";
+  if (result?.error?.code === "ETIMEDOUT") return "process_timeout";
+  if (result?.error?.code === "ENOBUFS") return "process_output_limit";
+  const output = `${result?.stdout ?? ""}\n${result?.stderr ?? ""}`;
+  const categories = [
+    [/no prebuilt output found/i, "prebuilt_output_missing"],
+    [/prebuilt deployment cannot be created/i, "prebuilt_build_failed"],
+    [/prebuilt-environment-mismatch/i, "prebuilt_target_mismatch"],
+    [/git author.*(?:access|permission)/i, "git_author_access_denied"],
+    [/specified token is not valid|invalid token|no existing credentials|unauthorized/i, "authentication_failed"],
+    [/forbidden|not authorized|permission denied|does not have access/i, "access_denied"],
+    [/rate.?limit|too many requests/i, "rate_limited"],
+    [/unknown or unexpected option|unknown option/i, "invalid_cli_arguments"],
+    [/ENOTFOUND|ECONNRESET|ECONNREFUSED|fetch failed/i, "network_failure"],
+  ];
+  return categories.find(([pattern]) => pattern.test(output))?.[1] ?? "unclassified_cli_failure";
+}
+
 function runProcess(spawnCommand, command, args, options, stage) {
   let result;
   try {
@@ -97,10 +121,13 @@ function runProcess(spawnCommand, command, args, options, stage) {
       maxBuffer: 8 * 1024 * 1024,
     });
   } catch {
-    throw new Error(`${stage} failed.`);
+    throw new DeploymentDiagnosticError(`${stage}: reason=process_start_failed; exit=none`);
   }
 
-  if (result?.error || result?.status !== 0) throw new Error(`${stage} failed.`);
+  if (result?.error || result?.status !== 0) {
+    const status = Number.isInteger(result?.status) ? result.status : "none";
+    throw new DeploymentDiagnosticError(`${stage}: reason=${processFailureReason(result)}; exit=${status}`);
+  }
   return typeof result.stdout === "string" ? result.stdout.trim() : "";
 }
 
@@ -108,7 +135,7 @@ function parseJson(text, stage) {
   try {
     return JSON.parse(text);
   } catch {
-    throw new Error(`${stage} returned invalid structured output.`);
+    throw new DeploymentDiagnosticError(`${stage}: reason=invalid_json_output`);
   }
 }
 
@@ -293,7 +320,7 @@ function parseCreatedDeployment(output) {
   const id = deployment?.id ?? deployment?.deploymentId;
   const url = normalizedVercelUrl(deployment?.url);
   if (typeof id !== "string" || !/^dpl_[A-Za-z0-9]+$/.test(id) || !url) {
-    throw new Error("Vercel deploy returned an invalid deployment reference.");
+    throw new DeploymentDiagnosticError("reason=invalid_deployment_reference");
   }
   return { id, url };
 }
@@ -496,8 +523,11 @@ export function runDeployment(
     }
 
     return 0;
-  } catch {
+  } catch (error) {
     log(preflightOnly ? "Deployment preflight denied." : `Deployment stopped safely during ${stage}.`);
+    if (!preflightOnly && error instanceof DeploymentDiagnosticError) {
+      log(`Deployment diagnostic: ${error.message}`);
+    }
     return 1;
   }
 }
