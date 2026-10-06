@@ -6,7 +6,7 @@
 // version ids are abbreviated to 8 chars in logs.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -117,14 +117,31 @@ const MD_BODY = [
 async function runStage(serviceKey, token, { label, fileName, mime, bytes, expectReady }) {
   const documentId = randomUUID();
   const versionId = randomUUID();
-  const storagePath = `${WORKSPACE_A}/${documentId}/${versionId}/original.${fileName.split(".").pop()}`;
+  const ext = fileName.split(".").pop();
+  const storagePath = `${WORKSPACE_A}/${documentId}/${versionId}/original.${ext}`;
   await insertRow(serviceKey, "documents", {
     id: documentId, workspace_id: WORKSPACE_A, name: `S1-04 ${label}`, category: "SOP", owner_id: QA_LEAD_A,
   }, label);
+  // A confirmed version must satisfy document_versions_upload_fields_consistent
+  // (23514): sha, attempt pointer, and confirmation stamps all present, with
+  // no verifying-only lease fields. The attempt row goes first: the FK to
+  // document_upload_attempts is checked per REST transaction.
+  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  const attemptId = randomUUID();
+  const nowIso = new Date().toISOString();
+  await insertRow(serviceKey, "document_upload_attempts", {
+    id: attemptId,
+    workspace_id: WORKSPACE_A,
+    version_id: versionId,
+    storage_path: `${WORKSPACE_A}/${documentId}/${versionId}/attempts/${attemptId}/original.${ext}`,
+  }, `${label}:attempt`);
   await insertRow(serviceKey, "document_versions", {
     id: versionId, workspace_id: WORKSPACE_A, document_id: documentId, version_number: 1,
     storage_path: storagePath, processing_status: "uploaded", version_status: null,
     upload_state: "confirmed", analysis_status: "pending_reanalysis", size_bytes: bytes.length,
+    expected_sha256: sha256, hash_source: "client_declared",
+    current_upload_attempt_id: attemptId, reference_set_at: nowIso,
+    reference_set_by: QA_LEAD_A, upload_confirmed_at: nowIso,
   }, label);
   await uploadOriginal(serviceKey, storagePath, bytes, mime, label);
 
