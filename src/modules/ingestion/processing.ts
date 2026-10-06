@@ -1,14 +1,11 @@
+import "server-only";
+
 /**
- * The pipeline entry point. S1-03 has no worker, so this is a no-op that
- * returns the status the reservation already set. S1-04 replaces the body and
- * changes the return to "processing"; `actions.ts` does not change with it.
- *
- * Narrower than ProcessingStatus on purpose: these are the only two statuses
- * the FinalizeItemResult contract admits.
+ * Placeholder. Task 5 replaces the body with the real pipeline
+ * (download canonical → parse → chunk → embed → finish_processing).
+ * Never does the CAS; the Route Handler owns it.
  */
-export async function startProcessing(
-  _versionId: string,
-  _supabase: unknown,
-): Promise<"uploaded" | "processing"> {
-  return "uploaded";
+export async function runProcessing(versionId: string, operationId: string): Promise<void> {
+  void versionId;
+  void operationId;
 }
