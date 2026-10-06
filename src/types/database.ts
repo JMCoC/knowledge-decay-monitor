@@ -7,31 +7,6 @@ export type Json =
   | Json[]
 
 export type Database = {
-  graphql_public: {
-    Tables: {
-      [_ in never]: never
-    }
-    Views: {
-      [_ in never]: never
-    }
-    Functions: {
-      graphql: {
-        Args: {
-          extensions?: Json
-          operationName?: string
-          query?: string
-          variables?: Json
-        }
-        Returns: Json
-      }
-    }
-    Enums: {
-      [_ in never]: never
-    }
-    CompositeTypes: {
-      [_ in never]: never
-    }
-  }
   public: {
     Tables: {
       document_chunks: {
@@ -129,6 +104,8 @@ export type Database = {
           hash_source: Database["public"]["Enums"]["upload_hash_source"] | null
           id: string
           idempotency_key: string | null
+          processing_operation_id: string | null
+          processing_started_at: string | null
           processing_status: Database["public"]["Enums"]["processing_status"]
           reference_set_at: string | null
           reference_set_by: string | null
@@ -154,6 +131,8 @@ export type Database = {
           hash_source?: Database["public"]["Enums"]["upload_hash_source"] | null
           id?: string
           idempotency_key?: string | null
+          processing_operation_id?: string | null
+          processing_started_at?: string | null
           processing_status?: Database["public"]["Enums"]["processing_status"]
           reference_set_at?: string | null
           reference_set_by?: string | null
@@ -179,6 +158,8 @@ export type Database = {
           hash_source?: Database["public"]["Enums"]["upload_hash_source"] | null
           id?: string
           idempotency_key?: string | null
+          processing_operation_id?: string | null
+          processing_started_at?: string | null
           processing_status?: Database["public"]["Enums"]["processing_status"]
           reference_set_at?: string | null
           reference_set_by?: string | null
@@ -462,6 +443,10 @@ export type Database = {
           workspace_id: string
         }[]
       }
+      finish_processing: {
+        Args: { p_chunks: Json; p_operation_id: string; p_version_id: string }
+        Returns: undefined
+      }
       finish_upload_recovery: {
         Args: {
           p_attempt_id: string
@@ -729,9 +714,6 @@ export type CompositeTypes<
     : never
 
 export const Constants = {
-  graphql_public: {
-    Enums: {},
-  },
   public: {
     Enums: {
       analysis_status: ["pending_reanalysis", "analyzed"],

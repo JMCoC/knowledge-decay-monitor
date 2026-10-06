@@ -57,16 +57,13 @@ export async function POST(request: Request): Promise<Response> {
   const operationId = crypto.randomUUID();
   try {
     const service = createServiceClient();
-    // TODO(S1-04 Task 7): drop `as never` once Dev 1 regenerates
-    // database.ts with processing_operation_id / processing_started_at
-    // (Task 1 migration, still pending regeneration).
     const { data, error } = await service
       .from("document_versions")
       .update({
         processing_status: "processing",
         processing_operation_id: operationId,
         processing_started_at: new Date().toISOString(),
-      } as never)
+      })
       .eq("id", versionId)
       .eq("processing_status", "uploaded")
       .eq("upload_state", "confirmed")
@@ -74,9 +71,7 @@ export async function POST(request: Request): Promise<Response> {
     if (error) {
       throw error;
     }
-    const claimed = (data ?? []) as unknown as Array<{
-      processing_operation_id: string | null;
-    }>;
+    const claimed = data ?? [];
     if (claimed.length === 0) {
       return new Response(null, { status: 204 });
     }

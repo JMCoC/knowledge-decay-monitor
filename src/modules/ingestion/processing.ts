@@ -115,16 +115,9 @@ export async function runProcessing(versionId: string, operationId: string): Pro
       embedding: embeddings[index] as string,
     }));
 
-    // TODO(S1-04 Task 7): drop the cast once Dev 1 regenerates database.ts
-    // with Functions.finish_processing (Task 1 migration, still pending
-    // regeneration).
-    const rpc = service.rpc as unknown as (
-      fn: string,
-      args: { p_version_id: string; p_operation_id: string; p_chunks: unknown },
-    ) => Promise<{ error: unknown }>;
     let rpcError: unknown;
     try {
-      ({ error: rpcError } = await rpc("finish_processing", {
+      ({ error: rpcError } = await service.rpc("finish_processing", {
         p_version_id: versionId,
         p_operation_id: operationId,
         p_chunks: chunks,
