@@ -63,10 +63,12 @@ Endpoints: local `http://127.0.0.1:54321/functions/v1/embed` (con `supabase func
 
 | Cap | Valor congelado | Razón |
 |---|---|---|
-| Max chunks por versión | 500 | 500/8 = 63 llamadas / concurrencia 4 ≈ 16 oleadas × 1.6 s ≈ 26 s + parseo + RPC: cabe en el timeout interno; cubre ~225 k tokens (≈900 KB de texto). Denser files → `CHUNKING_FAILED` honesto |
-| Batch de embeddings | 8 textos/llamada, concurrencia 4 en `embedBatch` | 8 medido OK (1.5–1.6 s con textos de 1800 chars); 12+ rompe el isolate (546). Re-verificar el batch 8 en el primer deploy cloud (los límites CPU pueden diferir) |
+| Max chunks por versión | 500 (medido en Task 0; derivado del timeout 50 s con batch 8 y concurrencia 4) | 500/8 = 63 llamadas / concurrencia 4 ≈ 16 oleadas × 1.6 s ≈ 26 s + parseo + RPC: cabe en el timeout interno; cubre ~225 k tokens (≈900 KB de texto). Denser files → `CHUNKING_FAILED` honesto |
+| Batch de embeddings | 8 textos/llamada con concurrencia 4; 12+ textos → HTTP 546 WORKER_LIMIT medido en local; re-verificar en el primer deploy cloud | 8 medido OK (1.5–1.6 s con textos de 1800 chars) |
 | Timeout interno del worker | 50 s | Falla a `processing_failed` antes de que el handler muera sin rastro (presupuesto menor que el timeout de la plataforma) |
 | Lease CAS | 180 s en `processing_started_at` | Sin barrido en S1-04 |
+
+Latencias: 1 texto p50 63 ms (n=10); 8×1800 chars 1.53-1.60 s/llamada (n=3); cold start 7.4 s.
 
 Versiones (npm latest 2026-10-06): `unpdf@1.8.1` (2.6 MB instalado, cero dependencias runtime), `mammoth@1.13.0` (2.0 MB instalado). Route Handler con dynamic import: +0 al bundle inicial; cold start en Vercel no medible desde aquí → medir en preview en Task 4 y anotar.
 
@@ -254,7 +256,9 @@ Tipos: Dev 1 regenera `src/types/database.ts` tras la migración (protocolo: nun
 
 ### 5.1 Stack aceptado
 
-- **PDF:** `unpdf` (moderno, serverless-friendly, sin deps nativas). Superior a `pdf-parse` para PDFs contemporáneos.
+**Vía elegida = Edge Function `supabase/functions/embed` con `supabase.ai.Session('gte-small')`** (veredicto Task 0, §2.1; patrón de la guía oficial).
+
+- **PDF:** `unpdf@1.8.1` (moderno, serverless-friendly, sin deps nativas). Superior a `pdf-parse` para PDFs contemporáneos.
 - **DOCX:** `mammoth` (estándar de facto; extrae headings + párrafos como HTML estructurado).
 - **Markdown:** parser mínimo propio (~30 líneas: headings `#`, `##`, … y párrafos). `remark`+`unified` pesa cientos de KB para lo que el ticket exige.
 - **Tokenizer:** atado a la vía de embeddings (§2):
@@ -266,7 +270,7 @@ Tipos: Dev 1 regenera `src/types/database.ts` tras la migración (protocolo: nun
 
 ### 5.2 Reglas de chunking (ticket + PRD §14)
 
-Determinístico (mismo input → mismos chunks byte-idénticos), prioriza headings y párrafos, bloques sobredimensionados se dividen solo cuando sea necesario, target ~450 tokens, overlap 50 tokens. Cada chunk persiste: `texto`, referencia a versión, orden (`chunk_index`), página/sección (`page_number`, `section_heading`), heading cuando disponible, `embedding` (vector 384 validado: 384 números finitos, serializado a string pgvector en `extensions.vector(384)`; `database.ts` representa vector como `string`, no cambiar DTO a `number[]`).
+Determinístico (mismo input → mismos chunks byte-idénticos), prioriza headings y párrafos, bloques sobredimensionados se dividen solo cuando sea necesario, target ~450 tokens, overlap 50 tokens. `embedBatch` llama a `functions.invoke('embed', { body: { texts } })` con concurrencia 4 y batch 8 por llamada (§2.2). Cada chunk persiste: `texto`, referencia a versión, orden (`chunk_index`), página/sección (`page_number`, `section_heading`), heading cuando disponible, `embedding` (vector 384 validado: 384 números finitos, serializado a string pgvector en `extensions.vector(384)`; `database.ts` representa vector como `string`, no cambiar DTO a `number[]`).
 
 Para Markdown sin páginas: `page_number NULL`, `section_heading` con el heading más cercano. Chunks vacíos no se persisten.
 
@@ -451,10 +455,11 @@ Sin E2E nuevo obligatorio en S1-04 salvo verificar que Repository muestra `proce
 1. **Crash antes de `after()`:** la versión queda en `uploaded + confirmed` sin worker. Sin cron que la barra en S1-04. Mismo enfoque que la reserva huérfana de S1-03: se declara, no se construye infraestructura paralela.
 2. **Lease vencido sin barrido:** `processing_operation_id` + `processing_started_at` se escriben pero nadie los barre en S1-04. Un lease vencido queda en `processing`; S1-07 lo rescata con retry manual.
 3. **Crash entre CAS y RPC:** la versión queda en `processing` con `processing_operation_id` seteado, sin chunks. S1-07 la rescata (re-lee el estado, detecta lease vencido, reintenta). (Precisión 5.)
-4. **Sin cron, sin cola explícita, sin Edge Functions en S1-04.** La "cola" es el estado `uploaded + confirmed`.
+4. **Sin cron ni cola explícita en S1-04.** La "cola" es el estado `uploaded + confirmed`. La única Edge Function es `supabase/functions/embed` (solo inferencia, §2.1).
 5. **Legacy nunca procesado.** Filas con `upload_state IS NULL` y seed `ready + active + vectores sintéticos` quedan intactas.
 6. **`upload_mode=paused` en cloud** bloquea nuevas subidas hasta el cutover; S1-04 local no lo cambia.
 7. **Vercel:** body 4.5 MB y timeouts obligan a bytes por Storage directo + `downloadStorageObject` acotado; timeout interno (~50 s) falla a `processing_failed` con rastro en vez de morir en silencio.
+8. **Cap de 500 chunks:** archivos que excedan ~500 chunks (≈900 KB de texto denso) fallan con `CHUNKING_FAILED`. La documentación interna típica está muy por debajo. Si aparece un caso real, Sprint 2 ajusta timeout (Vercel Pro permite 300 s) o proveedor de embeddings.
 
 ---
 
