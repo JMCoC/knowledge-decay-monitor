@@ -13,6 +13,9 @@ import type {
   UploadTarget,
 } from "@/types/contracts";
 import { z } from "zod";
+import { after } from "next/server";
+import { createServiceClient } from "@/lib/supabase/service";
+import { getAppOrigin } from "@/lib/app-origin";
 import {
   computeRequestFingerprint,
   finalizeUploadRecord,
@@ -99,6 +102,46 @@ async function documentActor(operation: IngestionOperation): Promise<Actor | Fai
 
 function isFailure(value: Actor | FailedResult): value is FailedResult {
   return "ok" in value;
+}
+
+/**
+ * Dispatches the S1-04 worker exactly when a confirmed version is still
+ * waiting (`uploaded`). The snapshot carries no `processing_status`, so the
+ * minimal row is re-read with `service_role` instead of widening the
+ * contract. Any other state — or any scheduling failure — schedules
+ * nothing and never touches the snapshot.
+ */
+async function scheduleProcessingIfUploaded(
+  uploadState: UploadSnapshot["uploadState"],
+  versionId: string,
+): Promise<void> {
+  if (uploadState !== "confirmed") return;
+  const service = createServiceClient();
+  const { data } = await service
+    .from("document_versions")
+    .select("processing_status")
+    .eq("id", versionId)
+    .single();
+  if (data?.processing_status !== "uploaded") return;
+  const token = process.env.INGESTION_INTERNAL_TOKEN;
+  if (!token) return;
+  let origin: string | null = null;
+  try {
+    origin = getAppOrigin();
+  } catch {
+    origin = null;
+  }
+  if (!origin) return;
+  after(() => {
+    void fetch(`${origin}/api/ingestion/process`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-internal-token": token,
+      },
+      body: JSON.stringify({ versionId }),
+    });
+  });
 }
 
 export async function reserveUpload(items: UploadItemInput[]): Promise<ActionResult<UploadItemResult[]>> {
@@ -213,7 +256,15 @@ export async function finalizeUpload(input: {
   const actor = await documentActor("verify");
   if (isFailure(actor)) return actor;
   try {
-    return { ok: true, data: await finalizeUploadRecord(actor.userId, parsed.data.versionId, parsed.data.attemptId) };
+    const snapshot = await finalizeUploadRecord(actor.userId, parsed.data.versionId, parsed.data.attemptId);
+    // Best-effort scheduling: finalization already succeeded, so nothing
+    // here may change the snapshot — any scheduling failure stays silent.
+    try {
+      await scheduleProcessingIfUploaded(snapshot.uploadState, parsed.data.versionId);
+    } catch {
+      // Silent. The CAS in the route serializes any duplicate dispatch.
+    }
+    return { ok: true, data: snapshot };
   } catch (error) {
     const denied = identityFailure(error);
     if (denied) return denied;
