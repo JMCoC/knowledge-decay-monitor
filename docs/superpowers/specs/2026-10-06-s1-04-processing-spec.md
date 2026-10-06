@@ -32,38 +32,51 @@
 
 ---
 
-## 2. Task 0 — Verificación previa (bloqueante)
+## 2. Task 0 — Veredicto (cerrado 2026-10-06, medido en local)
 
-Task 0 responde con evidencia medida antes de implementar el resto. Sin Task 0 cerrado no se elige vía de embeddings ni se fijan caps.
+> Task 0 responde con evidencia medida antes de implementar el resto. Veredicto abajo; los valores quedan congelados antes de Task 1.
 
-### 2.1 Tres preguntas de embeddings (prioridad estricta)
+### 2.1 Vía elegida: (1) Edge auxiliar `supabase/functions/embed`
 
-1. ¿Es `supabase.ai.Session('gte-small')` invocable desde un Route Handler Next.js en Vercel? (Hipótesis: no, Edge-only.)
-2. ¿Acepta Hugging Face Inference API `supabase/gte-small` con dims 384, qué rate limits del free tier, qué latencia p50/p95 para batch 32–64, y qué auth (API key propia del proyecto)?
-3. ¿Caben `@xenova/transformers` + pesos gte-small en un Route Handler Vercel (~30 MB bundle)? ¿Cold-start aceptable? Self-hosted, cero dependencia externa.
+**Vía 1 — SÍ (elegida).** `Supabase.ai.Session('gte-small')` es un global del Edge Runtime (Deno), no invocable desde un Route Handler Node en Vercel: no existe paquete npm `@supabase/ai` (404 en registry) y `supabase-js@2.117.2` no expone namespace `ai` (verificado). La [guía oficial](https://supabase.com/docs/guides/ai/quickstarts/generate-text-embeddings) lo documenta solo dentro de Edge Functions (`Deno.serve`, único modelo soportado: `gte-small`). Probado en local con función probe temporal (servida con `supabase functions serve`, eliminada tras medir; nunca commiteada): HTTP 200, `dims: 384`, vectores finitos, norma 1.0 (`mean_pool: true, normalize: true`).
 
-**Decisión por prioridad:** (1) funciona → Edge auxiliar mínimo solo para embed. (2) funciona → HF Inference API (documentar como dependencia nueva, pedir aprobación explícita al equipo). (3) funciona → self-hosted. **Ninguna funciona → ADR-003 obligatorio antes de seguir; el resto de S1-04 se bloquea.**
+Mediciones locales (supabase-edge-runtime-1.74.3, CPU local, calentado salvo indicación):
 
-La spec registra: vía elegida (1/2/3), endpoint/runtime concreto, dims confirmadas (384), latencia p50/p95, tamaño de batch, timeout, fecha de verificación.
+| Caso | Resultado |
+|---|---|
+| 1 texto corto, calentado (n=10) | 61–82 ms, p50 ≈ 63 ms |
+| 8 textos × 1800 chars (≈450 tokens) por llamada (n=3) | 1.53 / 1.60 / 1.58 s, 200 OK, dims 384 |
+| 12, 16, 32 textos por llamada | HTTP 546 `WORKER_LIMIT` (límite CPU por invocación del isolate) |
+| Primera llamada en frío (descarga ~70 MB de pesos) | 7.4 s |
 
-**Descartado:** abstracción con N providers/fallback (YAGNI; gte-small HF no es idéntico a self-hosted en tokenizer/quantization/fine-tuning y mezclarlos compromete la consistencia vectorial). Mocks de embeddings prohibidos por el ticket y por spec S1-03 §3.1 (los vectores sintéticos del seed son fixtures de aislamiento, no evidencia de procesamiento).
+**Vía 2 — NO.** La [página HF de `Supabase/gte-small`](https://huggingface.co/Supabase/gte-small) declara "This model isn't deployed by any Inference Provider": la Inference API serverless no lo sirve. La variante `thenlper/gte-small` (misma familia, 384 dims / 512 seq) muestra widget de inferencia, pero es otro stack de servicio y exigiría API key propia del proyecto (no disponible en este entorno); aceptarla como "lo mismo" violaría la regla de consistencia vectorial de §2.1. Descartada sin token para medir latencias.
 
-**Abstracción aceptable:** una sola función `embedBatch(texts: string[]): Promise<string[]>` en `embeddings.ts`, sin jerarquía de interfaces. Cambiar de vía = cambiar el cuerpo.
+**Vía 3 — NO.** `@xenova/transformers@2.17.2` = 46.6 MB desempaquetado + `onnxruntime-node` = 301 MB desempaquetado + ~70 MB de pesos descargados en runtime a `/tmp` (efímero en serverless): excede los límites prácticos de Vercel. (`@huggingface/transformers@4.3.1` es 10 MB pero mantiene la descarga de pesos en runtime + backend onnx; mismo veredicto.) Cold start en Vercel no medible desde aquí.
 
-**Contingencia:** si Task 0 no encuentra vía, documentar limitación, `processing_failed` con código `EMBEDDING_FAILED`, bloquear promoción a `ready`, ADR-003, resto bloqueado hasta ADR aprobado. (`EMBEDDING_UNAVAILABLE` no existe en `safe-event.ts`; el catálogo admite `EMBEDDING_FAILED`, verificado en `src/lib/observability/safe-event.ts:16-25`. No inventar códigos nuevos: ampliar `operation-events.ts`/`safe-event.ts` solo por decisión explícita con Dev 1.)
+Sin ADR-003: la vía 1 funciona con el modelo exacto del ticket, sin dependencia paga nueva.
 
-### 2.2 Caps y mediciones (valores a fijar en Task 0)
+**Desviación a aprobar antes de Task 4:** la vía 1 exige `supabase/functions/embed/index.ts` (patrón de la guía oficial: `Session` + `session.run(input, { mean_pool: true, normalize: true })`, aceptando `{ inputs: string[] }` y devolviendo `{ embeddings: number[][], dims: 384 }`). El plan prohibía Edge Functions salvo que Task 0 probara Edge-only — probado. Requiere enmienda del File Structure del plan (añadir ese archivo a Task 4/5) con aprobación del equipo; esta spec no modifica el plan.
 
-| Cap | Valor provisional | Razón |
+Endpoints: local `http://127.0.0.1:54321/functions/v1/embed` (con `supabase functions serve` junto al stack); cloud `https://<ref>.supabase.co/functions/v1/embed` tras `supabase functions deploy embed`. Auth entre handler y función: publishable key server-only (nunca al navegador); la función no es tenant-gated (embed de contenido ya autorizado; nunca loguea inputs).
+
+### 2.2 Caps congelados y versiones
+
+| Cap | Valor congelado | Razón |
 |---|---|---|
-| Max chunks por versión | ej. 3000 | Acota memoria/tx; exceder → `processing_failed` |
-| Batch de embeddings | ej. 32–64 | Latencia y rate limits |
-| Timeout interno del worker | ej. 50 s | Falla a `processing_failed` antes de que el handler muera sin rastro (presupuesto menor que el timeout de la plataforma) |
+| Max chunks por versión | 500 | 500/8 = 63 llamadas / concurrencia 4 ≈ 16 oleadas × 1.6 s ≈ 26 s + parseo + RPC: cabe en el timeout interno; cubre ~225 k tokens (≈900 KB de texto). Denser files → `CHUNKING_FAILED` honesto |
+| Batch de embeddings | 8 textos/llamada, concurrencia 4 en `embedBatch` | 8 medido OK (1.5–1.6 s con textos de 1800 chars); 12+ rompe el isolate (546). Re-verificar el batch 8 en el primer deploy cloud (los límites CPU pueden diferir) |
+| Timeout interno del worker | 50 s | Falla a `processing_failed` antes de que el handler muera sin rastro (presupuesto menor que el timeout de la plataforma) |
 | Lease CAS | 180 s en `processing_started_at` | Sin barrido en S1-04 |
 
-Task 0 registra además: versiones de `unpdf` y `mammoth`, bundle size del Route Handler (dynamic import), cold start medido, decisión de tokenizer (real vs `chars/4` + ratio documentado) con justificación.
+Versiones (npm latest 2026-10-06): `unpdf@1.8.1` (2.6 MB instalado, cero dependencias runtime), `mammoth@1.13.0` (2.0 MB instalado). Route Handler con dynamic import: +0 al bundle inicial; cold start en Vercel no medible desde aquí → medir en preview en Task 4 y anotar.
 
-Si Task 0 mide un cap distinto, la spec se actualiza durante Task 0 y se registra con fecha y justificación. Los valores finales quedan congelados antes de Task 1.
+**Tokenizer (decisión): `chars/4` con ratio fijo 4.0.** El tokenizer real WordPiece de gte-small no está disponible en el handler Node sin la lib de 46 MB + pesos; `tiktoken` sigue rechazado (BPE de OpenAI, 20–40 % distinto). El determinismo del chunking se preserva con cualquiera; lo que varía es la precisión de "450 tokens". Ratio documentado, sin re-medición por archivo.
+
+**pgvector con dims ≠ 384 → SQLSTATE `22000`.** Medido en local (`ERROR: 22000: expected 384 dimensions, not 3`, `vector.c:80`). Task 1 lo aserta en pgTAP como `throws_ok ... '22000'` (ya no "probable": confirmado).
+
+**Fixtures (creados, sin commit — van en Task 7):**
+- `supabase/fixtures/storage/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/20000000-0000-4000-8000-0000000000e1/30000000-0000-4000-8000-0000000000e1/original.docx` (1373 bytes): DOCX real mínimo, un `Heading1` + dos párrafos. Validado con `mammoth@1.13.0`: `<h1>Incident Response Overview</h1>` + 2 `<p>`, cero warnings.
+- `supabase/fixtures/storage/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/20000000-0000-4000-8000-0000000000e2/30000000-0000-4000-8000-0000000000e2/original-empty.pdf` (329 bytes): PDF 1.4 válido, una página vacía, cero objetos de texto. Validado con `unpdf@1.8.1`: 1 página, 0 chars → camino `ParseError("NO_TEXT")` confirmado.
 
 ---
 
@@ -415,7 +428,7 @@ Siguiente libre verificado: `ls supabase/tests/database/` muestra `001`–`009`;
 | `authenticated`/`anon` sin `EXECUTE` | `not has_function_privilege(role, 'public.finish_processing(uuid,uuid,jsonb)', 'EXECUTE')` (patrón de `006_upload_authorization.test.sql:39-45`; pgTAP no expone `hasnt_function_privilege`, se niega `has_function_privilege`) |
 | Trigger diferido: `ready` sin `active` + puntero inconsistente revierte | transacción que viola `check_active_version` |
 | `document_chunks` hereda `workspace_id` de la versión; cross-tenant imposible por FK | intento de insert con `workspace` ajeno → `23503` |
-| `embedding` con dims ≠ 384 rechaza (pgvector) | `throws_ok` (código exacto a confirmar en Task 0 con un test local; probable `22P02`; anotar el medido antes de Task 1) |
+| `embedding` con dims ≠ 384 rechaza (pgvector) | `throws_ok ... '22000'` (confirmado en Task 0, local 2026-10-06) |
 | `chunk_index` duplicado en `p_chunks` viola `unique(version_id, chunk_index)` | fallback `23505` (no bloqueante; el worker genera índices 0..n-1) |
 | Columnas `processing_operation_id/started_at` existen y son nulables | consulta a `information_schema` |
 
