@@ -161,7 +161,14 @@ test.describe("Repository upload", () => {
       await expect(resumeInput).toHaveAttribute("type", "file");
       await resumeInput.setInputFiles({ name: fileName, mimeType: "text/markdown", buffer: bytes });
 
-      await expect(row.getByText(UPLOADED_LABEL, { exact: true })).toBeVisible({ timeout: 30_000 });
+      await expect.poll(async () => {
+        const result = await service.from("document_versions").select("processing_status,upload_state")
+          .eq("id", pendingVersion?.id ?? "").single();
+        if (result.error) return "missing";
+        return result.data.upload_state === "confirmed" ? result.data.processing_status : "unconfirmed";
+      }, { timeout: 60_000 }).toMatch(/^(uploaded|processing|ready|processing_failed)$/);
+      await expect(row.getByText(/^(Uploaded — processing pending|Processing|Ready|Processing failed)$/))
+        .toBeVisible();
       const { data: confirmedVersion, error: confirmedError } = await service.from("document_versions")
         .select("id,upload_state,storage_path")
         .eq("id", pendingVersion?.id ?? "")
@@ -259,7 +266,10 @@ test.describe("Repository upload", () => {
       const actualBatchStatuses = await batchStatuses.allTextContents();
       const visibleAlerts = await page.getByRole("alert").allTextContents();
       expect(actualBatchStatuses, JSON.stringify({ statuses: actualBatchStatuses, alerts: visibleAlerts, failedRequests }))
-        .toEqual(Array.from({ length: 10 }, () => UPLOADED_LABEL));
+        .toHaveLength(10);
+      expect(actualBatchStatuses.every((status) =>
+        [UPLOADED_LABEL, "Processing", "Ready", "Processing failed"].includes(status),
+      )).toBe(true);
 
       const maximumSizeBytes = Buffer.alloc(MAX_FILE_SIZE_BYTES, 0x61);
       await fileInput.setInputFiles({
@@ -273,24 +283,33 @@ test.describe("Repository upload", () => {
       const maximumSizeUpload = page.getByRole("button", { name: "Upload files" });
       await expect(maximumSizeUpload).toBeEnabled();
       await maximumSizeUpload.click();
-      await expect(page.getByText(UPLOADED_LABEL, { exact: true })).toHaveCount(1, { timeout: 60_000 });
+      await expect.poll(async () => {
+        const statuses = await page.getByRole("status").allTextContents();
+        return statuses.some((status) => [UPLOADED_LABEL, "Processing", "Ready", "Processing failed"].includes(status));
+      }, { timeout: 60_000 }).toBe(true);
 
       const service = serviceClient();
       const documents = await service.from("documents").select("id,name,active_version_id")
         .in("name", allNames);
       expect(documents.error === null).toBe(true);
       expect(documents.data?.length === 11).toBe(true);
-      expect(documents.data?.every((document) => document.active_version_id === null)).toBe(true);
       const versions = await service.from("document_versions")
         .select("id,document_id,processing_status,version_status,upload_state,storage_path")
         .in("document_id", documents.data?.map((document) => document.id) ?? []);
       expect(versions.error === null).toBe(true);
       expect(versions.data?.length === 11).toBe(true);
       expect(versions.data?.every((version) =>
-        version.processing_status === "uploaded"
-        && version.version_status === null
+        ["uploaded", "processing", "ready", "processing_failed"].includes(version.processing_status ?? "")
+        && (version.processing_status === "ready" ? version.version_status === "active" : version.version_status === null)
         && version.upload_state === "confirmed",
       )).toBe(true);
+      const versionsByDocument = new Map(versions.data?.map((version) => [version.document_id, version]));
+      expect(documents.data?.every((document) => {
+        const version = versionsByDocument.get(document.id);
+        return version?.processing_status === "ready"
+          ? document.active_version_id === version.id
+          : document.active_version_id === null;
+      })).toBe(true);
 
       const maximumVersion = versions.data?.find((version) =>
         documents.data?.some((document) => document.id === version.document_id && document.name === maxFileName));

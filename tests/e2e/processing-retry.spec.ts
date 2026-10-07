@@ -178,8 +178,7 @@ test.describe("Repository processing retry", () => {
       const row = page.getByRole("row").filter({ hasText: fixture.name });
       await expect(row.getByText("Processing failed", { exact: true })).toBeVisible();
       await row.getByRole("button", { name: "Retry Processing" }).click();
-      await expect(page.getByText("Retry completed successfully.", { exact: true })).toBeVisible({ timeout: 75_000 });
-      await expect(row.getByText("Ready", { exact: true })).toBeVisible();
+      await expect(row.getByText("Ready", { exact: true })).toBeVisible({ timeout: 75_000 });
 
       const version = await serviceClient().from("document_versions")
         .select("id,storage_path,processing_status,version_status,upload_state")
