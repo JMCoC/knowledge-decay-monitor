@@ -214,20 +214,20 @@ async function run() {
   pass("embed", `1 input in ${coldMs}ms, 8 inputs in ${warmMs}ms`);
   if (warmMs > 10000) console.warn("WARN [embed]: batch of 8 slower than 10s (check parallel session.run)");
 
-  const root = "supabase/fixtures/storage/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const fixtures = "tests/fixtures/processing";
   await runStage(serviceKey, internalToken, {
     label: "md", fileName: "original.md", mime: "text/markdown",
     bytes: Buffer.from(MD_BODY, "utf8"), expectReady: true,
   });
   await runStage(serviceKey, internalToken, {
     label: "empty-pdf", fileName: "original-empty.pdf", mime: "application/pdf",
-    bytes: readFileSync(resolve(`${root}/20000000-0000-4000-8000-0000000000e2/30000000-0000-4000-8000-0000000000e2/original-empty.pdf`)),
+    bytes: readFileSync(resolve(`${fixtures}/pdf-empty/original-empty.pdf`)),
     expectReady: false,
   });
   await runStage(serviceKey, internalToken, {
     label: "docx", fileName: "original.docx",
     mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    bytes: readFileSync(resolve(`${root}/20000000-0000-4000-8000-0000000000e1/30000000-0000-4000-8000-0000000000e1/original.docx`)),
+    bytes: readFileSync(resolve(`${fixtures}/docx/original.docx`)),
     expectReady: true,
   });
 
