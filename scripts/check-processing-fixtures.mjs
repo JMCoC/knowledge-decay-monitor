@@ -123,26 +123,41 @@ async function runStage(serviceKey, token, { label, fileName, mime, bytes, expec
     id: documentId, workspace_id: WORKSPACE_A, name: `S1-04 ${label}`, category: "SOP", owner_id: QA_LEAD_A,
   }, label);
   // A confirmed version must satisfy document_versions_upload_fields_consistent
-  // (23514): sha, attempt pointer, and confirmation stamps all present, with
-  // no verifying-only lease fields. The attempt row goes first: the FK to
-  // document_upload_attempts is checked per REST transaction.
+  // (23514), but document_upload_attempts.version_id has an FK to the version
+  // row — and each REST call is its own transaction. So: minimal version
+  // (upload_state NULL) → attempt → PATCH to confirmed with all stamps.
   const sha256 = createHash("sha256").update(bytes).digest("hex");
   const attemptId = randomUUID();
   const nowIso = new Date().toISOString();
+  await insertRow(serviceKey, "document_versions", {
+    id: versionId, workspace_id: WORKSPACE_A, document_id: documentId, version_number: 1,
+    storage_path: storagePath, processing_status: "uploaded", version_status: null,
+    analysis_status: "pending_reanalysis", size_bytes: bytes.length,
+  }, label);
+  const attemptPath = `${WORKSPACE_A}/${documentId}/${versionId}/attempts/${attemptId}/original.${ext}`;
   await insertRow(serviceKey, "document_upload_attempts", {
     id: attemptId,
     workspace_id: WORKSPACE_A,
     version_id: versionId,
-    storage_path: `${WORKSPACE_A}/${documentId}/${versionId}/attempts/${attemptId}/original.${ext}`,
+    storage_path: attemptPath,
   }, `${label}:attempt`);
-  await insertRow(serviceKey, "document_versions", {
-    id: versionId, workspace_id: WORKSPACE_A, document_id: documentId, version_number: 1,
-    storage_path: storagePath, processing_status: "uploaded", version_status: null,
-    upload_state: "confirmed", analysis_status: "pending_reanalysis", size_bytes: bytes.length,
-    expected_sha256: sha256, hash_source: "client_declared",
-    current_upload_attempt_id: attemptId, reference_set_at: nowIso,
-    reference_set_by: QA_LEAD_A, upload_confirmed_at: nowIso,
-  }, label);
+  const confirmResponse = await rest(
+    `/rest/v1/document_versions?id=eq.${versionId}`,
+    serviceKey,
+    {
+      method: "PATCH",
+      body: JSON.stringify({
+        upload_state: "confirmed",
+        expected_sha256: sha256,
+        hash_source: "client_declared",
+        current_upload_attempt_id: attemptId,
+        reference_set_at: nowIso,
+        reference_set_by: QA_LEAD_A,
+        upload_confirmed_at: nowIso,
+      }),
+    },
+  );
+  if (!confirmResponse.ok) fail(`${label}:confirm`, "200 confirming the version", `${confirmResponse.status} ${(await confirmResponse.text()).slice(0, 120)}`);
   await uploadOriginal(serviceKey, storagePath, bytes, mime, label);
 
   const dispatch = await fetch(`${APP_URL}/api/ingestion/process`, {
