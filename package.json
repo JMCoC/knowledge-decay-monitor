@@ -16,6 +16,7 @@
     "test:e2e:local": "node scripts/with-local-supabase.mjs e2e",
     "test:db": "supabase test db --local",
     "test:fixtures": "node scripts/check-local-fixtures.mjs",
+    "test:processing": "node scripts/check-processing-fixtures.mjs",
     "test:integration": "node scripts/with-local-supabase.mjs integration",
     "test:e2e:auth": "node scripts/with-local-supabase.mjs e2e",
     "test:auth:restart": "node scripts/check-auth-restart.mjs"
@@ -26,11 +27,13 @@
     "@supabase/supabase-js": "2.117.2",
     "clsx": "^2.1.1",
     "lucide-react": "^1.48.0",
+    "mammoth": "^1.13.0",
     "next": "16.3.5",
     "react": "19.2.8",
     "react-dom": "19.2.8",
     "server-only": "0.0.1",
     "tailwind-merge": "^3.7.0",
+    "unpdf": "^1.8.1",
     "zod": "4.6.5"
   },
   "devDependencies": {

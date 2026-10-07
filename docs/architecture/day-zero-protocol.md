@@ -116,6 +116,12 @@ tests/e2e/
 | `supabase/tests/database/001_day_zero.test.sql`, `002_rls.test.sql`, `004_bootstrap.test.sql` | Dev 1 | Otros añaden archivos propios |
 | `supabase/tests/database/003_integrity.test.sql` | Dev 2 | Dev 1 revisa cambios de restricciones |
 | `supabase/tests/database/005_ingestion.test.sql` | Dev 2 | Cubre RPC `reserve_document`, `size_bytes` y policies del bucket |
+| `supabase/tests/database/010_processing.test.sql` | Dev 2 | Cubre RPC `finish_processing`, CAS claim, aislamiento tenant |
+| `supabase/migrations/<ts>_finish_processing.sql` | Dev 2 redacta; Dev 1 revisa orden y regenera tipos | Cerrada en S1-04 |
+| `supabase/functions/embed/**` | Dev 2 | Edge Function `supabase.ai.Session('gte-small')`, 384 dims; consumida por `embeddings.ts` |
+| `src/app/api/ingestion/process/**` | Dev 2 | Route Handler interno con token `INGESTION_INTERNAL_TOKEN` (server-only) |
+| `scripts/check-processing-fixtures.mjs` | Dev 2 | Escenario end-to-end S1-04; requiere Next.js dev + Edge Function |
+| `tests/fixtures/processing/**` | Dev 2 | Fixtures DOCX real y PDF vacío (fuera de `supabase/fixtures/storage/` para no romper `seed buckets`) |
 | `scripts/check-local-fixtures.mjs` | Dev 1 | Dev 2/3 solicitan nuevos escenarios |
 | `tests/e2e/auth/**` | Dev 1 | S1-01 |
 | `tests/e2e/repository/**` | Dev 3 | Dev 2 entrega fixtures y readiness del worker |

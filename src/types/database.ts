@@ -129,6 +129,8 @@ export type Database = {
           hash_source: Database["public"]["Enums"]["upload_hash_source"] | null
           id: string
           idempotency_key: string | null
+          processing_operation_id: string | null
+          processing_started_at: string | null
           processing_status: Database["public"]["Enums"]["processing_status"]
           reference_set_at: string | null
           reference_set_by: string | null
@@ -154,6 +156,8 @@ export type Database = {
           hash_source?: Database["public"]["Enums"]["upload_hash_source"] | null
           id?: string
           idempotency_key?: string | null
+          processing_operation_id?: string | null
+          processing_started_at?: string | null
           processing_status?: Database["public"]["Enums"]["processing_status"]
           reference_set_at?: string | null
           reference_set_by?: string | null
@@ -179,6 +183,8 @@ export type Database = {
           hash_source?: Database["public"]["Enums"]["upload_hash_source"] | null
           id?: string
           idempotency_key?: string | null
+          processing_operation_id?: string | null
+          processing_started_at?: string | null
           processing_status?: Database["public"]["Enums"]["processing_status"]
           reference_set_at?: string | null
           reference_set_by?: string | null
@@ -461,6 +467,10 @@ export type Database = {
           version_id: string
           workspace_id: string
         }[]
+      }
+      finish_processing: {
+        Args: { p_chunks: Json; p_operation_id: string; p_version_id: string }
+        Returns: undefined
       }
       finish_upload_recovery: {
         Args: {
