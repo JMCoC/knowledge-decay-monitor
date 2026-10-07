@@ -12,7 +12,6 @@ import type {
   UploadSnapshot,
   UploadTarget,
 } from "@/types/contracts";
-import { z } from "zod";
 import { after } from "next/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { getAppOrigin } from "@/lib/app-origin";
@@ -30,6 +29,7 @@ import {
   uploadBatchSchema,
   uploadItemSchema,
   uploadReferenceSchema,
+  versionIdSchema,
 } from "./schemas";
 import { actionCodeForSqlstate, extensionFromFileName } from "./validation";
 import { captureOperationFailure } from "@/lib/observability/operation-events";
@@ -37,10 +37,8 @@ import { captureOperationFailure } from "@/lib/observability/operation-events";
 const GENERIC_OWNER_MESSAGE = "The selected owner is not available.";
 const GENERIC_UPLOAD_MESSAGE = "This file cannot be uploaded.";
 const GENERIC_INTERNAL_MESSAGE = "Something went wrong. Try again.";
-const VERSION_ID_SCHEMA = z.string().uuid();
-
 type FailedResult = { ok: false; error: ActionError };
-type IngestionOperation = "reserve" | "verify" | "resume" | "recover";
+type IngestionOperation = "reserve" | "verify" | "resume" | "recover" | "retry";
 
 function failure(code: ActionErrorCode, message: string, correlationId?: string): FailedResult {
   return { ok: false, error: { code, message, ...(correlationId ? { correlationId } : {}) } };
@@ -227,7 +225,7 @@ export async function reserveUpload(items: UploadItemInput[]): Promise<ActionRes
 }
 
 export async function getUploadState(versionId: string): Promise<ActionResult<UploadSnapshot>> {
-  if (!VERSION_ID_SCHEMA.safeParse(versionId).success) {
+  if (!versionIdSchema.safeParse(versionId).success) {
     return failure("INVALID_INPUT", "The version ID is invalid.");
   }
   const actor = await documentActor("resume");
@@ -279,7 +277,7 @@ export async function resumeUpload(
   versionId: string,
   reference?: UploadReference,
 ): Promise<ActionResult<UploadTarget | UploadSnapshot>> {
-  if (!VERSION_ID_SCHEMA.safeParse(versionId).success) {
+  if (!versionIdSchema.safeParse(versionId).success) {
     return failure("INVALID_INPUT", "The version ID is invalid.");
   }
   let validatedReference: UploadReference | undefined;
@@ -307,7 +305,7 @@ export async function resumeUpload(
 }
 
 export async function recoverUpload(versionId: string): Promise<ActionResult<UploadSnapshot>> {
-  if (!VERSION_ID_SCHEMA.safeParse(versionId).success) {
+  if (!versionIdSchema.safeParse(versionId).success) {
     return failure("INVALID_INPUT", "The version ID is invalid.");
   }
   const actor = await documentActor("recover");
@@ -321,5 +319,79 @@ export async function recoverUpload(versionId: string): Promise<ActionResult<Upl
     return code === "INTERNAL_ERROR"
       ? reportInternalFailure("recover", storeErrorMessage(code))
       : failure(code, storeErrorMessage(code));
+  }
+}
+
+export async function retryProcessing(
+  versionId: string,
+): Promise<ActionResult<{ versionId: string; processingStatus: "processing" | "ready" }>> {
+  if (!versionIdSchema.safeParse(versionId).success) {
+    return failure("INVALID_INPUT", "The version ID is invalid.");
+  }
+  const actor = await documentActor("retry");
+  if (isFailure(actor)) return actor;
+
+  const token = process.env.INGESTION_INTERNAL_TOKEN;
+  if (!token) return reportInternalFailure("retry", GENERIC_INTERNAL_MESSAGE);
+  let origin: string;
+  try {
+    origin = getAppOrigin();
+  } catch {
+    return reportInternalFailure("retry", GENERIC_INTERNAL_MESSAGE);
+  }
+
+  const operationId = crypto.randomUUID();
+  try {
+    const { claimProcessingRetry } = await import("./processing-retry");
+    const claim = await claimProcessingRetry({
+      workspaceId: actor.workspaceId,
+      versionId,
+      operationId,
+    });
+    if (claim.kind === "not_found") {
+      return failure("NOT_FOUND", "That version is not available.");
+    }
+    if (claim.kind === "conflict") {
+      return failure("CONFLICT", "This version cannot be retried right now. Refresh and try again.");
+    }
+
+    let response: Response;
+    try {
+      response = await fetch(`${origin}/api/ingestion/process`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-internal-token": token,
+        },
+        body: JSON.stringify({ versionId, operationId, operation: "retry" }),
+      });
+    } catch {
+      return reportInternalFailure("retry", GENERIC_INTERNAL_MESSAGE);
+    }
+    if (!response.ok) return reportInternalFailure("retry", GENERIC_INTERNAL_MESSAGE);
+
+    const { data: completed, error } = await createServiceClient()
+      .from("document_versions")
+      .select("processing_status, processing_operation_id")
+      .eq("id", versionId)
+      .eq("workspace_id", actor.workspaceId)
+      .maybeSingle();
+    if (error) return reportInternalFailure("retry", GENERIC_INTERNAL_MESSAGE);
+    if (!completed) return failure("NOT_FOUND", "That version is not available.");
+    if (completed.processing_status === "processing_failed") {
+      return failure("PROCESSING_FAILED", "Processing failed. Review the document and try again.");
+    }
+    if (completed.processing_status === "ready") {
+      return { ok: true, data: { versionId, processingStatus: "ready" } };
+    }
+    if (
+      completed.processing_status === "processing" &&
+      completed.processing_operation_id === operationId
+    ) {
+      return { ok: true, data: { versionId, processingStatus: "processing" } };
+    }
+    return failure("CONFLICT", "This version changed while retrying. Refresh and try again.");
+  } catch {
+    return reportInternalFailure("retry", GENERIC_INTERNAL_MESSAGE);
   }
 }

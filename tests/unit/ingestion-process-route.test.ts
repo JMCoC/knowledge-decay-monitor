@@ -29,13 +29,17 @@ const TOKEN = "test-internal-token-0123456789";
 const VERSION_ID = "30000000-0000-4000-8000-000000000010";
 const OPERATION_ID = "60000000-0000-4000-8000-000000000010";
 
-function request(versionId: unknown, token?: string): Request {
+function request(
+  versionId: unknown,
+  token?: string,
+  extra: Record<string, unknown> = {},
+): Request {
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (token !== undefined) headers["x-internal-token"] = token;
   return new Request("http://localhost/api/ingestion/process", {
     method: "POST",
     headers,
-    body: JSON.stringify({ versionId }),
+    body: JSON.stringify({ versionId, ...extra }),
   });
 }
 
@@ -49,6 +53,7 @@ function mockCas(result: { data: unknown; error: unknown }) {
 
 beforeEach(() => {
   vi.stubEnv("INGESTION_INTERNAL_TOKEN", TOKEN);
+  vi.stubGlobal("crypto", { randomUUID: () => OPERATION_ID });
   mocks.runProcessing.mockReset().mockResolvedValue(undefined);
   mocks.captureOperationFailure.mockReset();
   mocks.from.mockReset();
@@ -61,6 +66,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
 });
 
 describe("POST /api/ingestion/process auth", () => {
@@ -134,6 +140,26 @@ describe("POST /api/ingestion/process CAS", () => {
     expect(mocks.eq).toHaveBeenCalledWith("upload_state", "confirmed");
   });
 
+  it("dispatches a preclaimed retry without attempting a second CAS claim", async () => {
+    const response = await POST(request(VERSION_ID, TOKEN, {
+      operation: "retry",
+      operationId: OPERATION_ID,
+    }));
+
+    expect(response.status).toBe(200);
+    expect(mocks.update).not.toHaveBeenCalled();
+    expect(mocks.runProcessing).toHaveBeenCalledWith(VERSION_ID, OPERATION_ID, "retry");
+  });
+
+  it("rejects inconsistent retry dispatch fields", async () => {
+    const missingOperation = await POST(request(VERSION_ID, TOKEN, { operation: "retry" }));
+    const unexpectedOperationId = await POST(request(VERSION_ID, TOKEN, { operationId: OPERATION_ID }));
+
+    expect(missingOperation.status).toBe(400);
+    expect(unexpectedOperationId.status).toBe(400);
+    expect(mocks.runProcessing).not.toHaveBeenCalled();
+  });
+
   it("awaits runProcessing instead of returning before it settles", async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
@@ -172,6 +198,23 @@ describe("POST /api/ingestion/process CAS", () => {
     });
     expect(leaked).not.toContain("private worker defect");
     expect(leaked).not.toContain(TOKEN);
+  });
+
+  it("tags an unexpected retry worker failure as retry without exposing details", async () => {
+    mocks.runProcessing.mockRejectedValue(new Error("private worker defect"));
+    const response = await POST(request(VERSION_ID, TOKEN, {
+      operation: "retry",
+      operationId: OPERATION_ID,
+    }));
+
+    expect(response.status).toBe(200);
+    expect(mocks.captureOperationFailure).toHaveBeenCalledWith({
+      module: "ingestion",
+      operation: "retry",
+      code: "PERSISTENCE_FAILED",
+      correlationId: expect.any(String),
+    });
+    expect(await response.text()).not.toContain("private worker defect");
   });
 
   it("reports an unexpected DB failure as PERSISTENCE_FAILED with a generic 500", async () => {

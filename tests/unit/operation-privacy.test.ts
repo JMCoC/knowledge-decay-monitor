@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sentry = vi.hoisted(() => {
   const scope = { setTag: vi.fn() };
@@ -17,6 +17,10 @@ import { captureOperationFailure } from "../../src/lib/observability/operation-e
 const correlationId = "d2131057-f063-4b12-bafe-746728e8d7ad";
 const versionId = "fd23a0b7-8b95-4df0-a57f-887008ae9d12";
 const attemptId = "88725091-ae4b-47d2-88dc-490b0baf1072";
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 describe("product operation telemetry privacy", () => {
   it("reconstructs an operation event from allowlisted fields only", () => {
@@ -108,5 +112,51 @@ describe("product operation telemetry privacy", () => {
       },
     } as never)).not.toHaveProperty("tags.version_id");
     expect(sentry.withScope).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps retry telemetry identifier-only even when called with hostile extra fields", () => {
+    captureOperationFailure({
+      module: "ingestion",
+      operation: "retry",
+      code: "PARSING_FAILED",
+      correlationId,
+      versionId,
+      attemptId,
+      content: "DOCUMENT_SENTINEL",
+      filename: "PRIVATE_FILENAME_SENTINEL",
+      storagePath: "PRIVATE_PATH_SENTINEL",
+      signedUrl: "SIGNED_URL_SENTINEL",
+      request: { headers: { authorization: "TOKEN_SENTINEL" } },
+      error: new Error("EXCEPTION_SENTINEL"),
+    } as never);
+
+    expect(sentry.scope.setTag.mock.calls).toEqual([
+      ["kdm.safe", "true"],
+      ["module", "ingestion"],
+      ["operation", "retry"],
+      ["code", "PARSING_FAILED"],
+      ["correlation_id", correlationId],
+      ["runtime", "server"],
+      ["synthetic", "false"],
+      ["version_id", versionId],
+      ["attempt_id", attemptId],
+    ]);
+    expect(JSON.stringify(sentry.scope.setTag.mock.calls)).not.toMatch(
+      /SENTINEL|PRIVATE_PATH|SIGNED_URL|authorization/,
+    );
+
+    const safeEvent = filterSentryEvent({
+      message: "untrusted document text DOCUMENT_SENTINEL",
+      tags: Object.fromEntries(sentry.scope.setTag.mock.calls),
+      request: { url: "SIGNED_URL_SENTINEL" },
+      exception: { values: [{ value: "EXCEPTION_SENTINEL" }] },
+      extra: { content: "DOCUMENT_SENTINEL", filename: "PRIVATE_FILENAME_SENTINEL" },
+    } as never);
+
+    expect(safeEvent).toMatchObject({
+      message: "Product operation failed",
+      tags: { module: "ingestion", operation: "retry", code: "PARSING_FAILED", version_id: versionId, attempt_id: attemptId },
+    });
+    expect(JSON.stringify(safeEvent)).not.toMatch(/SENTINEL|PRIVATE_PATH|SIGNED_URL|authorization/);
   });
 });

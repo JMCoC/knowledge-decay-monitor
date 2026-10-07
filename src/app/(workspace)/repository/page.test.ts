@@ -34,6 +34,11 @@ vi.mock("@/modules/ingestion/ui/recover-upload-button", () => ({
         createElement("button", { "data-recover-version": versionId }, "Recover upload"),
 }));
 
+vi.mock("@/modules/repository/ui/retry-processing-button", () => ({
+    RetryProcessingButton: ({ versionId }: { versionId: string }) =>
+        createElement("button", { "data-retry-version": versionId }, "Retry Processing"),
+}));
+
 vi.mock("@/modules/repository/ui/processing-status-badge", () => ({
     ProcessingStatusBadge: ({ uploadState }: { uploadState: string | null }) =>
         createElement("span", null, uploadState === null ? "Needs reconciliation" : "status"),
@@ -121,6 +126,40 @@ describe("RepositoryPage", () => {
         expect(markup).toContain("Legacy record");
         expect(markup).toContain("Needs reconciliation");
         expect(markup).not.toContain('data-recover-version="version-legacy"');
+    });
+
+    it("offers retry only for a confirmed processing_failed version", async () => {
+        listRepositoryDocuments.mockResolvedValue({
+            ok: true,
+            data: {
+                items: [{
+                    id: "document-failed",
+                    name: "Failed handbook",
+                    category: "SOP",
+                    owner: null,
+                    activeVersionId: null,
+                    latestVersion: {
+                        id: "version-failed",
+                        version_number: 1,
+                        processing_status: "processing_failed",
+                        version_status: null,
+                        analysis_status: "pending_reanalysis",
+                        uploadState: "confirmed",
+                        canOpen: false,
+                    },
+                    createdAt: "2026-10-07T00:00:00.000Z",
+                }],
+                total: 1,
+                page: 1,
+                pageSize: 25,
+            },
+        });
+
+        const markup = renderToStaticMarkup(await RepositoryPage({ searchParams: Promise.resolve({}) }));
+
+        expect(markup).toContain('data-retry-version="version-failed"');
+        expect(markup).toContain("Retry Processing");
+        expect(markup).not.toContain('data-recover-version="version-failed"');
     });
 
     it("does not render the upload panel when document access is denied", async () => {

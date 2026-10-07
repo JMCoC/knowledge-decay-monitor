@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { LOCAL_API_URL, PROJECT_ROOT, readLocalSupabaseRuntime } from "./local-supabase.mjs";
@@ -66,6 +67,10 @@ export function runWithLocalSupabase({
     KDM_SENTRY_DIAGNOSTICS_OPERATOR_IDS: "",
     KDM_SENTRY_DIAGNOSTICS_EXPIRES_AT: "",
   };
+  if (selected === "e2e") {
+    // The test web server uses the same one-run local token for internal ingestion dispatch.
+    childEnv.INGESTION_INTERNAL_TOKEN = randomBytes(32).toString("hex");
+  }
   delete childEnv.SUPABASE_SECRET_KEY;
   if (selected === "build") {
     delete childEnv.SUPABASE_SERVICE_ROLE_KEY;

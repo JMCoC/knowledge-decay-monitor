@@ -170,9 +170,9 @@ export interface IngestionApi {
   finalizeUpload(input: { versionId: string; attemptId: string }): Promise<ActionResult<UploadSnapshot>>;
   resumeUpload(versionId: string, reference?: UploadReference): Promise<ActionResult<UploadTarget | UploadSnapshot>>;
   recoverUpload(versionId: string): Promise<ActionResult<UploadSnapshot>>;
-  /** Unchanged in S1-03. Implemented by S1-07. */
+  /** Reauthorizes and atomically claims a failed version or expired processing lease. */
   retryProcessing(versionId: string): Promise<
-    ActionResult<{ versionId: string; processingStatus: "uploaded" | "processing" }>
+    ActionResult<{ versionId: string; processingStatus: "processing" | "ready" }>
   >;
 }
 

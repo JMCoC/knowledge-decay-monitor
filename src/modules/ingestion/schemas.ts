@@ -11,6 +11,9 @@ import {
 
 export const MAX_BATCH_ITEMS = 10;
 
+/** Shared at server action boundaries, including the future processing retry action. */
+export const versionIdSchema = z.string().uuid();
+
 /** Same seven values as the public.document_category enum. */
 const DOCUMENT_CATEGORIES = [
   "SOP",
@@ -92,6 +95,6 @@ export const uploadItemSchema = z
 export const uploadBatchSchema = z.array(z.unknown()).min(1).max(MAX_BATCH_ITEMS);
 
 export const finalizeUploadSchema = z.strictObject({
-  versionId: z.string().uuid(),
+  versionId: versionIdSchema,
   attemptId: z.string().uuid(),
 });
