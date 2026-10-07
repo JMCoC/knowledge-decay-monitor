@@ -57,10 +57,14 @@ Deno.serve(async (req: Request): Promise<Response> => {
     return failure(400, "invalid inputs");
   }
 
-  // Never log inputs: embedding content is already-authorized document text.
-  const embeddings = await Promise.all(
-    inputs.map((text) => session.run(text, { mean_pool: true, normalize: true })),
-  );
+  // Sequential on purpose: parallel Promise.all on 8 dense chunks
+// exceeds the isolate CPU quota and kills the worker mid-flight.
+// Task 0 measured 8 inputs at ~140ms with short synthetic texts;
+// real chunks are ~1800 chars each and multiply CPU work.
+const embeddings: number[][] = [];
+for (const text of inputs) {
+  embeddings.push(await session.run(text, { mean_pool: true, normalize: true }));
+}
   const dims = embeddings[0]?.length ?? 0;
   if (dims === 0 || embeddings.some((vector) => vector.length !== dims)) {
     return failure(502, "embedding failed");
