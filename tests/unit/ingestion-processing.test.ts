@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   embed: vi.fn(),
   single: vi.fn(),
   updateEq: vi.fn(),
+  updateSelect: vi.fn(),
   rpc: vi.fn(),
   rowResult: { data: null as unknown, error: null as unknown },
   fromTables: [] as string[],
@@ -60,6 +61,7 @@ const claimedRow = (overrides: Record<string, unknown> = {}) => ({
   document_id: "20000000-0000-4000-8000-000000000010",
   storage_path: STORAGE_PATH,
   processing_status: "processing",
+  processing_operation_id: OPERATION_ID,
   upload_state: "confirmed",
   ...overrides,
 });
@@ -75,7 +77,11 @@ beforeEach(() => {
   mocks.captureOperationFailure.mockReset();
   mocks.fromTables.length = 0;
   mocks.single.mockReset().mockResolvedValue({ data: claimedRow(), error: null });
-  mocks.updateEq.mockReset().mockResolvedValue({ error: null });
+  mocks.updateEq.mockReset().mockImplementation(() => ({
+    eq: mocks.updateEq,
+    select: mocks.updateSelect,
+  }));
+  mocks.updateSelect.mockReset().mockResolvedValue({ data: [{ id: VERSION_ID }], error: null });
   mocks.rpc.mockReset().mockResolvedValue({ error: null });
   mocks.download
     .mockReset()
@@ -129,6 +135,7 @@ describe("runProcessing parsing failures", () => {
       operation: "process",
       code: "PARSING_FAILED",
       correlationId: expect.any(String),
+      versionId: VERSION_ID,
     });
     expect(mocks.updateEq).toHaveBeenCalledWith("id", VERSION_ID);
   });
@@ -282,6 +289,48 @@ describe("runProcessing guards and guarantees", () => {
     expect(mocks.captureOperationFailure).not.toHaveBeenCalled();
     expect(mocks.updateEq).not.toHaveBeenCalled();
     expect(mocks.download).not.toHaveBeenCalled();
+  });
+
+  it("returns silently when this operation was superseded before the worker started", async () => {
+    mocks.single.mockResolvedValue({
+      data: claimedRow({ processing_operation_id: "60000000-0000-4000-8000-000000000011" }),
+      error: null,
+    });
+
+    await runProcessing(VERSION_ID, OPERATION_ID, "retry");
+
+    expect(mocks.captureOperationFailure).not.toHaveBeenCalled();
+    expect(mocks.download).not.toHaveBeenCalled();
+  });
+
+  it("tags technical retry failures as retry after persisting failure state", async () => {
+    mocks.parse.mockRejectedValue(new ParseError("NO_TEXT", "private parser detail"));
+
+    await runProcessing(VERSION_ID, OPERATION_ID, "retry");
+
+    expect(mocks.captureOperationFailure).toHaveBeenCalledWith(expect.objectContaining({
+      operation: "retry",
+      code: "PARSING_FAILED",
+      versionId: VERSION_ID,
+    }));
+    expect(mocks.updateEq).toHaveBeenCalledWith("processing_operation_id", OPERATION_ID);
+    expect(mocks.updateSelect).toHaveBeenCalledWith("id");
+  });
+
+  it("preserves the controlled result when retry telemetry throws after failure persistence", async () => {
+    mocks.parse.mockRejectedValue(new ParseError("NO_TEXT", "private parser detail"));
+    mocks.captureOperationFailure.mockImplementation(() => {
+      throw new Error("SENTRY_TRANSPORT_SENTINEL");
+    });
+
+    await expect(runProcessing(VERSION_ID, OPERATION_ID, "retry")).resolves.toBeUndefined();
+
+    expect(mocks.updateSelect).toHaveBeenCalledWith("id");
+    expect(mocks.captureOperationFailure).toHaveBeenCalledWith(expect.objectContaining({
+      operation: "retry",
+      code: "PARSING_FAILED",
+      versionId: VERSION_ID,
+    }));
   });
 
   it("returns silently when the upload was never confirmed", async () => {

@@ -4,6 +4,7 @@ import {
   uploadBatchSchema,
   uploadItemSchema,
   uploadReferenceSchema,
+  versionIdSchema,
 } from "@/modules/ingestion/schemas";
 
 const validItem = {
@@ -188,5 +189,16 @@ describe("finalizeUploadSchema", () => {
     expect(finalizeUploadSchema.safeParse({ ...valid, attemptId: "not-a-uuid" }).success).toBe(false);
     expect(finalizeUploadSchema.safeParse({ ...valid, storagePath: "arbitrary" }).success).toBe(false);
     expect(finalizeUploadSchema.safeParse({ ...valid, role: "Admin" }).success).toBe(false);
+  });
+});
+
+describe("versionIdSchema", () => {
+  it("accepts a version UUID and rejects invalid input or extra authority data", () => {
+    expect(versionIdSchema.safeParse("30000000-0000-4000-8000-000000000001").success).toBe(true);
+    expect(versionIdSchema.safeParse("not-a-uuid").success).toBe(false);
+    expect(versionIdSchema.safeParse({
+      versionId: "30000000-0000-4000-8000-000000000001",
+      workspaceId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    }).success).toBe(false);
   });
 });

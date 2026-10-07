@@ -6,6 +6,7 @@ import { requireDocumentActor } from "@/modules/identity";
 import { listEligibleOwners } from "@/modules/workspace";
 import { UploadPanel } from "@/modules/ingestion/ui/upload-panel";
 import { RecoverUploadButton } from "@/modules/ingestion/ui/recover-upload-button";
+import { RetryProcessingButton } from "@/modules/repository/ui/retry-processing-button";
 import { RepositoryFilters } from "@/modules/repository/ui/repository-filters";
 import { hasRepositoryFilters, parseRepositorySearchParams } from "@/modules/repository/utils/search-params";
 
@@ -107,7 +108,10 @@ export default async function RepositoryPage({ searchParams }: PageProps) {
                                 </td>
 
                                 <td className="px-4 py-4 text-right">
-                                    {document.latestVersion?.canOpen
+                                    {document.latestVersion?.processing_status === "processing_failed" &&
+                                    document.latestVersion.uploadState === "confirmed"
+                                        ? <RetryProcessingButton versionId={document.latestVersion.id} />
+                                        : document.latestVersion?.canOpen
                                         ? <OpenDocumentButton versionId={document.latestVersion.id} fileName={document.name} />
                                         : document.latestVersion && document.latestVersion.uploadState !== null
                                             ? <RecoverUploadButton versionId={document.latestVersion.id} />

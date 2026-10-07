@@ -60,7 +60,11 @@ function classify(error: unknown, signalAborted: boolean): SafeFailureCode {
  * reads the attempt path, and never throws: every failure is reported with
  * `captureOperationFailure` and marked `processing_failed`.
  */
-export async function runProcessing(versionId: string, operationId: string): Promise<void> {
+export async function runProcessing(
+  versionId: string,
+  operationId: string,
+  operation: "process" | "retry" = "process",
+): Promise<void> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), PROCESSING_TIMEOUT_MS);
   try {
@@ -68,7 +72,7 @@ export async function runProcessing(versionId: string, operationId: string): Pro
 
     const { data: row, error: rowError } = await service
       .from("document_versions")
-      .select("id, workspace_id, document_id, storage_path, processing_status, upload_state")
+      .select("id, workspace_id, document_id, storage_path, processing_status, processing_operation_id, upload_state")
       .eq("id", versionId)
       .single();
     if (rowError || !row) {
@@ -76,7 +80,11 @@ export async function runProcessing(versionId: string, operationId: string): Pro
     }
     // Silent guards: another worker already moved the version, or it was
     // never confirmed. No failure, no failed-marker, no Sentry.
-    if (row.processing_status !== "processing" || row.upload_state !== "confirmed") {
+    if (
+      row.processing_status !== "processing" ||
+      row.processing_operation_id !== operationId ||
+      row.upload_state !== "confirmed"
+    ) {
       return;
     }
 
@@ -130,21 +138,38 @@ export async function runProcessing(versionId: string, operationId: string): Pro
     }
   } catch (error) {
     const code = classify(error, controller.signal.aborted);
-    try {
-      captureOperationFailure({
-        module: "ingestion",
-        operation: "process",
-        code,
-        correlationId: crypto.randomUUID(),
-      });
-    } catch {
-      // Telemetry must not change the controlled product result.
-    }
+    let failedStatePersisted = false;
+    let failurePersistenceFailed = false;
     try {
       const service = createServiceClient();
-      await service.from("document_versions").update({ processing_status: "processing_failed" }).eq("id", versionId);
+      const { data, error } = await service
+        .from("document_versions")
+        .update({
+          processing_status: "processing_failed",
+          processing_operation_id: null,
+          processing_started_at: null,
+        })
+        .eq("id", versionId)
+        .eq("processing_status", "processing")
+        .eq("processing_operation_id", operationId)
+        .select("id");
+      failedStatePersisted = !error && Boolean(data?.length);
+      failurePersistenceFailed = Boolean(error);
     } catch {
-      // Silent. The Sentry event above already went out.
+      failurePersistenceFailed = true;
+    }
+    if (failedStatePersisted || failurePersistenceFailed) {
+      try {
+        captureOperationFailure({
+          module: "ingestion",
+          operation,
+          code: failurePersistenceFailed ? "PERSISTENCE_FAILED" : code,
+          correlationId: crypto.randomUUID(),
+          versionId,
+        });
+      } catch {
+        // Telemetry must not change the controlled product result.
+      }
     }
   } finally {
     clearTimeout(timeout);

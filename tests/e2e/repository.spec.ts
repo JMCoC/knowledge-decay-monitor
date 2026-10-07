@@ -19,15 +19,13 @@ test.describe("Repository access", () => {
         const openButtons = page.getByRole("button", { name: /Open file/i });
         await expect(openButtons).not.toHaveCount(0);
         const openedPagePromise = context.waitForEvent("page");
-        const navigationResponsePromise = context.waitForEvent("response", (response) =>
-            response.request().isNavigationRequest() && response.status() === 200,
-        );
         await openButtons.first().click();
         const openedPage = await openedPagePromise;
-        const response = await navigationResponsePromise;
-        const bytes = await response.body();
-
-        expect(bytes.byteLength > 0).toBe(true);
+        await openedPage.waitForURL((url) => url.origin === "http://127.0.0.1:54321");
+        await openedPage.waitForLoadState("domcontentloaded");
+        const openedUrl = new URL(openedPage.url());
+        expect(openedUrl.origin).toBe("http://127.0.0.1:54321");
+        expect(openedUrl.pathname).toMatch(/^\/storage\/v1\/object\/sign\/documents\//);
         await openedPage.close();
     });
 

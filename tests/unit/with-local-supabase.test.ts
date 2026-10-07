@@ -81,6 +81,17 @@ describe("local Supabase test runner isolation", () => {
     expect(options.env).not.toHaveProperty("SUPABASE_SECRET_KEY");
   });
 
+  it("creates an ephemeral internal token for the local E2E web server", () => {
+    const env = { ...hostileParentEnv(), INGESTION_INTERNAL_TOKEN: "REMOTE_INTERNAL_SENTINEL" };
+    expect(
+      runWithLocalSupabase({ selected: "e2e", forwardedArgs: [], env }),
+    ).toBe(0);
+
+    const [, , options] = mocks.spawnSync.mock.calls[0] as [string, string[], { env: Record<string, string> }];
+    expect(options.env.INGESTION_INTERNAL_TOKEN).toMatch(/^[0-9a-f]{64}$/);
+    expect(options.env.INGESTION_INTERNAL_TOKEN).not.toBe("REMOTE_INTERNAL_SENTINEL");
+  });
+
   it("does not start integration or E2E without the local service key", () => {
     mocks.readLocalSupabaseRuntime.mockReturnValue({
       ...localRuntime(),

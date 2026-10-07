@@ -102,6 +102,51 @@ describe("safe Sentry transport", () => {
     expect(base.flush).toHaveBeenCalledWith(2000);
   });
 
+  it("reconstructs retry failure envelopes without document, request, or exception data", async () => {
+    const sent: unknown[] = [];
+    const base = {
+      send: vi.fn(async (value: unknown) => {
+        sent.push(value);
+        return { statusCode: 200 };
+      }),
+      flush: vi.fn(async () => true),
+    };
+    const transport = wrapSafeTransport(base as never, context);
+    const retryEnvelope = [
+      { event_id: "0123456789abcdef0123456789abcdef", sent_at: "2026-10-04T12:00:00.000Z", trace: "TRACE_SENTINEL" },
+      [[
+        { type: "event" },
+        {
+          event_id: "0123456789abcdef0123456789abcdef",
+          timestamp: 1_790_000_000,
+          message: "DOCUMENT_SENTINEL",
+          tags: {
+            "kdm.safe": "true",
+            module: "ingestion",
+            operation: "retry",
+            code: "PARSING_FAILED",
+            correlation_id: correlationId,
+            version_id: "fd23a0b7-8b95-4df0-a57f-887008ae9d12",
+            attempt_id: "88725091-ae4b-47d2-88dc-490b0baf1072",
+          },
+          request: { url: "SIGNED_URL_SENTINEL", headers: { authorization: "TOKEN_SENTINEL" } },
+          exception: { values: [{ value: "EXCEPTION_SENTINEL" }] },
+          extra: { content: "DOCUMENT_SENTINEL", filename: "PRIVATE_FILENAME_SENTINEL" },
+        },
+      ], [
+        { type: "attachment", filename: "PRIVATE_ATTACHMENT_SENTINEL" },
+        "DOCUMENT_BYTES_SENTINEL",
+      ]],
+    ];
+
+    await transport.send(retryEnvelope as never);
+
+    expect(base.send).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(sent)).not.toMatch(/SENTINEL|authorization|filename|trace/);
+    expect(JSON.stringify(sent)).toContain('"operation":"retry"');
+    expect(JSON.stringify(sent)).toContain('"code":"PARSING_FAILED"');
+  });
+
   it("does not call the network for empty or rejected envelopes", async () => {
     const base = {
       send: vi.fn(async () => ({ statusCode: 200 })),
