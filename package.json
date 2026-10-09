@@ -22,7 +22,8 @@
     "test:auth:restart": "node scripts/check-auth-restart.mjs",
     "worker:ingestion": "node --conditions=react-server --import tsx scripts/ingestion-worker.ts",
     "worker:warm": "tsx --conditions=react-server scripts/warm-ingestion-model.ts",
-    "worker:local": "node scripts/with-local-supabase.mjs worker"
+    "worker:local": "node scripts/with-local-supabase.mjs worker",
+    "test:worker:image": "node scripts/with-local-supabase.mjs image"
   },
   "dependencies": {
     "@huggingface/transformers": "4.3.1",
