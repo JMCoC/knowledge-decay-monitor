@@ -7,6 +7,8 @@ import { listEligibleOwners } from "@/modules/workspace";
 import { UploadPanel } from "@/modules/ingestion/ui/upload-panel";
 import { RecoverUploadButton } from "@/modules/ingestion/ui/recover-upload-button";
 import { RetryProcessingButton } from "@/modules/repository/ui/retry-processing-button";
+import { ProcessingLeaseRefresh } from "@/modules/repository/ui/processing-lease-refresh";
+import { processingRecoveryAction } from "@/modules/repository/ui/processing-recovery";
 import { RepositoryFilters } from "@/modules/repository/ui/repository-filters";
 import { hasRepositoryFilters, parseRepositorySearchParams } from "@/modules/repository/utils/search-params";
 
@@ -41,6 +43,10 @@ export default async function RepositoryPage({ searchParams }: PageProps) {
     }
 
     const actor = await requireDocumentActor().catch(() => null);
+    const nowMs = result.data.asOfMs;
+    const hasProcessingInFlight = result.data.items.some(
+        (document) => document.latestVersion?.processing_status === "processing",
+    );
 
     return (
         <div className="mx-auto w-full max-w-6xl">
@@ -60,6 +66,7 @@ export default async function RepositoryPage({ searchParams }: PageProps) {
             )}
 
             <RepositoryFilters owners={ownersResult?.ok ? ownersResult.data : []} />
+            <ProcessingLeaseRefresh enabled={hasProcessingInFlight} />
 
             <p className="mt-4 text-sm text-zinc-500" aria-live="polite">
                 {result.data.total} {result.data.total === 1 ? "document" : "documents"}
@@ -79,7 +86,13 @@ export default async function RepositoryPage({ searchParams }: PageProps) {
                     </thead>
 
                     <tbody className="divide-y divide-zinc-100">
-                        {result.data.items.map((document) => (
+                        {result.data.items.map((document) => {
+                            const latestVersion = document.latestVersion;
+                            const recoveryAction = latestVersion
+                                ? processingRecoveryAction(latestVersion, nowMs)
+                                : null;
+
+                            return (
                             <tr key={document.id} className="hover:bg-zinc-50/50">
                                 <td className="px-4 py-4 font-medium text-zinc-900">
                                     {document.name}
@@ -101,24 +114,27 @@ export default async function RepositoryPage({ searchParams }: PageProps) {
 
                                 <td className="px-4 py-4">
                                     <ProcessingStatusBadge
-                                        hasVersion={document.latestVersion !== null}
-                                        processingStatus={document.latestVersion?.processing_status ?? null}
-                                        uploadState={document.latestVersion?.uploadState ?? null}
+                                        hasVersion={latestVersion !== null}
+                                        processingStatus={latestVersion?.processing_status ?? null}
+                                        uploadState={latestVersion?.uploadState ?? null}
                                     />
                                 </td>
 
                                 <td className="px-4 py-4 text-right">
-                                    {document.latestVersion?.processing_status === "processing_failed" &&
-                                    document.latestVersion.uploadState === "confirmed"
-                                        ? <RetryProcessingButton versionId={document.latestVersion.id} />
-                                        : document.latestVersion?.canOpen
-                                        ? <OpenDocumentButton versionId={document.latestVersion.id} fileName={document.name} />
-                                        : document.latestVersion && document.latestVersion.uploadState !== null
-                                            ? <RecoverUploadButton versionId={document.latestVersion.id} />
+                                    <div className="flex flex-col items-end gap-1">
+                                        {recoveryAction && latestVersion
+                                            ? <RetryProcessingButton versionId={latestVersion.id} action={recoveryAction} />
                                             : null}
+                                        {latestVersion?.canOpen
+                                            ? <OpenDocumentButton versionId={latestVersion.id} fileName={document.name} />
+                                            : !recoveryAction && latestVersion && latestVersion.uploadState !== null
+                                                ? <RecoverUploadButton versionId={latestVersion.id} />
+                                                : null}
+                                    </div>
                                 </td>
                             </tr>
-                        ))}
+                            );
+                        })}
 
                         {result.data.items.length === 0 && (
                             <tr>

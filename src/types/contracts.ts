@@ -14,6 +14,9 @@ export type ProcessingStatus = Enums["processing_status"];
 export type VersionStatus = Enums["version_status"];
 export type AnalysisStatus = Enums["analysis_status"];
 
+/** A processing attempt can be reclaimed after this persisted lease expires. */
+export const INGESTION_PROCESSING_LEASE_MS = 180_000;
+
 /** Constructed on the server from a verified session and persisted Profile. */
 export interface Actor {
   userId: string;
@@ -133,6 +136,7 @@ export interface RepositoryItem {
         version_status: VersionStatus | null;
         analysis_status: AnalysisStatus | null;
         uploadState: UploadState | null;
+        processingStartedAt: string | null;
         canOpen: boolean;
       }
     | null;
@@ -144,6 +148,8 @@ export interface RepositoryPage {
   total: number;
   page: number;
   pageSize: number;
+  /** Server time used to classify processing leases in this projection. */
+  asOfMs: number;
 }
 
 /** Type contracts only. Implementations live in the owning business module. */
@@ -170,7 +176,7 @@ export interface IngestionApi {
   finalizeUpload(input: { versionId: string; attemptId: string }): Promise<ActionResult<UploadSnapshot>>;
   resumeUpload(versionId: string, reference?: UploadReference): Promise<ActionResult<UploadTarget | UploadSnapshot>>;
   recoverUpload(versionId: string): Promise<ActionResult<UploadSnapshot>>;
-  /** Reauthorizes and atomically claims a failed version or expired processing lease. */
+  /** Reauthorizes and atomically claims a confirmed uploaded/failed v1 or expired processing lease. */
   retryProcessing(versionId: string): Promise<
     ActionResult<{ versionId: string; processingStatus: "processing" | "ready" }>
   >;

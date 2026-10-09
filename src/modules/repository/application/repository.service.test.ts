@@ -92,6 +92,7 @@ describe("RepositoryService - S1-05", () => {
                     latest_version_id: "30000000-0000-4000-8000-000000000002",
                     latest_version_number: 2,
                     latest_processing_status: "uploaded",
+                    latest_processing_started_at: "2026-10-03T01:00:00.000Z",
                     latest_version_status: null,
                     latest_analysis_status: "pending_reanalysis",
                     latest_upload_state: "pending",
@@ -108,6 +109,7 @@ describe("RepositoryService - S1-05", () => {
                 data: { items: [{ activeVersionId: validVersionId, latestVersion: {
                     id: "30000000-0000-4000-8000-000000000002",
                     version_number: 2,
+                    processingStartedAt: "2026-10-03T01:00:00.000Z",
                     uploadState: "pending",
                     canOpen: false,
                 } }] },

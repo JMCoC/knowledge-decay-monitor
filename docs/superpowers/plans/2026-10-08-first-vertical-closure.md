@@ -354,7 +354,7 @@ Conservar `runProcessing(versionId, operationId, operation = "process"): Promise
 **Consumes:** `latest_processing_started_at` de Task 1 y comando autorizado Task 4.
 **Produces:** campo nullable nuevo y etiquetas correctas, sin permisos concedidos por UI.
 
-- [ ] **Step 1: Escribir casos de matriz UI y mapping.** Uploaded confirmado muestra Start; fallo y lease >180 s muestran Retry; vigente, ready, pending, v2 y Member no muestran acción. El server sigue rechazando aunque se manipule el botón. Probar timestamp nulo/inválido y avance del tiempo tras permanecer en la página.
+- [x] **Step 1: Escribir casos de matriz UI y mapping.** Uploaded confirmado muestra Start; fallo y lease >180 s muestran Retry; vigente, ready, pending, v2 y Member no muestran acción. El server sigue rechazando aunque se manipule el botón. Probar timestamp nulo/inválido y avance del tiempo tras permanecer en la página.
 
   ```ts
   expect(processingRecoveryAction({ version_number: 1, uploadState: "confirmed",
@@ -368,19 +368,21 @@ Conservar `runProcessing(versionId, operationId, operation = "process"): Promise
 
   Definir `processingRecoveryAction(version: NonNullable<RepositoryItem["latestVersion"]>, nowMs: number): "start" | "retry" | null`; es una decisión de presentación y no una autorización.
 
-- [ ] **Step 2: Ejecutar RED.** Tests `processing-recovery`, `repository.service.test.ts` y `src/app/(workspace)/repository/page.test.ts`, citando rutas con paréntesis en PowerShell.
+- [x] **Step 2: Ejecutar RED.** Tests `processing-recovery`, `repository.service.test.ts` y `src/app/(workspace)/repository/page.test.ts`, citando rutas con paréntesis en PowerShell.
 
-- [ ] **Step 3: Propagar timestamp y presentar acciones.** Añadir columna al SELECT de infrastructure y mapping `processingStartedAt: document.latest_processing_started_at`. Actualizar todos los builders de `RepositoryItem`. Añadir al botón prop `action: "start" | "retry"`; ambos llaman `retryProcessing`, con copy Start/Retry, pendiente Starting y resultado Processing started/Processing completed. No mostrar éxito si `ActionResult` contiene PROCESSING_FAILED.
+- [x] **Step 3: Propagar timestamp y presentar acciones.** Añadir columna al SELECT de infrastructure y mapping `processingStartedAt: document.latest_processing_started_at`. Actualizar todos los builders de `RepositoryItem`. Añadir al botón prop `action: "start" | "retry"`; ambos llaman `retryProcessing`, con copy Start/Retry, pendiente Starting y resultado Processing started/Processing completed. No mostrar éxito si `ActionResult` contiene PROCESSING_FAILED.
 
   ```tsx
   {action ? <RetryProcessingButton versionId={version.id} action={action} /> : null}
   ```
 
-  `ProcessingLeaseRefresh({enabled}: {enabled: boolean})` se renderiza desde la página con enabled cuando haya versiones processing. El componente usa `router.refresh()` cada 15 s y al foco/visibilidad, limpia timer/listeners al desmontar y pausa polls en pestaña oculta. Así la lease vencida aparece sin depender de un reloj del navegador como permiso. Un caso E2E inicia una lease sintética con 179 s de edad y exige que Retry aparezca tras el refresco sin recargar manualmente. Conservar Open Original según upload confirmado, filtros, accesibilidad y popup fallback existentes.
+  `ProcessingLeaseRefresh({enabled}: {enabled: boolean})` se renderiza desde la página con enabled cuando haya versiones processing. El componente usa `router.refresh()` cada 15 s y al foco/visibilidad, limpia timer/listeners al desmontar y pausa polls en pestaña oculta. Así la lease vencida aparece sin depender de un reloj del navegador como permiso. Un caso E2E inicia una lease sintética cercana al vencimiento (170 s de edad) y exige que Retry aparezca tras el refresco sin recargar manualmente. Conservar Open Original según upload confirmado, filtros, accesibilidad y popup fallback existentes.
 
-- [ ] **Step 4: Ejecutar GREEN y E2E de tres estados.** Repetir los tests afectados y `npx pnpm@12.5.1 test:e2e:local tests/e2e/processing-retry.spec.ts --workers=1`. Fixture de uploaded usa original pequeño válido y debe llegar ready; fallo sin texto vuelve a fallo controlado; lease vencida con original válido llega ready, conservando IDs y hash.
+- [x] **Step 4: Ejecutar GREEN y E2E de tres estados.** Repetir los tests afectados y `npx pnpm@12.5.1 test:e2e:local tests/e2e/processing-retry.spec.ts --workers=1`. Fixture de uploaded usa original pequeño válido y debe llegar ready; fallo sin texto vuelve a fallo controlado; lease vencida con original válido llega ready, conservando IDs y hash.
 
-- [ ] **Step 5: Revisar contrato y límites de módulo.** `npx pnpm@12.5.1 typecheck`, `npx pnpm@12.5.1 lint`, revisar imports públicos e inexistencia de servicio privilegiado en bundle cliente. Commit candidato: `feat(repository): expose pending and expired processing recovery`.
+- [x] **Step 5: Revisar contrato y límites de módulo.** `npx pnpm@12.5.1 typecheck`, `npx pnpm@12.5.1 lint`, revisar imports públicos e inexistencia de servicio privilegiado en bundle cliente. Commit candidato: `feat(repository): expose pending and expired processing recovery`.
+
+  **Resultado Task 5:** 30/30 unit tests, typecheck, ESLint dirigido y build de producción pasan; el E2E focalizado pasa 5/5 contra el build actual. El primer intento usó un `.next` previo y no fue evidencia de este código; se reconstruyó localmente y se repitió. El lint global local sigue fallando por cuatro `require()` en `.artifacts/vertical-audit/probes.cjs` y muestra cuatro warnings ajenos; los archivos modificados pasan ESLint. Supabase local quedó `active` y no quedan fixtures con los prefijos de esta tarea.
 
 ### Task 6: Recorrido completo mantenido y gates limpios
 

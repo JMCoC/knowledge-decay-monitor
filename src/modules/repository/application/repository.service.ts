@@ -94,6 +94,7 @@ export function createRepositoryService(identity: Pick<IdentityApi, "requireDocu
                             id: document.latest_version_id,
                             version_number: document.latest_version_number!,
                             processing_status: document.latest_processing_status,
+                            processingStartedAt: document.latest_processing_started_at,
                             version_status: document.latest_version_status,
                             analysis_status: document.latest_analysis_status,
                             uploadState: document.latest_upload_state,
@@ -123,6 +124,7 @@ export function createRepositoryService(identity: Pick<IdentityApi, "requireDocu
                         total: result.total,
                         page: result.page,
                         pageSize: result.pageSize,
+                        asOfMs: Date.now(),
                     },
                 };
             } catch (error) {

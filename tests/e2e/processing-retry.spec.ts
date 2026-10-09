@@ -27,6 +27,7 @@ type RetryFixture = {
   versionId: string;
   storagePath: string;
   bytes: Buffer;
+  sha256: string;
 };
 
 function serviceClient() {
@@ -69,6 +70,8 @@ async function createRetryFixture(input: {
   ownerId: string;
   extension: "md" | "pdf";
   bytes: Buffer;
+  processingStatus?: "uploaded" | "processing_failed" | "processing";
+  processingStartedAt?: string;
 }): Promise<RetryFixture> {
   const service = serviceClient();
   const suffix = randomUUID();
@@ -80,6 +83,7 @@ async function createRetryFixture(input: {
   const attemptPath = `${WORKSPACE_A}/${documentId}/${versionId}/attempts/${attemptId}/original.${input.extension}`;
   const now = new Date().toISOString();
   const digest = createHash("sha256").update(input.bytes).digest("hex");
+  const processingStatus = input.processingStatus ?? "processing_failed";
 
   try {
     const document = await service.from("documents").insert({
@@ -97,7 +101,11 @@ async function createRetryFixture(input: {
       document_id: documentId,
       version_number: 1,
       storage_path: storagePath,
-      processing_status: "processing_failed",
+      processing_status: processingStatus,
+      processing_operation_id: processingStatus === "processing" ? randomUUID() : null,
+      processing_started_at: processingStatus === "processing"
+        ? input.processingStartedAt ?? now
+        : null,
       version_status: null,
       size_bytes: input.bytes.byteLength,
     });
@@ -133,7 +141,7 @@ async function createRetryFixture(input: {
     });
     if (original.error) throw new Error("Could not store the synthetic retry original.");
 
-    return { name, documentId, versionId, storagePath, bytes: input.bytes };
+    return { name, documentId, versionId, storagePath, bytes: input.bytes, sha256: digest };
   } catch (error) {
     await cleanupFixture(name);
     throw error;
@@ -164,6 +172,93 @@ async function countChunks(versionId: string) {
 }
 
 test.describe("Repository processing retry", () => {
+  test("Admin can start a confirmed uploaded v1 and preserve its original and hash", async ({ page, context }) => {
+    test.setTimeout(120_000);
+    await loginAs(context, "admin.a@example.test");
+    const fixture = await createRetryFixture({
+      label: "admin-start",
+      ownerId: ADMIN_A_ID,
+      extension: "md",
+      bytes: MARKDOWN,
+      processingStatus: "uploaded",
+    });
+
+    try {
+      await page.goto(`/repository?name=${encodeURIComponent(fixture.name)}`);
+      const row = page.getByRole("row").filter({ hasText: fixture.name });
+      await expect(row.getByRole("button", { name: "Start Processing" })).toBeVisible();
+      await expect(row.getByRole("button", { name: /Open file/i })).toBeVisible();
+      await row.getByRole("button", { name: "Start Processing" }).click();
+      await expect(row.getByText("Ready", { exact: true })).toBeVisible({ timeout: 75_000 });
+
+      const version = await serviceClient().from("document_versions")
+        .select("id,storage_path,processing_status,version_status,upload_state,expected_sha256")
+        .eq("id", fixture.versionId)
+        .single();
+      expect(version.error).toBeNull();
+      expect(version.data).toMatchObject({
+        id: fixture.versionId,
+        storage_path: fixture.storagePath,
+        processing_status: "ready",
+        version_status: "active",
+        upload_state: "confirmed",
+        expected_sha256: fixture.sha256,
+      });
+      expect(await countDocuments(fixture.documentId)).toBe(1);
+      expect(await countVersions(fixture.documentId)).toBe(1);
+      expect(await countChunks(fixture.versionId)).toBeGreaterThan(0);
+
+      const original = await serviceClient().storage.from("documents").download(fixture.storagePath);
+      expect(original.error).toBeNull();
+      if (!original.data) throw new Error("The started original could not be downloaded.");
+      expect(Buffer.from(await original.data.arrayBuffer())).toEqual(fixture.bytes);
+    } finally {
+      await cleanupFixture(fixture.name);
+    }
+  });
+
+  test("refreshes a near-expired lease and retries it without a manual page reload", async ({ page, context }) => {
+    test.setTimeout(120_000);
+    await loginAs(context, "admin.a@example.test");
+    const fixture = await createRetryFixture({
+      label: "admin-stale-lease",
+      ownerId: ADMIN_A_ID,
+      extension: "md",
+      bytes: MARKDOWN,
+      processingStatus: "processing",
+      processingStartedAt: new Date(Date.now() - 170_000).toISOString(),
+    });
+
+    try {
+      await page.goto(`/repository?name=${encodeURIComponent(fixture.name)}`);
+      const row = page.getByRole("row").filter({ hasText: fixture.name });
+      const retryButton = row.getByRole("button", { name: "Retry Processing" });
+      await expect(retryButton).toHaveCount(0);
+      await expect(retryButton).toBeVisible({ timeout: 30_000 });
+      await retryButton.click();
+      await expect(row.getByText("Ready", { exact: true })).toBeVisible({ timeout: 75_000 });
+
+      const version = await serviceClient().from("document_versions")
+        .select("id,storage_path,processing_status,version_status,upload_state,expected_sha256")
+        .eq("id", fixture.versionId)
+        .single();
+      expect(version.error).toBeNull();
+      expect(version.data).toMatchObject({
+        id: fixture.versionId,
+        storage_path: fixture.storagePath,
+        processing_status: "ready",
+        version_status: "active",
+        upload_state: "confirmed",
+        expected_sha256: fixture.sha256,
+      });
+      expect(await countDocuments(fixture.documentId)).toBe(1);
+      expect(await countVersions(fixture.documentId)).toBe(1);
+      expect(await countChunks(fixture.versionId)).toBeGreaterThan(0);
+    } finally {
+      await cleanupFixture(fixture.name);
+    }
+  });
+
   test("Admin can retry a failed version to ready without replacing its original or duplicating the document", async ({ page, context }) => {
     const fixture = await createRetryFixture({
       label: "admin-success",

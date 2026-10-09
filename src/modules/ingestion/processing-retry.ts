@@ -1,8 +1,9 @@
 import "server-only";
 
 import { createServiceClient } from "@/lib/supabase/service";
+import { INGESTION_PROCESSING_LEASE_MS } from "@/types/contracts";
 
-export const PROCESSING_LEASE_MS = 180_000;
+export const PROCESSING_LEASE_MS = INGESTION_PROCESSING_LEASE_MS;
 
 export type ProcessingRetryClaim =
   | { kind: "claimed"; operationId: string }
