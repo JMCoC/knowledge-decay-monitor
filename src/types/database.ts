@@ -129,7 +129,9 @@ export type Database = {
           hash_source: Database["public"]["Enums"]["upload_hash_source"] | null
           id: string
           idempotency_key: string | null
+          processing_lease_expires_at: string | null
           processing_operation_id: string | null
+          processing_queued: boolean
           processing_started_at: string | null
           processing_status: Database["public"]["Enums"]["processing_status"]
           reference_set_at: string | null
@@ -156,7 +158,9 @@ export type Database = {
           hash_source?: Database["public"]["Enums"]["upload_hash_source"] | null
           id?: string
           idempotency_key?: string | null
+          processing_lease_expires_at?: string | null
           processing_operation_id?: string | null
+          processing_queued?: boolean
           processing_started_at?: string | null
           processing_status?: Database["public"]["Enums"]["processing_status"]
           reference_set_at?: string | null
@@ -183,7 +187,9 @@ export type Database = {
           hash_source?: Database["public"]["Enums"]["upload_hash_source"] | null
           id?: string
           idempotency_key?: string | null
+          processing_lease_expires_at?: string | null
           processing_operation_id?: string | null
+          processing_queued?: boolean
           processing_started_at?: string | null
           processing_status?: Database["public"]["Enums"]["processing_status"]
           reference_set_at?: string | null
@@ -364,6 +370,8 @@ export type Database = {
           latest_analysis_status:
             | Database["public"]["Enums"]["analysis_status"]
             | null
+          latest_processing_lease_expires_at: string | null
+          latest_processing_queued: boolean | null
           latest_processing_started_at: string | null
           latest_processing_status:
             | Database["public"]["Enums"]["processing_status"]
@@ -439,6 +447,15 @@ export type Database = {
         Args: { full_name: string; workspace_name: string }
         Returns: string
       }
+      claim_ingestion_job: {
+        Args: never
+        Returns: {
+          operation_id: string
+          started_at: string
+          version_id: string
+          workspace_id: string
+        }[]
+      }
       claim_upload_recovery: {
         Args: { p_user_id: string; p_version_id: string }
         Returns: {
@@ -468,6 +485,22 @@ export type Database = {
           version_id: string
           workspace_id: string
         }[]
+      }
+      enqueue_ingestion_job: {
+        Args: {
+          p_retry?: boolean
+          p_version_id: string
+          p_workspace_id: string
+        }
+        Returns: string
+      }
+      fail_ingestion_job: {
+        Args: {
+          p_operation_id: string
+          p_retryable: boolean
+          p_version_id: string
+        }
+        Returns: string
       }
       finish_processing: {
         Args: { p_chunks: Json; p_operation_id: string; p_version_id: string }
@@ -531,6 +564,10 @@ export type Database = {
           upload_state: Database["public"]["Enums"]["upload_state"]
           version_id: string
         }[]
+      }
+      heartbeat_ingestion_job: {
+        Args: { p_operation_id: string; p_version_id: string }
+        Returns: boolean
       }
       mark_upload_attempt_cleanup: {
         Args: {

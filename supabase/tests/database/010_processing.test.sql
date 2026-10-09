@@ -110,6 +110,10 @@ select ('50000000-0000-4000-8000-0000000000c' || s)::uuid,
     || '/attempts/50000000-0000-4000-8000-0000000000c' || s || '/original.md'
 from (values ('1'),('2'),('3'),('4'),('5'),('6'),('7'),('8'),('9')) as t(s);
 
+-- SQL fixtures explicitly model live queue claims; no worker runs during these transactional tests.
+insert into private.ingestion_jobs(version_id,workspace_id,status,attempt_count,operation_id,started_at,lease_expires_at)
+select id,workspace_id,'running',1,processing_operation_id,clock_timestamp(),clock_timestamp()+interval '180 seconds'
+from public.document_versions where id::text like '%0000000000c_' and processing_status='processing';
 -- Happy path: valid CAS claim persists chunks + ready/active + pointer.
 select lives_ok($$select public.finish_processing(
   '30000000-0000-4000-8000-0000000000c1'::uuid,
@@ -165,24 +169,24 @@ select throws_ok($$select public.finish_processing(
   (select jsonb_build_array(jsonb_build_object('chunk_index',0,'text_content','x','page_number',1,'section_heading','h','embedding','[1,' || repeat('0,',382) || '0]'))))$$,
   '22023', null, 'a stale operation id is rejected');
 
--- A correct operation id is still fenced by the original claim deadline.
-update public.document_versions
-   set processing_started_at = clock_timestamp() - interval '51 seconds'
- where id = '30000000-0000-4000-8000-0000000000c4';
+-- A correct operation is fenced by an expired renewable lease.
+update private.ingestion_jobs
+   set lease_expires_at = clock_timestamp() - interval '1 second'
+ where version_id = '30000000-0000-4000-8000-0000000000c4';
 select throws_ok($$select public.finish_processing(
   '30000000-0000-4000-8000-0000000000c4'::uuid,
   '60000000-0000-4000-8000-0000000000c4'::uuid,
   (select jsonb_build_array(jsonb_build_object('chunk_index',0,'text_content','late result','page_number',1,'section_heading','h','embedding','[1,' || repeat('0,',382) || '0]'))))$$,
-  '22023', null, 'a result after the 50-second claim deadline is rejected');
+  '22023', null, 'a result after lease expiry is rejected');
 select is((select count(*) from public.document_chunks
   where version_id = '30000000-0000-4000-8000-0000000000c4'), 0::bigint,
   'a late result inserts no chunks');
 select ok((select processing_status = 'processing' and version_status is null
   from public.document_versions where id = '30000000-0000-4000-8000-0000000000c4'),
   'a late result leaves the processing claim and inactive version intact');
-update public.document_versions
-   set processing_started_at = clock_timestamp()
- where id = '30000000-0000-4000-8000-0000000000c4';
+update private.ingestion_jobs
+   set lease_expires_at = clock_timestamp()+interval '180 seconds'
+ where version_id = '30000000-0000-4000-8000-0000000000c4';
 select throws_ok($$select public.finish_processing(
   '30000000-0000-4000-8000-0000000000c4'::uuid,
   '60000000-0000-4000-8000-0000000000c4'::uuid,
@@ -199,11 +203,11 @@ select throws_ok($$select public.finish_processing(
   '60000000-0000-4000-8000-0000000000c5'::uuid,
   (select jsonb_build_array(jsonb_build_object('chunk_index',0,'text_content','x','page_number',1,'section_heading','h','embedding','[1,' || repeat('0,',382) || '0]'))))$$,
   '22023', null, 'a non-v1 version never auto-activates');
-select throws_ok($$select public.finish_processing(
+select lives_ok($$select public.finish_processing(
   '30000000-0000-4000-8000-0000000000c1'::uuid,
   '60000000-0000-4000-8000-0000000000c1'::uuid,
   (select jsonb_build_array(jsonb_build_object('chunk_index',0,'text_content','x','page_number',1,'section_heading','h','embedding','[1,' || repeat('0,',382) || '0]'))))$$,
-  '22023', null, 'a second call on the decided version is rejected');
+  'the exact completed operation can be acknowledged again');
 select throws_ok($$select public.finish_processing(
   '30000000-0000-4000-8000-0000000000c6'::uuid,
   '60000000-0000-4000-8000-0000000000c6'::uuid,
@@ -230,7 +234,7 @@ select throws_ok($$select public.finish_processing(
     jsonb_build_object('chunk_index',0,'text_content','first','page_number',1,'section_heading','h','embedding','[1,' || repeat('0,',382) || '0]'),
     jsonb_build_object('chunk_index',0,'text_content','second','page_number',1,'section_heading','h','embedding','[0,1,' || repeat('0,',381) || '0]')
   )))$$,
-  '23505', null, 'a duplicate chunk_index is rejected');
+  '22023', null, 'a duplicate chunk_index is rejected');
 
 -- Cross-tenant chunk insert fails on the composite FK, not on RLS.
 select throws_ok($$insert into public.document_chunks(workspace_id,version_id,chunk_index,text_content,embedding) values
