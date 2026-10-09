@@ -9,9 +9,11 @@ const mocks = vi.hoisted(() => ({
   chunk: vi.fn(),
   embed: vi.fn(),
   single: vi.fn(),
+  maybeSingle: vi.fn(),
   updateEq: vi.fn(),
   updateSelect: vi.fn(),
   rpc: vi.fn(),
+  abortSignals: [] as AbortSignal[],
   rowResult: { data: null as unknown, error: null as unknown },
   fromTables: [] as string[],
 }));
@@ -34,18 +36,54 @@ vi.mock("@/modules/ingestion/embeddings", async (importOriginal) => {
   return { ...actual, embedBatch: mocks.embed };
 });
 
-vi.mock("@/lib/supabase/service", () => ({
-  createServiceClient: () => ({
-    from: (table: string) => {
-      mocks.fromTables.push(table);
-      return {
-        select: () => ({ eq: () => ({ single: mocks.single }) }),
-        update: () => ({ eq: mocks.updateEq }),
-      };
-    },
-    rpc: (...args: unknown[]) => mocks.rpc(...args),
-  }),
-}));
+vi.mock("@/lib/supabase/service", () => {
+  const makeAbortable = (promise: Promise<unknown>) => {
+    const query = {
+      abortSignal: vi.fn((signal: AbortSignal) => {
+        mocks.abortSignals.push(signal);
+        return query;
+      }),
+      then: (resolve: (value: unknown) => unknown, reject: (reason: unknown) => unknown) =>
+        promise.then(resolve, reject),
+    };
+    return query;
+  };
+  const makeReadQuery = () => {
+    const query = {
+      eq: vi.fn(() => query),
+      abortSignal: vi.fn((signal: AbortSignal) => {
+        mocks.abortSignals.push(signal);
+        return query;
+      }),
+      single: () => vi.mocked(mocks.single)(),
+      maybeSingle: () => vi.mocked(mocks.maybeSingle)(),
+    };
+    return query;
+  };
+  return {
+    createServiceClient: () => ({
+      from: (table: string) => {
+        mocks.fromTables.push(table);
+        return {
+          select: () => makeReadQuery(),
+          update: () => {
+            const query = {
+              eq: vi.fn((...args: unknown[]) => {
+                mocks.updateEq(...args);
+                return query;
+              }),
+              select: (...args: unknown[]) => makeAbortable(
+                Promise.resolve(mocks.updateSelect(...args)),
+              ),
+            };
+            return query;
+          },
+        };
+      },
+      rpc: (...args: unknown[]) => makeAbortable(Promise.resolve(mocks.rpc(...args))),
+    }),
+  };
+});
 
 import { runProcessing } from "@/modules/ingestion/processing";
 import { ParseError } from "@/modules/ingestion/chunking";
@@ -62,6 +100,7 @@ const claimedRow = (overrides: Record<string, unknown> = {}) => ({
   storage_path: STORAGE_PATH,
   processing_status: "processing",
   processing_operation_id: OPERATION_ID,
+  processing_started_at: new Date().toISOString(),
   upload_state: "confirmed",
   ...overrides,
 });
@@ -76,11 +115,10 @@ const draft = (text_content: string) => ({
 beforeEach(() => {
   mocks.captureOperationFailure.mockReset();
   mocks.fromTables.length = 0;
-  mocks.single.mockReset().mockResolvedValue({ data: claimedRow(), error: null });
-  mocks.updateEq.mockReset().mockImplementation(() => ({
-    eq: mocks.updateEq,
-    select: mocks.updateSelect,
-  }));
+  mocks.abortSignals.length = 0;
+  mocks.single.mockReset().mockImplementation(async () => ({ data: claimedRow(), error: null }));
+  mocks.maybeSingle.mockReset().mockResolvedValue({ data: null, error: null });
+  mocks.updateEq.mockReset();
   mocks.updateSelect.mockReset().mockResolvedValue({ data: [{ id: VERSION_ID }], error: null });
   mocks.rpc.mockReset().mockResolvedValue({ error: null });
   mocks.download
@@ -105,7 +143,10 @@ describe("runProcessing happy path", () => {
     expect(mocks.download).toHaveBeenCalledWith(STORAGE_PATH, expect.any(AbortSignal));
     expect(mocks.parse).toHaveBeenCalledOnce();
     expect(mocks.chunk).toHaveBeenCalledOnce();
-    expect(mocks.embed).toHaveBeenCalledWith(["hello world"]);
+    expect(mocks.embed).toHaveBeenCalledWith(["hello world"], expect.objectContaining({
+      signal: expect.any(AbortSignal),
+      assertCanStart: expect.any(Function),
+    }));
     expect(mocks.rpc).toHaveBeenCalledWith("finish_processing", {
       p_version_id: VERSION_ID,
       p_operation_id: OPERATION_ID,
@@ -255,7 +296,7 @@ describe("runProcessing persistence failures", () => {
     );
   });
 
-  it("aborts the download on timeout and reports PERSISTENCE_FAILED", async () => {
+  it("aborts the download at the claim work deadline and reports PROCESSING_FAILED", async () => {
     mocks.download.mockImplementation(
       (_path: unknown, signal: AbortSignal) =>
         new Promise((_resolve, reject) => {
@@ -271,7 +312,7 @@ describe("runProcessing persistence failures", () => {
       await pending;
 
       expect(mocks.captureOperationFailure).toHaveBeenCalledWith(
-        expect.objectContaining({ code: "PERSISTENCE_FAILED" }),
+        expect.objectContaining({ code: "PROCESSING_FAILED" }),
       );
       expect(mocks.updateEq).toHaveBeenCalledWith("id", VERSION_ID);
     } finally {
@@ -359,5 +400,113 @@ describe("runProcessing guards and guarantees", () => {
     await runProcessing(VERSION_ID, OPERATION_ID);
 
     expect(JSON.stringify(mocks.captureOperationFailure.mock.calls)).not.toMatch(/hello world/i);
+  });
+
+  it("stops parse that returns after the persisted claim's work budget", async () => {
+    vi.useFakeTimers();
+    const workerEnteredAt = Date.parse("2026-10-08T12:00:40.000Z");
+    vi.setSystemTime(workerEnteredAt);
+    mocks.single.mockResolvedValue({
+      data: claimedRow({ processing_started_at: new Date(workerEnteredAt - 40_000).toISOString() }),
+      error: null,
+    });
+    mocks.parse.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5_000));
+      return { sections: [{ heading: "Title", page: null, paragraphs: ["late parse"] }] };
+    });
+
+    const pending = runProcessing(VERSION_ID, OPERATION_ID);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await pending;
+
+    expect(mocks.embed).not.toHaveBeenCalled();
+    expect(mocks.captureOperationFailure).toHaveBeenCalledWith(expect.objectContaining({
+      code: "PROCESSING_FAILED",
+      versionId: VERSION_ID,
+    }));
+    expect(mocks.updateEq).toHaveBeenCalledWith("processing_operation_id", OPERATION_ID);
+  });
+
+  it("aborts embedding work when the claim's work budget expires", async () => {
+    vi.useFakeTimers();
+    const workerEnteredAt = Date.parse("2026-10-08T12:00:44.000Z");
+    vi.setSystemTime(workerEnteredAt);
+    mocks.single.mockResolvedValue({
+      data: claimedRow({ processing_started_at: new Date(workerEnteredAt - 44_000).toISOString() }),
+      error: null,
+    });
+    mocks.embed.mockImplementation((_texts: unknown, options: { signal: AbortSignal }) =>
+      new Promise((_resolve, reject) => {
+        options.signal.addEventListener("abort", () => {
+          reject(new DOMException("aborted", "AbortError"));
+        }, { once: true });
+      }));
+
+    const pending = runProcessing(VERSION_ID, OPERATION_ID);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await pending;
+
+    expect(mocks.embed).toHaveBeenCalledOnce();
+    expect(mocks.embed).toHaveBeenCalledWith(["hello world"], expect.objectContaining({
+      signal: expect.any(AbortSignal),
+    }));
+    expect(mocks.rpc).not.toHaveBeenCalled();
+    expect(mocks.captureOperationFailure).toHaveBeenCalledWith(expect.objectContaining({
+      code: "PROCESSING_FAILED",
+      versionId: VERSION_ID,
+    }));
+  });
+
+  it("fails closed when the persisted claim timestamp is invalid", async () => {
+    mocks.single.mockResolvedValue({ data: claimedRow({ processing_started_at: null }), error: null });
+
+    await runProcessing(VERSION_ID, OPERATION_ID);
+
+    expect(mocks.download).not.toHaveBeenCalled();
+    expect(mocks.captureOperationFailure).toHaveBeenCalledWith(expect.objectContaining({
+      code: "PERSISTENCE_FAILED",
+      versionId: VERSION_ID,
+    }));
+  });
+
+  it("reconciles a lost completion response that committed ready and active", async () => {
+    mocks.rpc.mockResolvedValue({ error: { message: "transport lost after commit" } });
+    mocks.maybeSingle
+      .mockResolvedValueOnce({
+        data: claimedRow({ processing_status: "ready", version_status: "active", processing_operation_id: null }),
+        error: null,
+      })
+      .mockResolvedValueOnce({ data: { active_version_id: VERSION_ID }, error: null });
+
+    await runProcessing(VERSION_ID, OPERATION_ID);
+
+    expect(mocks.maybeSingle).toHaveBeenCalledTimes(2);
+    expect(mocks.updateEq).not.toHaveBeenCalled();
+    expect(mocks.captureOperationFailure).not.toHaveBeenCalled();
+  });
+
+  it("does not change a replacement claim after a lost completion response", async () => {
+    mocks.rpc.mockResolvedValue({ error: { message: "transport lost" } });
+    mocks.maybeSingle.mockResolvedValueOnce({
+      data: claimedRow({ processing_operation_id: "60000000-0000-4000-8000-000000000011" }),
+      error: null,
+    });
+
+    await runProcessing(VERSION_ID, OPERATION_ID);
+
+    expect(mocks.updateEq).not.toHaveBeenCalled();
+    expect(mocks.captureOperationFailure).not.toHaveBeenCalled();
+  });
+
+  it("reports persistence failure without claiming a successful mark when the database is unavailable", async () => {
+    mocks.single.mockResolvedValue({ data: null, error: { message: "database unavailable" } });
+    mocks.updateSelect.mockResolvedValue({ data: null, error: { message: "database unavailable" } });
+
+    await runProcessing(VERSION_ID, OPERATION_ID);
+
+    expect(mocks.captureOperationFailure).toHaveBeenCalledWith(expect.objectContaining({
+      code: "PERSISTENCE_FAILED",
+      versionId: VERSION_ID,
+    }));
   });
 });

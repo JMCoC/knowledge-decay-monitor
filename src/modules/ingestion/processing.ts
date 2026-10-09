@@ -1,8 +1,14 @@
 import "server-only";
 
 import { createServiceClient } from "@/lib/supabase/service";
-import { captureOperationFailure } from "@/lib/observability/operation-events";
+import { reportProcessingFailure } from "@/lib/observability/processing-failure.server";
 import type { SafeFailureCode } from "@/lib/observability/safe-event";
+import {
+  createProcessingBudget,
+  PROCESSING_BUDGET_MS,
+  ProcessingBudgetError,
+  type ProcessingBudget,
+} from "./processing-budget";
 import { downloadStorageObject } from "./storage";
 import {
   MAX_CHUNKS_PER_VERSION,
@@ -15,7 +21,7 @@ import { EmbeddingError, embedBatch } from "./embeddings";
 import type { AllowedExtension } from "./validation";
 
 /** Frozen in Task 0: the worker fails to `processing_failed` before the platform kills it. */
-export const PROCESSING_TIMEOUT_MS = 50_000;
+export const PROCESSING_TIMEOUT_MS = PROCESSING_BUDGET_MS;
 
 const CHUNK_TARGET_TOKENS = 450;
 const CHUNK_OVERLAP_TOKENS = 50;
@@ -36,8 +42,11 @@ function extensionFromStoragePath(storagePath: string): AllowedExtension {
   throw new ProcessingError("PARSING_FAILED");
 }
 
-function classify(error: unknown, signalAborted: boolean): SafeFailureCode {
-  if (signalAborted) return "PERSISTENCE_FAILED";
+function classify(error: unknown, budget: ProcessingBudget): SafeFailureCode {
+  if (error instanceof ProcessingBudgetError) {
+    return error.reason === "work_expired" ? "PROCESSING_FAILED" : "PERSISTENCE_FAILED";
+  }
+  if (budget.workSignal.aborted) return "PROCESSING_FAILED";
   if (error instanceof ProcessingError) return error.code;
   if (error instanceof ParseError) {
     // NOTE: the real ParseErrorCode has no TOO_LARGE; the chunker signals
@@ -50,6 +59,51 @@ function classify(error: unknown, signalAborted: boolean): SafeFailureCode {
     return "PERSISTENCE_FAILED";
   }
   return "PROCESSING_FAILED";
+}
+
+type CompletionReconciliation = "committed" | "same_claim" | "superseded" | "unknown";
+
+async function reconcileCompletion(
+  service: ReturnType<typeof createServiceClient>,
+  versionId: string,
+  documentId: string,
+  operationId: string,
+  budget: ProcessingBudget,
+): Promise<CompletionReconciliation> {
+  try {
+    const signal = budget.closeSignal(500);
+    const [versionResult, documentResult] = await Promise.all([
+      service
+        .from("document_versions")
+        .select("processing_status, version_status, processing_operation_id")
+        .eq("id", versionId)
+        .abortSignal(signal)
+        .maybeSingle(),
+      service
+        .from("documents")
+        .select("active_version_id")
+        .eq("id", documentId)
+        .abortSignal(signal)
+        .maybeSingle(),
+    ]);
+    const version = versionResult.data;
+    const document = documentResult.data;
+    if (versionResult.error || !version) return "unknown";
+    if (version.processing_status === "processing") {
+      return version.processing_operation_id === operationId ? "same_claim" : "superseded";
+    }
+    if (documentResult.error || !document) return "unknown";
+    if (
+      version.processing_status === "ready" &&
+      version.version_status === "active" &&
+      document.active_version_id === versionId
+    ) {
+      return "committed";
+    }
+    return "unknown";
+  } catch {
+    return "unknown";
+  }
 }
 
 /**
@@ -65,15 +119,22 @@ export async function runProcessing(
   operationId: string,
   operation: "process" | "retry" = "process",
 ): Promise<void> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), PROCESSING_TIMEOUT_MS);
+  const workerEnteredAt = Date.now();
+  let budget = createProcessingBudget(
+    new Date(workerEnteredAt).toISOString(),
+    Date.now,
+    workerEnteredAt,
+  );
+  let service: ReturnType<typeof createServiceClient> | null = null;
+  let reportPersistenceUncertainty = false;
   try {
-    const service = createServiceClient();
+    service = createServiceClient();
 
     const { data: row, error: rowError } = await service
       .from("document_versions")
-      .select("id, workspace_id, document_id, storage_path, processing_status, processing_operation_id, upload_state")
+      .select("id, workspace_id, document_id, storage_path, processing_status, processing_operation_id, processing_started_at, upload_state")
       .eq("id", versionId)
+      .abortSignal(AbortSignal.any([budget.workSignal, budget.closeSignal(2_000)]))
       .single();
     if (rowError || !row) {
       throw new ProcessingError("PERSISTENCE_FAILED");
@@ -88,14 +149,26 @@ export async function runProcessing(
       return;
     }
 
+    const claimBudget = createProcessingBudget(
+      row.processing_started_at,
+      Date.now,
+      workerEnteredAt,
+    );
+    budget.dispose();
+    budget = claimBudget;
+    budget.assertWorkRemaining();
+
     const extension = extensionFromStoragePath(row.storage_path);
-    const response = await downloadStorageObject(row.storage_path, controller.signal);
+    const response = await downloadStorageObject(row.storage_path, budget.workSignal);
+    budget.assertWorkRemaining();
     if (!response) {
       throw new ProcessingError("PERSISTENCE_FAILED");
     }
     const bytes = new Uint8Array(await response.arrayBuffer());
+    budget.assertWorkRemaining();
 
     const { sections } = await parseDocument(bytes, extension);
+    budget.assertWorkRemaining();
     let drafts: ChunkDraft[];
     try {
       drafts = chunkDeterministic(sections, {
@@ -110,7 +183,12 @@ export async function runProcessing(
       throw new ProcessingError("CHUNKING_FAILED");
     }
 
-    const embeddings = await embedBatch(drafts.map((draft) => draft.text_content));
+    budget.assertWorkRemaining();
+    const embeddings = await embedBatch(drafts.map((draft) => draft.text_content), {
+      signal: budget.workSignal,
+      assertCanStart: budget.assertWorkRemaining,
+    });
+    budget.assertWorkRemaining();
     if (embeddings.length !== drafts.length) {
       throw new ProcessingError("EMBEDDING_FAILED");
     }
@@ -123,26 +201,38 @@ export async function runProcessing(
       embedding: embeddings[index] as string,
     }));
 
+    budget.assertWorkRemaining();
     let rpcError: unknown;
     try {
-      ({ error: rpcError } = await service.rpc("finish_processing", {
-        p_version_id: versionId,
-        p_operation_id: operationId,
-        p_chunks: chunks,
-      }));
+      ({ error: rpcError } = await service
+        .rpc("finish_processing", {
+          p_version_id: versionId,
+          p_operation_id: operationId,
+          p_chunks: chunks,
+        })
+        .abortSignal(budget.closeSignal(2_000)));
     } catch (error) {
       rpcError = error;
     }
     if (rpcError) {
+      const reconciliation = await reconcileCompletion(
+        service,
+        versionId,
+        row.document_id,
+        operationId,
+        budget,
+      );
+      if (reconciliation === "committed" || reconciliation === "superseded") return;
+      if (reconciliation === "unknown") reportPersistenceUncertainty = true;
       throw new ProcessingError("PERSISTENCE_FAILED");
     }
   } catch (error) {
-    const code = classify(error, controller.signal.aborted);
+    const code = classify(error, budget);
     let failedStatePersisted = false;
     let failurePersistenceFailed = false;
     try {
-      const service = createServiceClient();
-      const { data, error } = await service
+      const failureService = service ?? createServiceClient();
+      const { data, error: updateError } = await failureService
         .from("document_versions")
         .update({
           processing_status: "processing_failed",
@@ -152,26 +242,23 @@ export async function runProcessing(
         .eq("id", versionId)
         .eq("processing_status", "processing")
         .eq("processing_operation_id", operationId)
-        .select("id");
-      failedStatePersisted = !error && Boolean(data?.length);
-      failurePersistenceFailed = Boolean(error);
+        .select("id")
+        .abortSignal(budget.closeSignal(1_500));
+      failedStatePersisted = !updateError && Boolean(data?.length);
+      failurePersistenceFailed = Boolean(updateError);
     } catch {
       failurePersistenceFailed = true;
     }
-    if (failedStatePersisted || failurePersistenceFailed) {
-      try {
-        captureOperationFailure({
-          module: "ingestion",
-          operation,
-          code: failurePersistenceFailed ? "PERSISTENCE_FAILED" : code,
-          correlationId: crypto.randomUUID(),
-          versionId,
-        });
-      } catch {
-        // Telemetry must not change the controlled product result.
-      }
+    if (failedStatePersisted || failurePersistenceFailed || reportPersistenceUncertainty) {
+      await reportProcessingFailure({
+        module: "ingestion",
+        operation,
+        code: failurePersistenceFailed || reportPersistenceUncertainty ? "PERSISTENCE_FAILED" : code,
+        correlationId: crypto.randomUUID(),
+        versionId,
+      }, Math.min(500, budget.remainingMs()));
     }
   } finally {
-    clearTimeout(timeout);
+    budget.dispose();
   }
 }

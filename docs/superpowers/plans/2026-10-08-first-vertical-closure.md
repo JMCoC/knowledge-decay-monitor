@@ -241,7 +241,7 @@ Conservar `runProcessing(versionId, operationId, operation = "process"): Promise
 **Consumes:** adaptador Task 2, RPC Task 1 e inicio persistido del claim.
 **Produces:** mismo `runProcessing`, con éxito/fallo seguro y sin escrituras de un intento obsoleto.
 
-- [ ] **Step 1: Escribir pruebas de presupuesto y worker.** Añadir `processing_started_at` a los mocks de fila existentes. Usar reloj fake para claim hace 40 s, embeddings que nunca resuelven hasta aborto, parse que retorna después de 45 s, RPC que responde con error tras COMMIT, actualización de fallo que encuentra operation ID nuevo y base indisponible. Probar todos los puntos de Review Focus 3–4.
+- [x] **Step 1: Escribir pruebas de presupuesto y worker.** Añadir `processing_started_at` a los mocks de fila existentes. Usar reloj fake para claim hace 40 s, embeddings que nunca resuelven hasta aborto, parse que retorna después de 45 s, RPC que responde con error tras COMMIT, actualización de fallo que encuentra operation ID nuevo y base indisponible. Probar todos los puntos de Review Focus 3–4.
 
   ```ts
   it("reserves five seconds and does not restart an old claim budget", async () => {
@@ -258,9 +258,9 @@ Conservar `runProcessing(versionId, operationId, operation = "process"): Promise
 
   El test de respuesta perdida configura `rpc` como error de transporte y la relectura como `ready/active` con puntero correcto; exige cero UPDATE de fallo. El caso de otro operation ID exige cero chunks y cero cambio del claim nuevo. El test de telemetría exige capture con datos allowlisted y flush dentro del tiempo asignado, aun si capture/flush lanza.
 
-- [ ] **Step 2: Ejecutar RED.** `npx pnpm@12.5.1 test:unit tests/unit/ingestion-processing-budget.test.ts tests/unit/ingestion-processing.test.ts tests/unit/processing-failure.test.ts`. Los archivos nuevos deben existir antes de esta ejecución; el fallo relevante es el comportamiento temporal, no un import ausente.
+- [x] **Step 2: Ejecutar RED.** `npx pnpm@12.5.1 test:unit tests/unit/ingestion-processing-budget.test.ts tests/unit/ingestion-processing.test.ts tests/unit/processing-failure.test.ts`. Los archivos nuevos deben existir antes de esta ejecución; el fallo relevante es el comportamiento temporal, no un import ausente.
 
-- [ ] **Step 3: Implementar el presupuesto y propagarlo.** El deadline efectivo no supera `worker-entry + 50s` y usa el inicio persistido si es anterior. Una fecha inválida produce fallo controlado; una futura no amplía el presupuesto local. Señal de trabajo vence a 45 s desde el claim; señales de cierre son independientes, limitadas por `remainingMs`, y no reutilizan la señal de trabajo ya abortada.
+- [x] **Step 3: Implementar el presupuesto y propagarlo.** El deadline efectivo no supera `worker-entry + 50s` y usa el inicio persistido si es anterior. Una fecha inválida produce fallo controlado; una futura no amplía el presupuesto local. Señal de trabajo vence a 45 s desde el claim; señales de cierre son independientes, limitadas por `remainingMs`, y no reutilizan la señal de trabajo ya abortada.
 
   ```ts
   const budget = createProcessingBudget(row.processing_started_at, Date.now, workerEnteredAt);
@@ -278,7 +278,7 @@ Conservar `runProcessing(versionId, operationId, operation = "process"): Promise
 
   Capturar `const workerEnteredAt = Date.now()` al entrar al worker, antes de la consulta. La consulta inicial también tiene señal acotada a dos segundos y su tiempo cuenta en el deadline efectivo. El helper usa `Math.min(enteredAtMs, Date.parse(startedAt))` como inicio después de validar la fecha, sin permitir que un timestamp futuro amplíe el presupuesto. Declarar constantes de etapas de cierre: RPC hasta 2.000 ms, reconciliación hasta 500 ms, marca de fallo hasta 1.500 ms y flush hasta 500 ms; cada una queda limitada además por el presupuesto restante. No empezar una finalización con trabajo agotado. Una cancelación HTTP no reemplaza los guards/timeout SQL de Task 1.
 
-- [ ] **Step 4: Reconciliar y reportar.** Si falla la RPC, reconsultar versión y puntero bajo señal de cierre: `ready/active` coherente permanece exitoso; `processing` con ID distinto se deja intacto; mismo ID puede marcar `processing_failed` mediante UPDATE con filtros de estado e ID. Si no hay base para persistir, reportar `PERSISTENCE_FAILED` sin atribuir una marca exitosa y dejar recuperación por lease.
+- [x] **Step 4: Reconciliar y reportar.** Si falla la RPC, reconsultar versión y puntero bajo señal de cierre: `ready/active` coherente permanece exitoso; `processing` con ID distinto se deja intacto; mismo ID puede marcar `processing_failed` mediante UPDATE con filtros de estado e ID. Si no hay base para persistir, reportar `PERSISTENCE_FAILED` sin atribuir una marca exitosa y dejar recuperación por lease.
 
   ```ts
   await service.from("document_versions").update({
@@ -291,7 +291,9 @@ Conservar `runProcessing(versionId, operationId, operation = "process"): Promise
 
   `reportProcessingFailure` llama a `captureOperationFailure` con correlation UUID, version ID y attempt ID seguro, y espera `Sentry.flush` hasta `min(flushMs, 500)`. Capture/flush fallidos se absorben; no se registra el error crudo. Disposal de timers/listeners ocurre en `finally`.
 
-- [ ] **Step 5: Ejecutar GREEN y regresión conjunta.** Repetir los tres archivos unitarios, `tests/unit/operation-privacy.test.ts` y `tests/unit/operation-error.test.ts`; repetir la integración de finalización para comprobar que los resultados HTTP/DB coinciden. Commit candidato: `fix(ingestion): enforce processing deadline and reconcile completion`.
+- [x] **Step 5: Ejecutar GREEN y regresión conjunta.** Repetir los tres archivos unitarios, `tests/unit/operation-privacy.test.ts` y `tests/unit/operation-error.test.ts`; repetir la integración de finalización para comprobar que los resultados HTTP/DB coinciden. Commit candidato: `fix(ingestion): enforce processing deadline and reconcile completion`.
+
+  **Resultado:** 36/36 unit tests, typecheck y lint dirigido pasan; integración local 14 archivos/20 tests pasa. El lint global también incluyó el artefacto ignorado `.artifacts/vertical-audit/probes.cjs` y falló por sus cuatro `require()`; no se modificó. La suite amplia dejó `upload_control.mode=paused`; se restauró a `active`, su valor observado antes de ejecutarla. Task 6 debe preservar el modo inicial al cerrar suites.
 
 ### Task 4: Dispatch esperado y recuperación de los tres estados
 
