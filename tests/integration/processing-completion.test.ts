@@ -7,10 +7,10 @@ import { openLocalSqlSession, waitForSqlLock } from "../support/local-sql-sessio
 describe("local processing completion fencing", () => {
   beforeAll(assertLocalSupabaseReady);
 
-  it("rejects completion after the persisted 50-second deadline without partial activation", async () => {
+  it("rejects completion after the expired renewable lease without partial activation", async () => {
     const fixture = await createProcessingFixture({
       status: "processing",
-      startedAt: new Date(Date.now() - 51_000).toISOString(),
+      startedAt: new Date(Date.now() - 181_000).toISOString(),
     });
     try {
       const { data, error } = await fixture.service.rpc("finish_processing", {
@@ -46,9 +46,15 @@ describe("local processing completion fencing", () => {
     try {
       const replacement = randomUUID();
       await b.query("begin;");
-      await b.query(`update public.document_versions
-        set processing_operation_id='${replacement}', processing_started_at=clock_timestamp()
-        where id='${fixture.versionId}';`);
+      await b.query(`update private.ingestion_jobs
+        set operation_id='${replacement}', started_at=clock_timestamp(),
+            lease_expires_at=clock_timestamp()+interval '180 seconds', updated_at=clock_timestamp()
+        where version_id='${fixture.versionId}' and status='running';
+        update public.document_versions d
+        set processing_operation_id=j.operation_id, processing_started_at=j.started_at,
+            processing_lease_expires_at=j.lease_expires_at
+        from private.ingestion_jobs j
+        where d.id=j.version_id and j.version_id='${fixture.versionId}' and j.status='running';`);
       const finishing = a.query(`select public.finish_processing(
         '${fixture.versionId}', '${fixture.operationId}',
         '${JSON.stringify(fixture.chunks)}'::jsonb);`);
