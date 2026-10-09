@@ -45,7 +45,7 @@ export default async function RepositoryPage({ searchParams }: PageProps) {
     const actor = await requireDocumentActor().catch(() => null);
     const nowMs = result.data.asOfMs;
     const hasProcessingInFlight = result.data.items.some(
-        (document) => document.latestVersion?.processing_status === "processing",
+        (document) => document.latestVersion?.processing_status === "processing" || document.latestVersion?.processingQueued,
     );
 
     return (
@@ -114,6 +114,7 @@ export default async function RepositoryPage({ searchParams }: PageProps) {
 
                                 <td className="px-4 py-4">
                                     <ProcessingStatusBadge
+                                        processingQueued={latestVersion?.processingQueued}
                                         hasVersion={latestVersion !== null}
                                         processingStatus={latestVersion?.processing_status ?? null}
                                         uploadState={latestVersion?.uploadState ?? null}

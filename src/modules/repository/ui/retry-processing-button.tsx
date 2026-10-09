@@ -29,9 +29,7 @@ export function RetryProcessingButton({ versionId, action }: Props) {
         setError(result.error);
         return;
       }
-      setMessage(result.data.processingStatus === "ready"
-        ? "Processing completed."
-        : "Processing started.");
+      setMessage("Processing queued.");
       router.refresh();
     } catch {
       setError(captureClientTransportFailure());

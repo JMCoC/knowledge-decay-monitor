@@ -16,6 +16,8 @@ function version(overrides: Partial<LatestVersion> = {}): LatestVersion {
     uploadState: "confirmed",
     canOpen: true,
     processingStartedAt: null,
+    processingQueued: false,
+    processingLeaseExpiresAt: null,
     ...overrides,
   };
 }
@@ -59,5 +61,12 @@ describe("processingRecoveryAction", () => {
       version_status: "active",
     }), NOW)).toBeNull();
     expect(processingRecoveryAction(version({ uploadState: "verifying" }), NOW)).toBeNull();
+  });
+  it("does not offer duplicate Start for queued work",()=>{
+    expect(processingRecoveryAction(version({processingQueued:true}),NOW)).toBeNull();
+  });
+  it("uses the renewed lease rather than the original start time",()=>{
+    expect(processingRecoveryAction(version({processing_status:"processing",processingStartedAt:new Date(NOW-600_000).toISOString(),processingLeaseExpiresAt:new Date(NOW+60_000).toISOString()}),NOW)).toBeNull();
+    expect(processingRecoveryAction(version({processing_status:"processing",processingLeaseExpiresAt:new Date(NOW-1).toISOString()}),NOW)).toBe("retry");
   });
 });

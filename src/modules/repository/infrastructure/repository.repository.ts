@@ -44,7 +44,7 @@ export async function findRepositoryDocuments(supabase: DbClient, query: Reposit
   let request = supabase
     .from("repository_documents")
     .select(
-      "id,name,category,owner_id,owner_profile_id,owner_full_name,active_version_id,created_at,latest_version_id,latest_version_number,latest_processing_status,latest_processing_started_at,latest_version_status,latest_analysis_status,latest_upload_state",
+      "id,name,category,owner_id,owner_profile_id,owner_full_name,active_version_id,created_at,latest_version_id,latest_version_number,latest_processing_status,latest_processing_started_at,latest_processing_queued,latest_processing_lease_expires_at,latest_version_status,latest_analysis_status,latest_upload_state",
       { count: "exact" },
     )
     .order("created_at", { ascending: false })

@@ -137,6 +137,8 @@ export interface RepositoryItem {
         analysis_status: AnalysisStatus | null;
         uploadState: UploadState | null;
         processingStartedAt: string | null;
+        processingQueued: boolean;
+        processingLeaseExpiresAt: string | null;
         canOpen: boolean;
       }
     | null;
@@ -176,9 +178,9 @@ export interface IngestionApi {
   finalizeUpload(input: { versionId: string; attemptId: string }): Promise<ActionResult<UploadSnapshot>>;
   resumeUpload(versionId: string, reference?: UploadReference): Promise<ActionResult<UploadTarget | UploadSnapshot>>;
   recoverUpload(versionId: string): Promise<ActionResult<UploadSnapshot>>;
-  /** Reauthorizes and atomically claims a confirmed uploaded/failed v1 or expired processing lease. */
+  /** Reauthorizes and atomically queues a confirmed pending/failed v1 or expired processing lease. */
   retryProcessing(versionId: string): Promise<
-    ActionResult<{ versionId: string; processingStatus: "processing" | "ready" }>
+    ActionResult<{ versionId: string; processingStatus: "queued" }>
   >;
 }
 

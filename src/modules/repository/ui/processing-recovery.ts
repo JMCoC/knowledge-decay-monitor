@@ -16,10 +16,15 @@ export function processingRecoveryAction(
     return null;
   }
 
-  if (version.processing_status === "uploaded") return "start";
+  if (version.processing_status === "uploaded") return version.processingQueued ? null : "start";
   if (version.processing_status === "processing_failed") return "retry";
   if (version.processing_status !== "processing" || !Number.isFinite(nowMs)) return null;
 
+  if (version.processingLeaseExpiresAt) {
+    const expiresAt = Date.parse(version.processingLeaseExpiresAt);
+    return Number.isFinite(expiresAt) && nowMs >= expiresAt ? "retry" : null;
+  }
+  // Compatibility for unqueued versions created before the worker migration.
   const startedAtMs = version.processingStartedAt === null
     ? Number.NaN
     : Date.parse(version.processingStartedAt);

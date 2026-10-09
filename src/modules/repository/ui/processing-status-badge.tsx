@@ -4,9 +4,10 @@ interface Props {
     hasVersion: boolean;
     processingStatus: ProcessingStatus | null;
     uploadState: UploadState | null;
+    processingQueued?: boolean;
 }
 
-export function ProcessingStatusBadge({ hasVersion, processingStatus, uploadState }: Props) {
+export function ProcessingStatusBadge({ hasVersion, processingStatus, uploadState, processingQueued }: Props) {
     if (!hasVersion) {
         return <span className="text-xs text-zinc-400">No version</span>;
     }
@@ -29,6 +30,9 @@ export function ProcessingStatusBadge({ hasVersion, processingStatus, uploadStat
     }
 
     switch (processingStatus) {
+        case "uploaded":
+            if (processingQueued) return <span className="text-xs text-amber-700">Queued</span>;
+            return <span className="text-xs text-amber-700">Uploaded</span>;
         case "ready":
             return (
                 <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-600/20">
@@ -48,13 +52,6 @@ export function ProcessingStatusBadge({ hasVersion, processingStatus, uploadStat
                 <span className="inline-flex items-center gap-1.5 rounded-full bg-rose-50 px-2.5 py-0.5 text-xs font-medium text-rose-700 ring-1 ring-inset ring-rose-600/20">
                     <span className="h-1.5 w-1.5 rounded-full bg-rose-500" />
                     Processing failed
-                </span>
-            );
-        case "uploaded":
-            return (
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-zinc-50 px-2.5 py-0.5 text-xs font-medium text-zinc-700 ring-1 ring-inset ring-zinc-600/20">
-                    <span className="h-1.5 w-1.5 rounded-full bg-zinc-400" />
-                    Uploaded — processing pending
                 </span>
             );
         default:
