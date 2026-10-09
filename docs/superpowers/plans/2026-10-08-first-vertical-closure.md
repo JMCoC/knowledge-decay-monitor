@@ -57,7 +57,7 @@ El usuario aprobó la ejecución nativa de las Tasks 1–9 y commits locales por
 | `tests/unit/ingestion-scheduling.test.ts`, `ingestion-processing-retry.test.ts`, `ingestion-retry-action.test.ts`, `ingestion-process-route.test.ts`; `tests/integration/processing-retry.test.ts` | Fallos de dispatch, permisos, duplicados y tres estados recuperables | 4 |
 | `src/types/contracts.ts`; Repository repository/service/page/button; nuevos `ui/processing-recovery.ts`, `ui/processing-lease-refresh.tsx` y pruebas | Timestamp en proyección, Start, Retry y refresco de leases | 5 |
 | `tests/support/processing-inputs.ts`; `tests/e2e/processing-flow.spec.ts`, `processing-retry.spec.ts`, `upload.spec.ts`; `.github/workflows/s1-01.yml` | Aceptación mantenida y CI | 6 |
-| `docs/testing/first-vertical-cutover.md`; `docs/reviews/2026-10-08-first-vertical-acceptance.md` | Runbook y evidencia por entorno | 7–9 |
+| `docs/testing/first-vertical-cutover.md`; `docs/testing/first-vertical-acceptance.md` | Runbook y evidencia por entorno | 7–9 |
 
 El timestamp de la migración lo genera la CLI durante Task 1. `$closureMigration` identifica ese archivo exacto; no es una decisión pendiente ni permiso para editar otras migraciones. `embed/index.ts` conserva su contrato compatible de arrays y su autenticación; solo se modifica si una regresión de la política nueva demuestra una corrección necesaria, sin introducir otro proveedor.
 
@@ -450,7 +450,7 @@ Conservar `runProcessing(versionId, operationId, operation = "process"): Promise
 **Consumes:** spec, CI candidato y configuración vigente leída con MCP/gh.
 **Produces:** lista exacta de cambios remotos, inventario previo y recuperación verificable, lista para autorizar el corte.
 
-- [ ] **Step 1: Inventario de solo lectura.** Con MCP Supabase revisar URL/ref, migrations, funciones, upload mode, nombres de columnas/RPC/permisos y conteos de pending/huérfanos. Con Vercel revisar proyectos/deployments/SHA y nombres/targets de variables, sin emitir valores. Con gh revisar protecciones y rulesets:
+- [x] **Step 1: Inventario de solo lectura.** Con MCP Supabase revisar URL/ref, migrations, funciones, upload mode, nombres de columnas/RPC/permisos y conteos de pending/huérfanos. Con Vercel revisar proyectos/deployments/SHA y nombres/targets de variables, sin emitir valores. Con gh revisar protecciones y rulesets:
 
   ```powershell
   gh api repos/JMCoC/knowledge-decay-monitor/branches/develop/protection --jq '{required_status_checks,enforce_admins,required_pull_request_reviews}'
@@ -461,7 +461,7 @@ Conservar `runProcessing(versionId, operationId, operation = "process"): Promise
 
   Esperado desde la auditoría: migración `20261006172303_finish_processing` más la nueva, cero funciones antes del corte y cuatro uploads confirmed/uploaded. Si cambió el inventario, revisar el conjunto real; no añadir `--include-all` para forzar una historia divergente.
 
-- [ ] **Step 2: Preparar gates/configuración con valores secretos fuera del documento.** Añadir el check exacto `Quality gates` a los required_status_checks de main/develop conservando contextos y reglas existentes. Usar PATCH del subrecurso `protection/required_status_checks` o ruleset vigente; no reemplazar toda la protección. Documentar el payload con `strict=true` y la lista calculada; después de aplicar en Task 8, GET verifica que lo añadió sin borrar otros checks.
+- [x] **Step 2: Preparar gates/configuración con valores secretos fuera del documento.** Añadir el check exacto `Quality gates` a los required_status_checks de main/develop conservando contextos y reglas existentes. Usar PATCH del subrecurso `protection/required_status_checks` o ruleset vigente; no reemplazar toda la protección. Documentar el payload con `strict=true` y la lista calculada; después de aplicar en Task 8, GET verifica que lo añadió sin borrar otros checks.
 
   Inventario de configuración requerida: token interno de servidor para ambos deployments; service role/publishable URL correcto; `APP_ORIGIN` efectivo; allowlist Auth para callbacks elegidos; correo de aceptación controlado; configuración de Sentry que resuelva `development`, `vercel-preview`, `vercel-production` y release SHA. Identificar si Preview necesita un mecanismo oficial de bypass de protección para dispatch interno; cualquier secreto de bypass queda solo en servidor. No desactivar autenticación del endpoint ni exponer secretos para sortear un 401.
 
@@ -474,9 +474,11 @@ Conservar `runProcessing(versionId, operationId, operation = "process"): Promise
 
   El SQL se ejecuta solo en Tasks 8–9 autorizadas. Runbook identifica cómo restaurar `active` si era el estado previo y qué hacer ante fallo. Antes de pausar, preparar dry-run revisado, secretos y paquete candidato para reducir la ventana. Rollback conserva nuevas migraciones y datos; restaura un deployment compatible, mantiene pausa y entrega corrección aditiva si hace falta. No restaura una aplicación incompatible con la nueva RPC.
 
-- [ ] **Step 4: Preparar matriz de evidencia y buzón.** Reporte con una fila por criterio de la spec y entorno: estado `pendiente`, `aprobado` o `fallido`, SHA, fecha, resultado/tiempo y referencia segura. No completar filas con evidencia vieja. Obtener acceso a un buzón controlado y sus aliases para registro/recovery remotos; si falta, solicitar ese dato sin bloquear correcciones locales y mantener ese criterio abierto. Documentar aceptación manual/remota contra la URL real sin reutilizar la configuración Playwright local que fuerza loopback y desactiva Sentry.
+- [x] **Step 4: Preparar matriz de evidencia y buzón.** Reporte con una fila por criterio de la spec y entorno: estado `pendiente`, `aprobado` o `fallido`, SHA, fecha, resultado/tiempo y referencia segura. No completar filas con evidencia vieja. Obtener acceso a un buzón controlado y sus aliases para registro/recovery remotos; si falta, solicitar ese dato sin bloquear correcciones locales y mantener ese criterio abierto. Documentar aceptación manual/remota contra la URL real sin reutilizar la configuración Playwright local que fuerza loopback y desactiva Sentry.
 
 - [ ] **Step 5: Revisar el paquete de corte.** Verificar enlaces/`git diff --check`, correspondencia exacta de migraciones y compatibilidad del candidato; confirmar que la autorización de ejecución cubre los cambios preparados antes de la primera escritura remota. Entregable: runbook revisable, no un despliegue. Commit de docs separado solo si está autorizado.
+
+  **Resultado parcial 2026-10-09:** inventario remoto/local refrescado, matriz y runbook en `docs/testing/first-vertical-acceptance.md` y `docs/testing/first-vertical-cutover.md`. Steps 1, 2 y 4 están preparados; Step 3 aún requiere deployment compatible de rollback y responsable de ventana; Step 5 requiere un candidato compatible. El paquete registra las tres migraciones pendientes, falta de `embed` y `INGESTION_INTERNAL_TOKEN`, controles de GitHub ausentes y el resultado E2E 31/33. No está habilitado el corte: Task 6 sigue abierta por el fallo de embeddings de múltiples chunks; no se hicieron escrituras remotas. Se solicitó el buzón controlado y se mantiene pendiente hasta recibir la dirección.
 
 ### Task 8: Gates, Supabase y aceptación de Preview
 
