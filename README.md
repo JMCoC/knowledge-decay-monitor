@@ -6,6 +6,23 @@ Para preparar el Sprint 1, seguir el [Protocolo Anti-Bloqueo del Día Cero](docs
 
 El proyecto usa pnpm 12.5.1 (fijado en `package.json`). Después del arranque local, los controles son `pnpm typecheck`, `pnpm lint`, `pnpm test:db` y `pnpm test:fixtures`.
 
+## Primer vertical y worker de ingesta
+
+Upload confirmado y Retry registran trabajos en PostgreSQL; un worker Node procesa PDF textual, DOCX y Markdown con el modelo fijado. La web necesita este worker para que los documentos lleguen a Ready. Véase [ADR-002](docs/architecture/adr/ADR-002-durable-ingestion-worker.md).
+
+Con Docker y Supabase local preparados según el protocolo, aplicar migraciones sin reset y arrancar el worker en una terminal separada:
+
+```powershell
+pnpm exec supabase migration up --local
+pnpm worker:local
+```
+
+`worker:local` obtiene las credenciales del stack local en memoria. No copiar claves a argumentos, logs o archivos del repositorio. Para desarrollo, arrancar además `pnpm dev` con la configuración local de la web.
+
+Las suites `pnpm test:integration` y `pnpm test:e2e:local` arrancan y detienen su propio worker. Detener cualquier worker de desarrollo antes de ejecutarlas y correrlas en serie: comparten la cola y los fixtures locales. E2E usa un único proceso e incluye esperas reales de 180 y 300 segundos.
+
+El [reporte de aceptación](docs/testing/first-vertical-acceptance.md) recoge los resultados y límites. El [runbook de corte](docs/testing/first-vertical-cutover.md) prepara las siete migraciones remotas, imagen, configuración, rollback y recuperación de documentos existentes. La web en Vercel requiere un servicio persistente adicional para el worker; un deployment web READY por sí solo no acepta el vertical.
+
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
 ## Getting Started

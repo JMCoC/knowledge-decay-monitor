@@ -1,82 +1,103 @@
-# Primer vertical — runbook de corte
+# Primer vertical — corte del runtime durable
 
-Estado del runbook: **preparado; corte bloqueado**. Último inventario: 2026-10-09. Este procedimiento cubre migraciones, función de embeddings, Preview, Production y la recuperación acotada de las cuatro versiones remotas existentes. No autoriza por sí mismo una escritura remota.
+Este runbook prepara el cambio remoto. No se ejecutaron migraciones, despliegues, push ni cambios de datos/configuración remotos en esta implementación. El cierre local y la aceptación remota son gates distintos; registrar el SHA candidato y el digest de la imagen después de los checks y la revisión.
 
-## Gate para iniciar el corte
+## Inventario y delta
 
-No comenzar Task 8 hasta que el SHA candidato tenga la suite completa verde y la política de embeddings aprobada supere las pruebas de nueve y 32 chunks, el batch de diez archivos y las mediciones en frío/caliente. La spec fija una llamada por texto y concurrencia máxima dos por intento; no se cambian modelo, concurrencia, timeout, cuota ni reintentos automáticamente. El último E2E completo terminó 31/33 y falló en documentos de múltiples chunks y en la recuperación de 32 chunks. Véase el [reporte de aceptación](./first-vertical-acceptance.md).
+Inventario remoto refrescado por MCP el 2026-10-09: proyecto `cdyjtoheovbvewewicaa`, 14 migraciones hasta `20261003214934`, cuatro documentos confirmados/uploaded y ningún puntero activo. Los originales se conservan. Refrescar estado y dry-run justo antes de ejecutar.
 
-El inventario actual no está listo para corte: el remoto no tiene `embed`, hay tres migraciones pendientes y Vercel no tiene `INGESTION_INTERNAL_TOKEN`. El modo remoto observado está `active`; las cuatro versiones confirmadas siguen `uploaded` y sin puntero activo. No iniciar el despliegue hasta refrescar y reconciliar este estado.
+Migraciones pendientes respecto a ese inventario, en este orden:
 
-## Inventario observado
+1. `20261006172303_finish_processing.sql`
+2. `20261009024630_first_vertical_processing_guard.sql`
+3. `20261009024913_first_vertical_repository_lease_read.sql`
+4. `20261009120000_durable_ingestion_jobs.sql`
+5. `20261009120100_durable_repository_projection.sql`
+6. `20261009124615_guard_legacy_processing_claims.sql`
+7. `20261009134833_enqueue_lock_budget.sql`
 
-| Sistema | Estado observado | Consecuencia |
-|---|---|---|
-| Supabase remoto `cdyjtoheovbvewewicaa` | 14 migraciones hasta `20261003214934`; `embed` no desplegada | Hay que revisar y aplicar solo las tres migraciones del dry-run y desplegar la función con JWT verificado. |
-| Supabase local | 17 migraciones, hasta `20261009024913`; `migration list --local` confirma que ya están aplicadas | No ejecutar reset ni volver a aplicar migraciones locales. |
-| Dry-run remoto | `20261006172303_finish_processing.sql`, `20261009024630_first_vertical_processing_guard.sql`, `20261009024913_first_vertical_repository_lease_read.sql` | Este conjunto debe coincidir en una nueva consulta inmediatamente antes de `db push`. No añadir `--include-all`. |
-| Datos remotos | `upload_control=active`; 4 documentos; 4 versiones `confirmed/uploaded`; 0 `processing`, 0 `processing_failed`, 0 `ready`, 0 documentos con puntero activo | Preservar esos cuatro documentos. No resetear, sembrar ni borrar originales. |
-| Vercel | Proyecto `knowledge-decay-monitor`; deployment más reciente `dpl_Cpb8gEASzBBe16WcH3ZMArc4Tw1R` figura `READY`, SHA `1f179d9fec12bce304b534ca71e37bd6aa84c765`, sin `target` confirmado por la consulta | No es evidencia de que el SHA candidato esté desplegado o aceptado, ni rollback compatible confirmado. |
-| Variables Vercel (solo nombres y targets) | URL y publishable key Supabase, `SUPABASE_SERVICE_ROLE_KEY`, `SENTRY_AUTH_TOKEN` y `NEXT_PUBLIC_SENTRY_DSN` existen en Preview/Production. `INGESTION_INTERNAL_TOKEN` no aparece. `APP_ORIGIN` existe en Production y en Preview solo para la rama `develop`. | Provisionar el token interno en Preview y Production por un canal seguro. El flujo aprobado calcula `APP_ORIGIN` por deployment; verificar su override y callback exactos para el PR. Nunca registrar valores. |
-| GitHub | `main` y `develop` tienen `enforce_admins`; `required_status_checks=null`; main pide una aprobación, develop ninguna; rulesets vacíos | Añadir el contexto exacto `Quality gates` a ambas ramas conservando la protección y revisores. Verificar por GET después de aplicar. |
+Supabase local tiene las 21 migraciones aplicadas sin reset. El runtime activo ahora es un worker Node; no desplegar `embed` ni provisionar `INGESTION_INTERNAL_TOKEN` para el nuevo candidato. La ruta HTTP anterior devuelve 410. La tabla privada de jobs no se expone a navegadores y la migración no encola los cuatro documentos anteriores.
 
-El deployment workflow inyecta el target, release SHA y origen calculado al construir; en el deploy pasa `APP_ORIGIN` y `KDM_DISABLE_SENTRY=0`. `SENTRY_AUTH_TOKEN` se limita al build. No crear variables públicas para suplir secretos del servidor. La aplicación sí exige `INGESTION_INTERNAL_TOKEN` para procesar y reintentar.
+La última migración añade una guarda para deployments web anteriores que aún intenten reclamar trabajo mediante un `UPDATE` directo. La base devuelve `22023` y deja intactos la versión y el job cuando no existe un lease durable vigente. Esas solicitudes antiguas pueden mostrar un error durante el corte; el estado queda recuperable con la web y el worker compatibles.
 
-## Preflight inmediatamente antes de cualquier escritura
+## Preparación del candidato
 
-1. Confirmar por MCP/CLI el proyecto y URL de Supabase, el modo de upload, la lista de funciones, el conteo agregado de estados y las migraciones aplicadas. Consultar Vercel por nombres/targets solamente; no recuperar ni imprimir valores. Comprobar en GitHub el SHA del candidato, jobs del workflow, protecciones y reglas.
-2. Repetir el dry-run:
+- Obtener CI verde del mismo SHA: lint, tipos, unit, SQL, tipos generados, fixtures, integración con worker real, build, imagen y E2E. Exigir el contexto `Quality gates` en `main` y `develop` conservando revisores/protecciones.
+- Construir `docker build -f Dockerfile.ingestion -t <registry>/kdm-ingestion:<sha> .`, publicar por un canal autorizado y desplegar por digest. La imagen incorpora el modelo fijado y arranca en modo offline. Usar un servicio de contenedores persistente con reinicio automático; no un runtime de Edge ni un job ligado a la respuesta web.
+- Capacidad inicial: un worker, recursos iniciales a medir en el hosting elegido; comenzar con 2 vCPU/2 GiB como presupuesto de despliegue y validar RSS/latencia allí. SQL mantiene un solo job activo incluso si el servicio solapa instancias durante un rollout. No es una certificación de recursos del proveedor.
+- Variables privadas del worker: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SENTRY_DSN`, `INGESTION_ENVIRONMENT` (`vercel-preview` o `vercel-production`) e `INGESTION_RELEASE_SHA` (40 caracteres SHA del candidato). Puerto/host vienen de la imagen: 8788/0.0.0.0. No necesita tokens de HF ni acceso externo para inferencia.
+- Credenciales separadas por entorno. Preview debe usar un proyecto Supabase independiente cuando se quiera aislar datos; usar el proyecto compartido exige una ventana de corte explícita y no constituye una prueba aislada.
+- `/health` debe responder 200 y `{"status":"ready"}` solo tras cargar modelo y contactar DB. Probar procesamiento real; un health verde no demuestra ingesta completa. No exponer endpoints de depuración ni servir los originales desde el worker.
+- Aplicar autenticación/callbacks exactos de la web (`APP_ORIGIN`, URL/publishable key, service-role solo servidor). Sentry debe recibir un evento manual saneado con environment/release; no documentos ni excepciones crudas. El token de upload de sourcemaps permanece exclusivamente en build.
 
-   ```powershell
-   npx pnpm@12.5.1 exec supabase db push --project-ref cdyjtoheovbvewewicaa --dry-run --skip-vault
-   ```
+## PRs y automatización de la web
 
-   Detenerse si cambia la lista de migraciones, aparecen funciones o datos no inventariados, o las migraciones locales y remotas divergen de forma distinta a las tres pendientes de la tabla.
-3. Confirmar un deployment Preview del SHA probado, los callbacks de Auth necesarios para el dominio exacto del PR, las variables de servidor requeridas y el buzón controlado de aceptación. El workflow de Preview solo acepta un PR abierto, no draft, del mismo repositorio.
-4. Antes de pausar, identificar por ID/SHA un deployment compatible para rollback y designar al responsable de la ventana. El deployment que hoy aparece más reciente no tiene target confirmado y no está validado como rollback. Mantener IDs y evidencia mínima; no copiar contenido documental, hashes completos de usuarios, tokens, URLs firmadas ni valores de variables al reporte.
+Publicar primero un draft PR `fix/adjustment_vertical_slice` → `develop`. El [texto del PR](first-vertical-pr.md) describe el cambio y enlaza evidencia. Mantenerlo draft hasta preparar un DB/worker compatible: retirar draft habilita el job Preview si pasa Quality gates. Si Preview comparte Supabase, coordinar también los deployments web anteriores que leen ese proyecto.
 
-## Aplicación en Preview — solo tras superar el gate
+```powershell
+git push -u origin fix/adjustment_vertical_slice
+gh pr create --repo JMCoC/knowledge-decay-monitor --draft --base develop --head fix/adjustment_vertical_slice --title "feat(ingestion): complete first vertical with durable processing" --body-file docs/testing/first-vertical-pr.md
+```
 
-1. Pausar temporalmente upload en el proyecto confirmado y comprobar el resultado por lectura:
+Los comandos quedan preparados para una ejecución posterior. Tras aceptación Preview y revisión, integrar en develop y preparar el PR develop → main con SHA probado, digest y evidencia del entorno. Preparar Production antes de ese merge: el workflow de push a main puede desplegar/promover automáticamente la web. No abrir el PR de promoción reutilizando evidencia histórica como aceptación actual.
 
-   ```sql
-   update private.upload_control
-   set mode = 'paused', updated_at = clock_timestamp()
-   where singleton
-   returning mode;
-   ```
+## Ventana de corte
 
-2. Con el dry-run recién revisado, aplicar solo las migraciones enumeradas y desplegar `embed`:
+1. Registrar responsable, inicio/fin, SHA web, digest worker, proyecto DB y deployment web anterior. La versión anterior de HTTP/Edge no es un rollback compatible tras cambiar el RPC: preparar antes un candidato web/worker durable conocido o aceptar que el rollback funcional es pausa + forward fix.
+2. Detener cualquier worker anterior y pausar nuevos uploads:
 
-   ```powershell
-   npx pnpm@12.5.1 exec supabase db push --project-ref cdyjtoheovbvewewicaa --skip-vault
-   npx pnpm@12.5.1 exec supabase functions deploy embed --project-ref cdyjtoheovbvewewicaa
-   ```
+```sql
+update private.upload_control set mode='paused',updated_at=now() where singleton;
+select mode from private.upload_control where singleton;
+```
 
-   Mantener la verificación JWT de la función. No usar `--include-seed`, `--include-roles`, `--prune`, `--no-verify-jwt` ni reset remoto. Confirmar historial, RPC, permisos, vista Repository, función desplegada y una medición sintética de una entrada con concurrencia dos; no persistir vectores de prueba en datos compartidos.
-3. Si una operación falla, mantener upload pausado, no promover y recuperar la aplicación compatible previa. Conservar las migraciones aplicadas y los datos; corregir mediante una migración aditiva. No revertir esquema con SQL manual.
-4. Desplegar Preview únicamente por el workflow del repositorio. Exigir `Quality gates` y job Preview sobre el mismo SHA; verificar `READY`, proyecto, URL y metadatos de `githubCommitSha`, `kdmTestedSha`, `kdmRepository` y `kdmTarget`.
-5. Ejecutar la matriz completa del reporte con usuarios y workspaces sintéticos. Debe cubrir Auth y recovery por correo, tres formatos, nueve/32 chunks, lote de diez, filtros/paginación, apertura del original, expiración de URL a 300 s, roles/tenant, límites, Start/Retry y lease. Comprobar estados, puntero, chunks, dimensiones, hash y eventos Sentry. Los fallos controlados deben dejar cero chunks y ningún puntero.
-6. Retirar solamente los fixtures propios por IDs exactos. Después de la aceptación, acordar y verificar el modo de upload antes de continuar; restaurar `active` si era el modo previo. Production requiere Preview aprobado y una autorización vigente de corte.
+La pausa de uploads no cancela jobs. Durante mantenimiento detener el worker; las solicitudes de Retry pueden quedar persistidas para el siguiente arranque. No borrar la cola ni originales.
 
-## Production y versiones existentes
+3. Verificar project ref y el conjunto exacto de siete migraciones:
 
-1. Integrar el candidato mediante PR. El SHA resultante de `main` debe pasar `Quality gates`; comprobar ese SHA, el job Production y el deployment promovido al dominio real. No inferir que el SHA de Preview y el de Production coinciden.
-2. Repetir Auth/recovery, aceptación de Repository, embeddings y Sentry desde el dominio Production con cuentas sintéticas distintas a Preview. Confirmar environment `vercel-production` y release SHA en el evento seguro de Sentry. Una respuesta HTTP 200 o un deployment `READY` no sustituye estos recorridos.
-3. Antes de tocar datos existentes, volver a consultar las cuatro versiones `confirmed/uploaded`, confirmar elegibilidad e IDs y pedir aprobación operativa para procesarlas. Procesar una versión por vez mediante Admin/QA autorizado o el endpoint interno autenticado. Conservar versión y ruta originales; verificar `ready/active` o fallo controlado, conteos y ausencia de versiones duplicadas. No borrar los cuatro documentos.
-4. Restaurar el modo de upload acordado y comprobarlo por lectura. Registrar cualquier advisory de Supabase sin mezclarlo con la aceptación funcional; una violación real de aislamiento bloquea el cierre.
+```powershell
+pnpm exec supabase migration list --linked
+pnpm exec supabase db push --linked --dry-run
+```
 
-## Rollback y datos
+Si cambia el conjunto, detener el corte y revisar. No usar `--include-all`, seed ni reset. Aplicar únicamente después de revisión de SQL y backup/punto de recuperación confirmado:
 
-Ante un fallo de compatibilidad, runtime, Auth, Storage, embeddings o aislamiento, detener promoción y mantener upload pausado mientras se recupera un deployment compatible. No borrar ni recrear documentos existentes, no ejecutar seeds/reset, no revertir migraciones aplicadas y no desactivar autenticación del endpoint. Una corrección de esquema debe ser aditiva. Registrar deployment anterior, SHA, migraciones que sí se aplicaron, estado final de upload y criterio fallido.
+```powershell
+pnpm exec supabase db push --linked
+pnpm exec supabase migration list --linked
+```
 
-## Referencias
+4. Desplegar web del candidato y worker por digest. Confirmar variables por nombre/target sin imprimir valores. Verificar health y acceso DB; el worker no necesita `APP_ORIGIN` ni llamadas internas a Next.
+5. Activar uploads, ejecutar un documento sintético nuevo por la UI y comprobar original/hash, chunks384, ready/active/puntero, categoría/owner, apertura firmada, filtros y aislamiento Admin/QA Lead/Member. Ejecutar también PDF textual, DOCX, Markdown de 9/32/500 chunks, lote de diez documentos de 32 chunks, contenido inválido y retry. El límite superior de 10 MiB valida bytes de upload, no garantiza que cualquier contenido quepa en 500 chunks.
+6. Probar caída del worker y redelivery tras 180 segundos, heartbeat de una ejecución larga, ausencia de duplicados y evento Sentry. Verificar recovery Auth mediante buzón controlado en el dominio real. Solo entonces aceptar el entorno.
 
-- [Reporte de aceptación y evidencia](./first-vertical-acceptance.md)
-- [Spec aprobada](../superpowers/specs/2026-10-08-first-vertical-closure-design.md)
-- [Plan de ejecución](../superpowers/plans/2026-10-08-first-vertical-closure.md)
-- [S1-08: protección y despliegue](./s1-08-cutover.md)
-- [S1-08: pasos para publicar y cerrar](./s1-08-publicacion-y-cierre.md)
-- [Supabase: RPC SECURITY DEFINER ejecutables por anon](https://supabase.com/docs/guides/database/database-linter?lint=0028_anon_security_definer_function_executable)
-- [Supabase: RPC SECURITY DEFINER ejecutables por authenticated](https://supabase.com/docs/guides/database/database-linter?lint=0029_authenticated_security_definer_function_executable)
-- [Supabase: protección de contraseñas filtradas](https://supabase.com/docs/guides/auth/password-security#password-strength-and-leaked-password-protection)
+## Recuperar los cuatro documentos existentes
+
+Tras aceptar el candidato, inventariar sin imprimir contenido/URLs:
+
+```sql
+select id,workspace_id,processing_status,upload_state,version_number,version_status
+from public.document_versions
+where upload_state='confirmed' and processing_status='uploaded' and version_number=1 and version_status is null;
+```
+
+Revalidar que son exactamente los cuatro IDs revisados; registrar IDs autorizados para esta operación. Usar Start Processing desde la UI como Admin/QA Lead, uno por uno. Alternativamente, un operador puede invocar con IDs explícitos y revisados:
+
+```sql
+select public.enqueue_ingestion_job('<workspace-id>'::uuid,'<version-id>'::uuid,true);
+```
+
+Esperar ready/active y puntero coherente antes del siguiente. Mantener los mismos document/version IDs y original/hash. No hacer un UPDATE masivo ni crear versiones nuevas. Un rechazo de contenido exige revisión humana; no forzar ready.
+
+## Rollback y verificación
+
+Si falla un gate, pausar uploads y detener el worker. Conservar jobs y originales; esperar expiración de leases antes de reiniciar el candidato compatible. No revertir migraciones destructivamente ni volver al runtime HTTP de 50 segundos. Los jobs aceptados siguen disponibles; la operación vieja queda fenced al reclamar otra nueva.
+
+```sql
+select status,count(*) from private.ingestion_jobs group by status;
+select count(*) as inconsistent_active from public.documents d
+join public.document_versions v on v.id=d.active_version_id
+where v.workspace_id<>d.workspace_id or v.processing_status<>'ready' or v.version_status<>'active';
+```
+
+El segundo resultado debe ser cero. Revisar el age de la cola y jobs running vencidos; procesos caídos se recuperan al volver un worker. No guardar cuerpos de proveedores, documentos, vectores ni URLs firmadas en evidencia. La evidencia remota debe identificar SHA/digest, entorno, resultados y correlation IDs seguros.

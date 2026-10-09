@@ -10,6 +10,8 @@
 
 **Spec:** [diseño aprobado](../specs/2026-10-08-first-vertical-closure-design.md), aprobado el 2026-10-08.
 
+**Actualización 2026-10-09:** el runtime y su aceptación se completan mediante el [plan durable](2026-10-09-durable-ingestion.md). Las referencias siguientes a HTTP/Edge, 50 segundos y concurrencia dos documentan el plan anterior; no son los parámetros actuales.
+
 ## Global Constraints
 
 - Modelo `gte-small`, embeddings de 384 dimensiones y valores finitos; chunking determinístico 450/50 y ratio `chars/4` existente.

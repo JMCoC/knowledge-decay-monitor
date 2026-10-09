@@ -5,6 +5,8 @@
 **Objetivo:** corregir los defectos del pipeline y demostrar el recorrido completo prometido en local, Preview y Production.
 **Base de revisión:** cambios posteriores a `cc844063f23c0e84a8499e58263a823f153e800b`, hasta `4beab01032f836da5aaf40e02f75d5089d587089` en `develop`.
 
+**Actualización de runtime, 2026-10-09:** la decisión de HTTP/Edge, presupuesto de 50 segundos y recuperación manual queda sustituida por el [diseño de ingesta durable](2026-10-09-durable-ingestion-design.md), autorizado mediante la solicitud de implementación. El resto de criterios de este documento se conserva; no interpretar las cifras históricas siguientes como configuración actual.
+
 ## 1. Fuentes y decisiones aprobadas
 
 Este documento complementa los [tickets S1-01 a S1-08](../../Tickets/tickets.md), el [PRD](../../PRD/knowledge-decay-monitor-prd-final.md), la [arquitectura](../../architecture/arquitectura-base.md), [ADR-001](../../architecture/adr/ADR-001-monolito-modular.md) y el [protocolo del Día Cero](../../architecture/day-zero-protocol.md). La [especificación S1-04](2026-10-06-s1-04-processing-spec.md) aporta el pipeline existente. El [corte S1-08](../../testing/s1-08-cutover.md) aporta el mecanismo de despliegue; sus inventarios históricos deben verificarse antes de ejecutar operaciones remotas.

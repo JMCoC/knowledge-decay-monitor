@@ -1,69 +1,86 @@
-# Primer vertical — reporte de aceptación
+# Primer vertical — aceptación del runtime durable
 
-Fecha de corte del reporte: 2026-10-09. Rama `fix/adjustment_vertical_slice`; el código de Task 6 todavía tiene cambios locales sin commit. SHA base actual: `363fe8af9625e335638f0bdbff420f6af19984b2`.
+Fecha: 2026-10-09. Rama `fix/adjustment_vertical_slice`. El [diseño durable](../superpowers/specs/2026-10-09-durable-ingestion-design.md) y [ADR-002](../architecture/adr/ADR-002-durable-ingestion-worker.md) sustituyen el runtime HTTP/Edge que agotaba CPU.
 
-**Veredicto: abierto. No ejecutar corte remoto ni declarar el vertical terminado.** El recorrido E2E completo quedó en 31/33. Fallaron documentos de nueve y 32 chunks y la recuperación de una lease de 32 chunks. La política aprobada mantiene una llamada por texto y concurrencia máxima dos por intento; no se ha cambiado modelo, límite, timeout ni reintentos para ocultar el resultado.
+**Veredicto: aplicación, base local y recorridos E2E verificados; falta validar la imagen final del worker.** Su build local falló al descargar un paquete de npm por timeout, así que no se ejecutó el smoke de imagen. La aceptación remota requiere las siete migraciones, worker persistente y recorridos reales en Preview/Production. No hubo push, apertura de PR, merge, deployment ni escrituras remotas durante esta implementación.
 
-## Evidencia local
+## Evidencia local del candidato
 
-| Área | Resultado | Alcance y límite |
+| Control | Resultado | Alcance |
 |---|---|---|
-| Unit tests | 464/464 | Incluye parser/chunker reales, límites, dispatch, presupuesto, fencing y errores. |
-| SQL local | 236/236 | Supabase local; sin reset de la base. |
-| Integración local | 20/20 | 14 archivos, limpieza sintética y modo upload restaurado a `active`. |
-| TypeScript y tipos | `typecheck` y comparación de tipos generados pasan | El esquema local incluye las migraciones nuevas. |
-| ESLint | Archivos modificados pasan | El lint global encontró cuatro errores `require()` en el artefacto ignorado `.artifacts/vertical-audit/probes.cjs` y warnings ajenos; el artefacto no se modificó. |
-| Build | Build de producción pasa | Ejecutado contra el código de aplicación actual. |
-| E2E completo | **31/33; falla** | Nueve y 32 chunks terminan `processing_failed`; la recuperación tras caída del runtime tampoco vuelve a `ready` en la ejecución completa. El runtime registró respuestas HTTP 546 / `WORKER_LIMIT`. |
-| E2E focalizados | Pasa para formatos base, lote de diez, archivo de 10 MiB con fallo controlado, URL firmada expirada a 300 s y recuperación aislada tras caída | La recuperación aislada no reemplaza la suite completa: el mismo recorrido falla bajo carga de la suite. |
-| Warm-up local | 8 muestras, concurrencia máxima 2, 4.168 ms; una ejecución pasó | No demuestra estabilidad para documentos de múltiples chunks ni bajo la suite completa. |
+| Unit | 410/410 (57 archivos) | Embeddings, parsers, límites, sesión, cola, reconciliación y watchdog. |
+| SQL | 263/263 (11 archivos) | Privilegios/RLS, enqueue, capacidad, heartbeat, reclaim, intentos, activación e incompatibilidad con CAS antiguo. |
+| Integración | 23/23 (15 archivos) | Auth/PostgREST/Storage, worker real, carrera de finalización y espera acotada de enqueue bajo contención. |
+| Tipos SQL | Pasa | Tipos generados coinciden con las 21 migraciones locales aplicadas. |
+| TypeScript | Pasa | Incluye tipos de rutas Next. El SDK de Sentry mostró su aviso de instrumentación de navegación. |
+| Lint | 0 errores, 4 warnings | Warnings `no-unused-vars` en tres archivos de tests. |
+| Build web | Pasa | Build de producción Next.js. |
+| E2E completo | 33/33, 1 worker | Auth, formatos, 9/32/500 chunks, lotes, retry, crash/reclaim, roles, URLs de 300 s y Storage real. |
+| Imagen final | No verificada | `docker build` se detuvo después de 1930 s al expirar la descarga de `@sentry/browser-utils@10.75.0`; smoke de imagen pendiente. |
+| Fixtures HTTP | Pasa | Auth, aislamiento REST y URLs Storage firmadas/denegadas. |
+| Recovery tras restart | Pasa | Template local y datos Auth disponibles después de reiniciar el stack; usuario sintético eliminado. |
 
-La suite completa sí deja evidencia útil de Auth, aislamiento, UI, apertura de originales, límites y upload por lote. No compensa los fallos de aceptación de embeddings. El modo `upload_control` local quedó `active`; no se eliminó información local ni los datos ajenos.
+Los checks locales usan el stack local y datos sintéticos; no se hizo reset. Las suites restauran el modo upload que encontraron y eliminan sus documentos/originales/usuarios propios. No se eliminaron datos ajenos.
 
-## Inventario remoto, 2026-10-09
+## Recorridos y límites que se verifican
 
-| Área | Observación | Estado para aceptación |
-|---|---|---|
-| Migraciones | Remoto hasta `20261003214934`; local hasta `20261009024913`. El dry-run lista `20261006172303_finish_processing`, `20261009024630_first_vertical_processing_guard` y `20261009024913_first_vertical_repository_lease_read`. | Pendiente. Ninguna migración remota fue aplicada. |
-| Edge Functions | No hay funciones desplegadas; falta `embed`. | Pendiente. |
-| Datos | `upload_control=active`; 4 documentos y 4 versiones `confirmed/uploaded`; 0 `processing`, 0 `processing_failed`, 0 `ready`, 0 punteros activos. | Preservar; no procesados ni modificados durante este inventario. |
-| Vercel | Proyecto `knowledge-decay-monitor`; deployment más reciente `dpl_Cpb8gEASzBBe16WcH3ZMArc4Tw1R` está `READY`, pero la respuesta no confirma `target` ni corresponde al SHA candidato de esta rama. | No es evidencia de aceptación ni rollback compatible confirmado. |
-| Configuración Vercel | `INGESTION_INTERNAL_TOKEN` no aparece en Preview ni Production. URL/publishable key y `SUPABASE_SERVICE_ROLE_KEY` sí aparecen en ambos targets. `APP_ORIGIN` aparece en Production y Preview restringido a `develop`; el workflow calcula e inyecta el origen del PR. `SENTRY_AUTH_TOKEN` y `NEXT_PUBLIC_SENTRY_DSN` aparecen en Preview/Production. | Provisionar token interno antes del nuevo deployment. Verificar overrides y callback del PR. No se leyeron valores. |
-| GitHub | `main` y `develop`: sin required status checks; rulesets vacíos. `enforce_admins` activo; main requiere una aprobación y develop ninguna. | Falta exigir el check `Quality gates` conservando protecciones actuales. |
-| Auth remoto | No se ejecutó recuperación por correo contra los dominios Preview/Production. | Pendiente; requiere buzón controlado y callback exacto. |
-| Sentry | El runner local desactiva Sentry. No se validó recepción persistida en `development`, `vercel-preview` ni `vercel-production`. | Pendiente; requiere evento real, correlation ID, environment y release SHA. |
+- Registro, bootstrap Admin, interrupción de onboarding, login/logout, recovery en otro browser y denegación anónima/Member.
+- Upload de PDF textual, DOCX y Markdown hasta Ready con vectores finitos de 384 dimensiones, índices consecutivos, v1 activa, puntero, categoría/owner y original/hash conservados. Casos de 9 y 32 chunks y lote de diez documentos de 32 chunks.
+- Recuperación automática después de matar el worker mientras procesa un documento de 500 chunks: lease real de 180s, nuevo intento, 500 chunks únicos, operación anterior rechazada y Ready visible sin Retry manual.
+- Confirmación sin worker conserva Queued; arranque consume la cola. Retry Admin/QA Lead conserva documento/versión/original; contenido inválido termina controladamente con cero chunks/puntero.
+- Un enqueue concurrente espera un lock global retenido 1,5s, sin fallar con `55P03`; el timeout sigue acotado a cinco segundos.
+- Archivo de 10 MiB transferido directamente a Storage; los POST de Next llevan metadatos. Más de diez archivos o más de 10 MiB se rechazan. Un original de 10 MiB que excede 500 chunks puede terminar processing_failed: límite de bytes y límite de contenido son distintos.
+- Upload incompleto recuperado por otra QA del mismo workspace; otro workspace/Member no accede a documentos, chunks, versiones ni originales. Owner no concede permisos.
+- Filtros, búsqueda por nombre, paginación, versiones no activas, apertura y URL firmada vencida tras 300s con nueva URL emitida por UI.
 
-No se ejecutaron escrituras remotas, migraciones, deploy de función, cambios de variables/protecciones, promoción, pausa de uploads ni operaciones sobre los cuatro documentos. El inventario por MCP y el dry-run son lecturas; no prueban compatibilidad de runtime. Aún falta designar al responsable de la ventana e identificar un deployment anterior compatible por ID/SHA para rollback.
+La capacidad inicial es un trabajo global; los documentos de un lote esperan su turno. Un intento admite hasta 15min, con heartbeat de 30s y lease de 180s. Al abortar, el watchdog permite 10s de limpieza antes de forzar reinicio si una inferencia nativa sigue pendiente. El hosting debe reiniciar el proceso; un estado unhealthy de Docker no lo reinicia por sí solo.
 
-## Matriz de cierre
+## Diagnóstico preservado
 
-| Criterio | Estado | Evidencia que falta o condición |
-|---|---|---|
-| Registro, login, logout y roles en local | Parcialmente aprobado | Los E2E locales pasan; falta recorrido remoto en Preview y Production. |
-| Upload Markdown, DOCX y PDF textual | Parcialmente aprobado | Los recorridos focalizados pasan; repetir en Preview y Production. |
-| Nueve y 32 chunks con vectores completos | **Fallido** | La suite completa recibe `WORKER_LIMIT`; decidir una capacidad segura antes de cambiar implementación y repetir en frío/caliente. |
-| Lote de diez archivos y límite 10 MiB | Aprobado localmente | Diez versiones pequeñas llegan a `ready`; el archivo fuera de presupuesto falla sin chunks/puntero y conserva original. Falta remoto. |
-| Start/Retry, lease y caída del runtime | Parcialmente aprobado | Retry tras caída pasa aislado; falla al procesar 32 chunks en suite completa. Falta aceptación remota. |
-| Filtros, paginación y aislamiento entre tenants | Aprobado localmente | Suites locales pasan; repetir ambos sentidos en Preview y Production. |
-| Original y URL firmada de 300 s | Aprobado localmente | Apertura después de expiración con URL nueva pasa; falta remoto. |
-| CI completo del SHA candidato | **Fallido/no disponible** | No hay SHA candidato committeado para Task 6 y la ejecución local completa falla 2/33. |
-| Esquema/function en Supabase remoto | Pendiente | Tres migraciones y `embed` por desplegar tras superar los gates. |
-| Sentry real en tres entornos | Pendiente | Evento persistido y saneado con environment/release por entorno. |
-| Recuperación de los cuatro documentos remotos existentes | Pendiente | Revalidar IDs/estado y elegibilidad; aprobación operativa; procesar uno por uno y comprobar puntero/conteos sin crear versiones. |
-| Protecciones de integración | Pendiente | Exigir `Quality gates` en `main` y `develop`; verificar por GET. |
+La implementación anterior terminó 31/33 con HTTP 546/WORKER_LIMIT en Edge. Su warmup aislado no demostraba capacidad suficiente. Se conservó el modelo y se cambió la ejecución a ONNX en un worker persistente con cola SQL.
 
-## Advisories observados
+Durante la nueva aceptación, la aserción de upload reanudado omitía Queued y se corrigió. El caso de caída esperaba 240s: después de la lease de 180s solo dejaba 60s para 500 chunks; la consulta diagnóstica mostró reclaim y heartbeat vivo. La prueba ahora espera el límite real del diseño y registra la duración; no se aumentaron intentos ni se reemplazó inferencia por mocks. Un check de fixtures lanzado mientras E2E mantenía un documento sintético falló por conteo; se repite en serie tras la limpieza, sin modificar la aserción.
 
-Security Advisor reportó que `public.rls_auto_enable()` es `SECURITY DEFINER` y ejecutable por `anon` y `authenticated`, y que `public.bootstrap_workspace(text,text)` es ejecutable por `authenticated`. También reportó desactivada la protección de contraseñas filtradas. No se modificaron estas funciones ni la configuración de Auth; revisar intención y alcance antes de Production. Referencias: [anon puede ejecutar SECURITY DEFINER](https://supabase.com/docs/guides/database/database-linter?lint=0028_anon_security_definer_function_executable), [authenticated puede ejecutar SECURITY DEFINER](https://supabase.com/docs/guides/database/database-linter?lint=0029_authenticated_security_definer_function_executable) y [contraseñas filtradas](https://supabase.com/docs/guides/auth/password-security#password-strength-and-leaked-password-protection).
+En la ejecución E2E final, el assert del puntero comparaba versiones leídas después del procesamiento con documentos leídos antes. Se volvió a consultar los documentos tras alcanzar estados terminales; la repetición focalizada y la suite completa pasaron. El intento local de build de imagen expiró descargando una dependencia del registry; el job `Quality gates` conserva el build y smoke como gate del SHA que se publique.
 
-Performance Advisor reportó 9 claves foráneas sin índice y 2 índices sin uso. Son observaciones informativas; no se cambiaron índices como parte de esta aceptación.
+La revisión independiente detectó y se corrigieron el watchdog para una inferencia pendiente, la ejecución E2E serial, la URL vacía de worker:local, un bloque retirado y la codificación del runbook. La revisión estática no sustituye los resultados de runtime.
 
-## Siguientes gates
+## Reproducción
 
-1. Resolver la revisión de capacidad de embeddings sin cambiar silenciosamente la política aprobada. Hasta entonces, mantener fallida la fila de chunks y detener Task 8.
-2. Ejecutar de nuevo los E2E focalizados y la suite completa sobre el candidato; obtener CI verde y fijar su SHA.
-3. Configurar `INGESTION_INTERNAL_TOKEN` para Preview y Production por un canal secreto. Verificar project ref, publishable/service-role keys, origen por deployment, callbacks y buzón controlado sin escribir valores en el reporte.
-4. Aplicar las protecciones y migraciones remotas, desplegar `embed` con JWT verificado y aceptar Preview siguiendo el [runbook](./first-vertical-cutover.md). Si cualquier gate falla, no promover.
-5. Repetir la aceptación en Production; luego revisar y recuperar, solo con autorización operativa, las cuatro versiones existentes.
+Preparar Docker, dependencias congeladas y Supabase local según el protocolo; aplicar migraciones con `pnpm exec supabase migration up --local`, sin reset. Detener cualquier worker de desarrollo antes de las suites: integración y E2E administran el suyo. Ejecutar en serie las pruebas que comparten DB:
 
-El cierre requiere todas las filas aprobadas en el entorno correspondiente. Un build, deployment `READY`, suite parcial o historial de Día Cero no prueba el recorrido de extremo a extremo.
+```powershell
+pnpm typecheck
+pnpm lint
+pnpm test:unit
+pnpm test:db
+pnpm check:database-types
+pnpm test:fixtures
+pnpm test:integration
+node scripts/with-local-supabase.mjs build
+docker build -f Dockerfile.ingestion -t kdm-ingestion:verified .
+$env:KDM_WORKER_IMAGE = 'kdm-ingestion:verified'
+pnpm test:worker:image
+pnpm test:e2e:local
+pnpm test:auth:restart
+```
+
+El smoke de imagen comparte únicamente el namespace de red del gateway local y usa URLs loopback. La clave de servicio se transmite por nombre de variable, sin argumentos/archivos ni logs. Las pruebas desactivan Sentry; no demuestran recepción real de eventos en el servicio.
+
+## Estado remoto y gates de PR/corte
+
+Inventario refrescado por MCP el 2026-10-09: proyecto `cdyjtoheovbvewewicaa`, 14 migraciones hasta `20261003214934`, upload activo, cuatro documentos confirmados/uploaded y cero punteros activos. Local tiene 21 migraciones aplicadas sin reset. No se procesaron ni alteraron los cuatro documentos remotos.
+
+| Gate remoto | Pendiente |
+|---|---|
+| PR/CI del SHA final | Publicar rama mediante el canal autorizado, draft PR hacia develop, revisión y Quality gates del SHA candidato. CI configurado no equivale a un run verde remoto. |
+| Supabase | Revisar/dry-run y aplicar las siete migraciones enumeradas en el runbook bajo la ventana acordada. No seed/reset. |
+| Worker | Elegir hosting persistente, publicar imagen por digest, credenciales privadas, restart automático y validar recursos/latencia/RSS allí. Presupuesto inicial de 2vCPU/2GiB sujeto a medición. |
+| Preview/Production | Coordinar DB/worker compatibles antes de habilitar despliegues automáticos; ejecutar formatos, lotes, Retry, caída, roles y originales en cada entorno. |
+| Auth | Callback/origen exactos y recovery por buzón controlado del dominio real. |
+| Sentry | Evento saneado persistido con correlation ID, environment y release en los tres entornos; ningún contenido ni URL firmada. |
+| Protecciones | Verificar y exigir Quality gates en main/develop, preservando revisores y protecciones existentes. |
+| Rollback | Identificar candidato web/worker durable compatible por SHA/digest; el runtime HTTP anterior no es compatible con el nuevo guard de finalización. Pausa y forward fix si no hay candidato compatible. |
+| Documentos históricos | Revalidar cuatro IDs y procesar uno por uno mediante Start/RPC autorizado después de aceptar el candidato, conservando IDs y original/hash. |
+
+El [runbook](first-vertical-cutover.md) contiene el orden exacto, comandos, controles y rollback; el [cuerpo del PR](first-vertical-pr.md) queda preparado. No hacen falta embed ni INGESTION_INTERNAL_TOKEN para este candidato. Las lecturas remotas y los inventarios anteriores de Vercel/GitHub no certifican configuración o funcionamiento actual del nuevo runtime.
