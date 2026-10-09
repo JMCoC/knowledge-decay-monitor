@@ -364,6 +364,7 @@ export type Database = {
           latest_analysis_status:
             | Database["public"]["Enums"]["analysis_status"]
             | null
+          latest_processing_started_at: string | null
           latest_processing_status:
             | Database["public"]["Enums"]["processing_status"]
             | null

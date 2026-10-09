@@ -15,6 +15,10 @@ select ok(not has_function_privilege('authenticated',
 select ok(not has_function_privilege('anon',
   'public.finish_processing(uuid,uuid,jsonb)', 'EXECUTE'),
   'anonymous callers cannot invoke finish_processing');
+select ok((select proconfig @> array[
+  'search_path=""', 'statement_timeout=2s', 'lock_timeout=1s'
+] from pg_proc where oid = 'public.finish_processing(uuid,uuid,jsonb)'::regprocedure),
+  'completion RPC uses an empty search path and bounded statement and lock timeouts');
 select is((select is_nullable from information_schema.columns
   where table_schema = 'public' and table_name = 'document_versions'
     and column_name = 'processing_operation_id'),
@@ -160,6 +164,36 @@ select throws_ok($$select public.finish_processing(
   '60000000-0000-4000-8000-0000000000d4'::uuid,
   (select jsonb_build_array(jsonb_build_object('chunk_index',0,'text_content','x','page_number',1,'section_heading','h','embedding','[1,' || repeat('0,',382) || '0]'))))$$,
   '22023', null, 'a stale operation id is rejected');
+
+-- A correct operation id is still fenced by the original claim deadline.
+update public.document_versions
+   set processing_started_at = clock_timestamp() - interval '51 seconds'
+ where id = '30000000-0000-4000-8000-0000000000c4';
+select throws_ok($$select public.finish_processing(
+  '30000000-0000-4000-8000-0000000000c4'::uuid,
+  '60000000-0000-4000-8000-0000000000c4'::uuid,
+  (select jsonb_build_array(jsonb_build_object('chunk_index',0,'text_content','late result','page_number',1,'section_heading','h','embedding','[1,' || repeat('0,',382) || '0]'))))$$,
+  '22023', null, 'a result after the 50-second claim deadline is rejected');
+select is((select count(*) from public.document_chunks
+  where version_id = '30000000-0000-4000-8000-0000000000c4'), 0::bigint,
+  'a late result inserts no chunks');
+select ok((select processing_status = 'processing' and version_status is null
+  from public.document_versions where id = '30000000-0000-4000-8000-0000000000c4'),
+  'a late result leaves the processing claim and inactive version intact');
+update public.document_versions
+   set processing_started_at = clock_timestamp()
+ where id = '30000000-0000-4000-8000-0000000000c4';
+select throws_ok($$select public.finish_processing(
+  '30000000-0000-4000-8000-0000000000c4'::uuid,
+  '60000000-0000-4000-8000-0000000000c4'::uuid,
+  (select jsonb_agg(jsonb_build_object(
+    'chunk_index',g.chunk_index,'text_content','synthetic chunk','page_number',1,
+    'section_heading','limit','embedding','[1,' || repeat('0,',382) || '0]'
+  ) order by g.chunk_index) from generate_series(0,500) as g(chunk_index)))$$,
+  '22023', null, 'more than 500 chunks are rejected');
+select is((select count(*) from public.document_chunks
+  where version_id = '30000000-0000-4000-8000-0000000000c4'), 0::bigint,
+  'over-limit chunk sets insert nothing');
 select throws_ok($$select public.finish_processing(
   '30000000-0000-4000-8000-0000000000c5'::uuid,
   '60000000-0000-4000-8000-0000000000c5'::uuid,

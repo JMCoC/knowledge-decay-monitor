@@ -2,6 +2,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set search_path = public, extensions;
 select no_plan();
+update private.upload_control set mode = 'paused', updated_at = now() where singleton;
 
 -- Seed private rows only for the duration of this rollback-only policy test.
 insert into public.document_upload_attempts(id, workspace_id, version_id, storage_path)

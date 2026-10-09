@@ -108,7 +108,7 @@ Conservar `runProcessing(versionId, operationId, operation = "process"): Promise
 **Consumes:** `finish_processing(uuid,uuid,jsonb)`, campos de claim y vista `repository_documents` existentes.
 **Produces:** misma RPC corregida y `latest_processing_started_at` añadido al final de la vista, conservando las columnas existentes.
 
-- [ ] **Step 1: Escribir primero las regresiones SQL y de concurrencia.** En 010 crear un caso con inicio hace 51 s y exigir `22023`, cero chunks y puntero nulo. Mantener los casos de vector inválido, índice duplicado y rollback. En 009 exigir columna nueva y `security_invoker=true`. Crear `createProcessingFixture({status, startedAt?})` que genere cuenta/workspace/documento/v1/attempt propios con upload confirmado y devuelva `{workspaceId, documentId, versionId, operationId, storagePath, chunks, service, dispose}`. `dispose` elimina solo sus rutas e IDs, documentos antes del workspace y finalmente su cuenta.
+- [x] **Step 1: Escribir primero las regresiones SQL y de concurrencia.** En 010 crear un caso con inicio hace 51 s y exigir `22023`, cero chunks y puntero nulo. Mantener los casos de vector inválido, índice duplicado y rollback. En 009 exigir columna nueva y `security_invoker=true`. Crear `createProcessingFixture({status, startedAt?})` que genere cuenta/workspace/documento/v1/attempt propios con upload confirmado y devuelva `{workspaceId, documentId, versionId, operationId, storagePath, chunks, service, dispose}`. `dispose` elimina solo sus rutas e IDs, documentos antes del workspace y finalmente su cuenta.
 
   El helper `openLocalSqlSession(applicationName)` valida loopback/project ID `knowledge-decay-monitor-s1-02`, descubre exactamente `supabase_db_knowledge-decay-monitor-s1-02` y usa `spawn("docker", ["exec", "-i", container, "psql", "-XAt", "-U", "postgres", "-d", "postgres"], {windowsHide:true})`. Expone `query(sql): Promise<string>`, `close()` y PID de sesión; usa marcadores propios, timeout de test y errores saneados. No imprime SQL ni credenciales. Dos sesiones transaccionales son suficientes: B puede observar la espera de A desde `pg_stat_activity` antes de confirmar.
 
@@ -144,9 +144,9 @@ Conservar `runProcessing(versionId, operationId, operation = "process"): Promise
 
   Definir `waitForSqlLock(observer, pid)` con polls acotados de `pg_stat_activity`, sin un sleep fijo que suponga el intercalado. Adjuntar handlers a ambas promises inmediatamente para evitar rechazos sin manejar. Los UUID y chunks anteriores son sintéticos, validados, sin comillas en su texto de fixture. El helper general usa parámetros psql o escapes SQL seguros para cualquier otro dato.
 
-- [ ] **Step 2: Ejecutar RED sobre el esquema anterior.** `npx pnpm@12.5.1 test:integration tests/integration/processing-completion.test.ts` y `npx pnpm@12.5.1 test:db`. Guardar solo nombres/estado del fallo: deadline y carrera deben reproducir el defecto; los fallos globales 003/006 se identifican por separado.
+- [x] **Step 2: Ejecutar RED sobre el esquema anterior.** `npx pnpm@12.5.1 test:integration tests/integration/processing-completion.test.ts` y `npx pnpm@12.5.1 test:db`. Guardar solo nombres/estado del fallo: deadline y carrera deben reproducir el defecto; los fallos globales 003/006 se identifican por separado.
 
-- [ ] **Step 3: Crear la migración y corregir la RPC.**
+- [x] **Step 3: Crear la migración y corregir la RPC.**
 
   ```powershell
   npx pnpm@12.5.1 exec supabase migration new first_vertical_processing_guard
@@ -174,9 +174,9 @@ Conservar `runProcessing(versionId, operationId, operation = "process"): Promise
 
   Recrear la vista copiando el SELECT y joins completos de `20261003150154_s1_02_repository_projection.sql`: añadir `v.processing_started_at` al SELECT lateral y, después de `latest.upload_state as latest_upload_state`, añadir `latest.processing_started_at as latest_processing_started_at`. Conservar `security_invoker=true`, GRANT y nombres/orden de todas las columnas previas; no eliminar/recrear la vista.
 
-- [ ] **Step 4: Hacer las pruebas SQL independientes de datos ajenos.** En 003 restringir las aserciones de conteos a los cuatro document IDs del seed y los tres chunk IDs `40000000-0000-4000-8000-000000000001`, `40000000-0000-4000-8000-000000000002`, `40000000-0000-4000-8000-000000000003`. La comprobación de punteros nulos usa los documentos `20000000-0000-4000-8000-000000000002` y `20000000-0000-4000-8000-000000000003`; debe seguir exigiendo dos. En 006 fijar `private.upload_control.mode='paused'` al comienzo de su transacción y conservar el rollback final. No cambiar el estado fuera de esa transacción ni reducir las expectativas.
+- [x] **Step 4: Hacer las pruebas SQL independientes de datos ajenos.** En 003 restringir las aserciones de conteos a los cuatro document IDs del seed y los tres chunk IDs `40000000-0000-4000-8000-000000000001`, `40000000-0000-4000-8000-000000000002`, `40000000-0000-4000-8000-000000000003`. La comprobación de punteros nulos usa los documentos `20000000-0000-4000-8000-000000000002` y `20000000-0000-4000-8000-000000000003`; debe seguir exigiendo dos. En 006 fijar `private.upload_control.mode='paused'` al comienzo de su transacción y conservar el rollback final. No cambiar el estado fuera de esa transacción ni reducir las expectativas.
 
-- [ ] **Step 5: Aplicar solo en local, regenerar y verificar GREEN.**
+- [x] **Step 5: Aplicar solo en local, regenerar y verificar GREEN.**
 
   ```powershell
   npx pnpm@12.5.1 exec supabase migration up --local
