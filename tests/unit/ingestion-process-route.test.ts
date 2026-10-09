@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   from: vi.fn(),
   update: vi.fn(),
   eq: vi.fn(),
+  is: vi.fn(),
   select: vi.fn(),
 }));
 
@@ -44,7 +45,7 @@ function request(
 }
 
 function mockCas(result: { data: unknown; error: unknown }) {
-  const chain = { eq: mocks.eq, select: mocks.select };
+  const chain = { eq: mocks.eq, is: mocks.is, select: mocks.select };
   mocks.from.mockReturnValue({ update: mocks.update });
   mocks.update.mockReturnValue({ eq: mocks.eq });
   mocks.eq.mockReturnValue(chain);
@@ -59,7 +60,9 @@ beforeEach(() => {
   mocks.from.mockReset();
   mocks.update.mockReset();
   mocks.eq.mockReset();
+  mocks.is.mockReset();
   mocks.select.mockReset();
+  mocks.is.mockReturnValue({ eq: mocks.eq, is: mocks.is, select: mocks.select });
   // Default: CAS claim succeeds.
   mockCas({ data: [{ processing_operation_id: OPERATION_ID }], error: null });
 });
@@ -138,6 +141,8 @@ describe("POST /api/ingestion/process CAS", () => {
     expect(mocks.eq).toHaveBeenCalledWith("id", VERSION_ID);
     expect(mocks.eq).toHaveBeenCalledWith("processing_status", "uploaded");
     expect(mocks.eq).toHaveBeenCalledWith("upload_state", "confirmed");
+    expect(mocks.eq).toHaveBeenCalledWith("version_number", 1);
+    expect(mocks.is).toHaveBeenCalledWith("version_status", null);
   });
 
   it("dispatches a preclaimed retry without attempting a second CAS claim", async () => {

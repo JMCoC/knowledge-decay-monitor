@@ -9,7 +9,7 @@ export type ProcessingRetryClaim =
   | { kind: "not_found" }
   | { kind: "conflict" };
 
-/** Atomically claims a failed version or a processing lease that has expired. */
+/** Atomically claims an uploaded v1, failed version, or expired processing lease. */
 export async function claimProcessingRetry(input: {
   workspaceId: string;
   versionId: string;
@@ -36,6 +36,7 @@ export async function claimProcessingRetry(input: {
     return { kind: "conflict" };
   }
 
+  const uploaded = version.processing_status === "uploaded";
   const failed = version.processing_status === "processing_failed";
   const staleProcessing =
     version.processing_status === "processing" &&
@@ -43,7 +44,7 @@ export async function claimProcessingRetry(input: {
     typeof version.processing_started_at === "string" &&
     Number.isFinite(Date.parse(version.processing_started_at)) &&
     Date.parse(version.processing_started_at) < Date.parse(staleBefore);
-  if (!failed && !staleProcessing) return { kind: "conflict" };
+  if (!uploaded && !failed && !staleProcessing) return { kind: "conflict" };
 
   let claim = service
     .from("document_versions")

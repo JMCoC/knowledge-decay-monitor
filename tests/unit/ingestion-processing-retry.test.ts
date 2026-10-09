@@ -69,6 +69,24 @@ beforeEach(() => {
 });
 
 describe("claimProcessingRetry", () => {
+  it("claims a confirmed, unactivated uploaded v1 for its first processing attempt", async () => {
+    mocks.readResult = { data: version({ processing_status: "uploaded" }), error: null };
+
+    const result = await claimProcessingRetry({
+      workspaceId: WORKSPACE_ID,
+      versionId: VERSION_ID,
+      operationId: NEW_OPERATION_ID,
+      now: NOW,
+    });
+
+    expect(result).toEqual({ kind: "claimed", operationId: NEW_OPERATION_ID });
+    expect(mocks.calls).toContainEqual(["eq", "processing_status", "uploaded"]);
+    expect(mocks.calls).toContainEqual(["eq", "upload_state", "confirmed"]);
+    expect(mocks.calls).toContainEqual(["eq", "version_number", 1]);
+    expect(mocks.calls).toContainEqual(["is", "version_status", null]);
+    expect(mocks.calls).not.toContainEqual(["eq", "processing_operation_id", OLD_OPERATION_ID]);
+  });
+
   it("claims only a confirmed, unactivated v1 and scopes the CAS to the workspace", async () => {
     const result = await claimProcessingRetry({
       workspaceId: WORKSPACE_ID,
@@ -101,9 +119,8 @@ describe("claimProcessingRetry", () => {
     expect(mocks.updated).toBe(false);
   });
 
-  it("does not claim states other than processing_failed or an expired processing lease", async () => {
+  it("does not claim states other than uploaded, processing_failed or an expired processing lease", async () => {
     for (const invalid of [
-      { processing_status: "uploaded" },
       { processing_status: "ready" },
       { processing_status: "processing", processing_operation_id: OLD_OPERATION_ID, processing_started_at: NOW.toISOString() },
       { processing_status: "processing", processing_operation_id: null, processing_started_at: "2026-10-07T11:00:00.000Z" },

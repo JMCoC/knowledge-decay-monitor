@@ -81,6 +81,8 @@ export async function POST(request: Request): Promise<Response> {
         .eq("id", versionId)
         .eq("processing_status", "uploaded")
         .eq("upload_state", "confirmed")
+        .eq("version_number", 1)
+        .is("version_status", null)
         .select("processing_operation_id");
       if (error) throw error;
       if (!data?.some((row) => row.processing_operation_id === claimedOperationId)) {

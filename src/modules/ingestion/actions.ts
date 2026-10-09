@@ -14,7 +14,7 @@ import type {
 } from "@/types/contracts";
 import { after } from "next/server";
 import { createServiceClient } from "@/lib/supabase/service";
-import { getAppOrigin } from "@/lib/app-origin";
+import { reportProcessingFailure } from "@/lib/observability/processing-failure.server";
 import {
   computeRequestFingerprint,
   finalizeUploadRecord,
@@ -33,6 +33,11 @@ import {
 } from "./schemas";
 import { actionCodeForSqlstate, extensionFromFileName } from "./validation";
 import { captureOperationFailure } from "@/lib/observability/operation-events";
+import {
+  dispatchProcessing,
+  resolveProcessingDispatchConfig,
+  type ProcessingDispatchConfig,
+} from "./processing-dispatch";
 
 const GENERIC_OWNER_MESSAGE = "The selected owner is not available.";
 const GENERIC_UPLOAD_MESSAGE = "This file cannot be uploaded.";
@@ -102,6 +107,21 @@ function isFailure(value: Actor | FailedResult): value is FailedResult {
   return "ok" in value;
 }
 
+async function reportProcessingDispatchFailure(
+  operation: "process" | "retry",
+  versionId: string,
+): Promise<string> {
+  const correlationId = crypto.randomUUID();
+  await reportProcessingFailure({
+    module: "ingestion",
+    operation,
+    code: "PERSISTENCE_FAILED",
+    correlationId,
+    versionId,
+  }, 500);
+  return correlationId;
+}
+
 /**
  * Dispatches the S1-04 worker exactly when a confirmed version is still
  * waiting (`uploaded`). The snapshot carries no `processing_status`, so the
@@ -114,31 +134,38 @@ async function scheduleProcessingIfUploaded(
   versionId: string,
 ): Promise<void> {
   if (uploadState !== "confirmed") return;
-  const service = createServiceClient();
-  const { data } = await service
-    .from("document_versions")
-    .select("processing_status")
-    .eq("id", versionId)
-    .single();
-  if (data?.processing_status !== "uploaded") return;
-  const token = process.env.INGESTION_INTERNAL_TOKEN;
-  if (!token) return;
-  let origin: string | null = null;
+  let data: { processing_status: string | null } | null;
+  let error: unknown;
   try {
-    origin = getAppOrigin();
+    const result = await createServiceClient()
+      .from("document_versions")
+      .select("processing_status")
+      .eq("id", versionId)
+      .single();
+    data = result.data;
+    error = result.error;
   } catch {
-    origin = null;
+    await reportProcessingDispatchFailure("process", versionId);
+    return;
   }
-  if (!origin) return;
-  after(() => {
-    void fetch(`${origin}/api/ingestion/process`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-internal-token": token,
-      },
-      body: JSON.stringify({ versionId }),
-    });
+  if (error) {
+    await reportProcessingDispatchFailure("process", versionId);
+    return;
+  }
+  if (data?.processing_status !== "uploaded") return;
+  let config: ProcessingDispatchConfig;
+  try {
+    config = resolveProcessingDispatchConfig();
+  } catch {
+    await reportProcessingDispatchFailure("process", versionId);
+    return;
+  }
+  after(async () => {
+    try {
+      await dispatchProcessing({ versionId, operation: "process" }, config);
+    } catch {
+      await reportProcessingDispatchFailure("process", versionId);
+    }
   });
 }
 
@@ -331,13 +358,12 @@ export async function retryProcessing(
   const actor = await documentActor("retry");
   if (isFailure(actor)) return actor;
 
-  const token = process.env.INGESTION_INTERNAL_TOKEN;
-  if (!token) return reportInternalFailure("retry", GENERIC_INTERNAL_MESSAGE);
-  let origin: string;
+  let dispatchConfig: ProcessingDispatchConfig;
   try {
-    origin = getAppOrigin();
+    dispatchConfig = resolveProcessingDispatchConfig();
   } catch {
-    return reportInternalFailure("retry", GENERIC_INTERNAL_MESSAGE);
+    const correlationId = await reportProcessingDispatchFailure("retry", versionId);
+    return failure("INTERNAL_ERROR", GENERIC_INTERNAL_MESSAGE, correlationId);
   }
 
   const operationId = crypto.randomUUID();
@@ -355,43 +381,56 @@ export async function retryProcessing(
       return failure("CONFLICT", "This version cannot be retried right now. Refresh and try again.");
     }
 
-    let response: Response;
+    let dispatchFailed = false;
     try {
-      response = await fetch(`${origin}/api/ingestion/process`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-internal-token": token,
-        },
-        body: JSON.stringify({ versionId, operationId, operation: "retry" }),
-      });
+      await dispatchProcessing({ versionId, operation: "retry", operationId }, dispatchConfig);
     } catch {
-      return reportInternalFailure("retry", GENERIC_INTERNAL_MESSAGE);
+      dispatchFailed = true;
     }
-    if (!response.ok) return reportInternalFailure("retry", GENERIC_INTERNAL_MESSAGE);
 
-    const { data: completed, error } = await createServiceClient()
+    const service = createServiceClient();
+    const { data: completed, error } = await service
       .from("document_versions")
-      .select("processing_status, processing_operation_id")
+      .select("processing_status, processing_operation_id, version_status, document_id")
       .eq("id", versionId)
       .eq("workspace_id", actor.workspaceId)
       .maybeSingle();
-    if (error) return reportInternalFailure("retry", GENERIC_INTERNAL_MESSAGE);
+    if (error) {
+      const correlationId = await reportProcessingDispatchFailure("retry", versionId);
+      return failure("INTERNAL_ERROR", GENERIC_INTERNAL_MESSAGE, correlationId);
+    }
     if (!completed) return failure("NOT_FOUND", "That version is not available.");
     if (completed.processing_status === "processing_failed") {
       return failure("PROCESSING_FAILED", "Processing failed. Review the document and try again.");
     }
     if (completed.processing_status === "ready") {
+      if (completed.version_status !== "active") {
+        const correlationId = await reportProcessingDispatchFailure("retry", versionId);
+        return failure("CONFLICT", "This version changed while retrying. Refresh and try again.", correlationId);
+      }
+      const { data: document, error: documentError } = await service
+        .from("documents")
+        .select("active_version_id")
+        .eq("id", completed.document_id)
+        .eq("workspace_id", actor.workspaceId)
+        .maybeSingle();
+      if (documentError || !document || document.active_version_id !== versionId) {
+        const correlationId = await reportProcessingDispatchFailure("retry", versionId);
+        return failure("CONFLICT", "This version changed while retrying. Refresh and try again.", correlationId);
+      }
       return { ok: true, data: { versionId, processingStatus: "ready" } };
     }
     if (
       completed.processing_status === "processing" &&
       completed.processing_operation_id === operationId
     ) {
+      if (dispatchFailed) await reportProcessingDispatchFailure("retry", versionId);
       return { ok: true, data: { versionId, processingStatus: "processing" } };
     }
+    if (dispatchFailed) await reportProcessingDispatchFailure("retry", versionId);
     return failure("CONFLICT", "This version changed while retrying. Refresh and try again.");
   } catch {
-    return reportInternalFailure("retry", GENERIC_INTERNAL_MESSAGE);
+    const correlationId = await reportProcessingDispatchFailure("retry", versionId);
+    return failure("INTERNAL_ERROR", GENERIC_INTERNAL_MESSAGE, correlationId);
   }
 }

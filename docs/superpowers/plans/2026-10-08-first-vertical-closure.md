@@ -301,7 +301,7 @@ Conservar `runProcessing(versionId, operationId, operation = "process"): Promise
 **Consumes:** `runProcessing` y captura segura de Task 3; contrato público `ActionResult` actual.
 **Produces:** dispatch acotado y `retryProcessing` válido para uploaded confirmado, fallo y lease vencida.
 
-- [ ] **Step 1: Añadir tests que observen la promise de after.** Cambiar el mock para almacenar el callback sin ejecutarlo inmediatamente. Probar callback pendiente mientras fetch está pendiente, rechazo controlado, HTTP 500/401, token/origen ausentes, fallo en relectura y upload exitoso inalterado. Añadir prueba de retry cuyo fetch falla después de que DB haya quedado `ready` y exigir resultado exitoso reconciliado.
+- [x] **Step 1: Añadir tests que observen la promise de after.** Cambiar el mock para almacenar el callback sin ejecutarlo inmediatamente. Probar callback pendiente mientras fetch está pendiente, rechazo controlado, HTTP 500/401, token/origen ausentes, fallo en relectura y upload exitoso inalterado. Añadir prueba de retry cuyo fetch falla después de que DB haya quedado `ready` y exigir resultado exitoso reconciliado.
 
   ```ts
   it("returns a promise from after and awaits dispatch", async () => {
@@ -318,9 +318,9 @@ Conservar `runProcessing(versionId, operationId, operation = "process"): Promise
   });
   ```
 
-- [ ] **Step 2: Ejecutar RED.** `npx pnpm@12.5.1 test:unit tests/unit/ingestion-scheduling.test.ts tests/unit/ingestion-retry-action.test.ts tests/unit/ingestion-processing-retry.test.ts tests/unit/ingestion-process-route.test.ts`.
+- [x] **Step 2: Ejecutar RED.** `npx pnpm@12.5.1 test:unit tests/unit/ingestion-scheduling.test.ts tests/unit/ingestion-retry-action.test.ts tests/unit/ingestion-processing-retry.test.ts tests/unit/ingestion-process-route.test.ts`.
 
-- [ ] **Step 3: Implementar el helper de dispatch y esperarlo.** Resolver token/origen desde configuración del servidor, timeout de 60 s compatible con handler de 90 s y worker de 50 s. Nunca leer `response.text()` para logs ni marcar `uploaded` como efecto de un fallo de red.
+- [x] **Step 3: Implementar el helper de dispatch y esperarlo.** Resolver token/origen desde configuración del servidor, timeout de 60 s compatible con handler de 90 s y worker de 50 s. Nunca leer `response.text()` para logs ni marcar `uploaded` como efecto de un fallo de red.
 
   ```ts
   after(async () => {
@@ -335,7 +335,7 @@ Conservar `runProcessing(versionId, operationId, operation = "process"): Promise
 
   Enviar `operationId` solo para `retry`, conforme al schema del handler. Capturar fallos de configuración, lectura o HTTP como fallo seguro de procesamiento. El caller conserva el snapshot confirmado. Guardar una sola implementación del fetch interno y usarla también desde retry; no introducir una capa HTTP entre módulos.
 
-- [ ] **Step 4: Ampliar claim y reconciliar retry.** Añadir elegibilidad de `processing_status==='uploaded'` al claim actual con v1, confirmed y version_status NULL. Mantener CAS sobre estado observado y, para reclaim, ID e inicio vencido. Handler de process exige también v1 y estado funcional NULL. Reautorizar con sesión/Profile antes del claim; devolver NOT_FOUND para otro tenant y FORBIDDEN para Member. Siempre releer después del dispatch, incluso si se perdió la respuesta; devolver ready solo tras comprobar estado persistido coherente, processing solo para el ID propio y fallos/conflictos controlados en los demás casos.
+- [x] **Step 4: Ampliar claim y reconciliar retry.** Añadir elegibilidad de `processing_status==='uploaded'` al claim actual con v1, confirmed y version_status NULL. Mantener CAS sobre estado observado y, para reclaim, ID e inicio vencido. Handler de process exige también v1 y estado funcional NULL. Reautorizar con sesión/Profile antes del claim; devolver NOT_FOUND para otro tenant y FORBIDDEN para Member. Siempre releer después del dispatch, incluso si se perdió la respuesta; devolver ready solo tras comprobar estado persistido coherente, processing solo para el ID propio y fallos/conflictos controlados en los demás casos.
 
   ```ts
   const waiting = version.processing_status === "uploaded";
@@ -344,7 +344,9 @@ Conservar `runProcessing(versionId, operationId, operation = "process"): Promise
 
   Añadir en integración dos claims simultáneos sobre uploaded, failed y lease vencida; exactamente uno gana. Probar lease vigente y v1 ya activa denegadas, mismo ID de documento/versión/ruta y conteos sin duplicación.
 
-- [ ] **Step 5: Ejecutar GREEN.** Repetir los cuatro unitarios y `npx pnpm@12.5.1 test:integration tests/integration/processing-retry.test.ts`. Revisar que la respuesta HTTP 200 del handler no se trate como prueba de éxito del pipeline. Commit candidato: `fix(ingestion): await dispatch and recover confirmed pending versions`.
+- [x] **Step 5: Ejecutar GREEN.** Repetir los cuatro unitarios y `npx pnpm@12.5.1 test:integration tests/integration/processing-retry.test.ts`. Revisar que la respuesta HTTP 200 del handler no se trate como prueba de éxito del pipeline. Commit candidato: `fix(ingestion): await dispatch and recover confirmed pending versions`.
+
+  **Resultado Task 4:** 44/44 unit tests, `typecheck`, ESLint dirigido, la integración local focalizada (1 archivo/1 test) y `git diff --check` pasan. `upload_control.mode` estaba y sigue `active`. La suite quedó limitada al test de retry; no se modificó la configuración ni los datos remotos.
 
 ### Task 5: Start Processing y Retry visible para leases vencidas
 

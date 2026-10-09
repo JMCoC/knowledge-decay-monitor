@@ -4,6 +4,7 @@ vi.mock("server-only", () => ({}));
 
 const mocks = vi.hoisted(() => ({
   after: vi.fn(),
+  afterTasks: [] as Array<() => Promise<void> | void>,
   fetch: vi.fn(),
   getAppOrigin: vi.fn(),
   single: vi.fn(),
@@ -28,6 +29,10 @@ vi.mock("@/lib/supabase/service", () => ({
 
 vi.mock("@/lib/observability/operation-events", () => ({
   captureOperationFailure: mocks.captureOperationFailure,
+}));
+
+vi.mock("@/lib/observability/processing-failure.server", () => ({
+  reportProcessingFailure: (event: unknown) => mocks.captureOperationFailure(event),
 }));
 
 vi.mock("@/modules/identity", () => ({
@@ -68,8 +73,9 @@ function mockProcessingStatus(processingStatus: string | null) {
 
 beforeEach(() => {
   vi.stubEnv("INGESTION_INTERNAL_TOKEN", TOKEN);
+  mocks.afterTasks.length = 0;
   mocks.after.mockReset().mockImplementation((task: unknown) => {
-    (task as () => void)();
+    mocks.afterTasks.push(task as () => Promise<void> | void);
   });
   mocks.fetch.mockReset().mockResolvedValue(new Response(null, { status: 200 }));
   vi.stubGlobal("fetch", mocks.fetch);
@@ -90,14 +96,35 @@ describe("finalizeUpload processing scheduling", () => {
 
     expect(result).toEqual({ ok: true, data: snapshot("confirmed") });
     expect(mocks.after).toHaveBeenCalledTimes(1);
+    expect(mocks.fetch).not.toHaveBeenCalled();
+    await mocks.afterTasks[0]?.();
     expect(mocks.fetch).toHaveBeenCalledWith(
       `${ORIGIN}/api/ingestion/process`,
       {
         method: "POST",
         headers: { "content-type": "application/json", "x-internal-token": TOKEN },
         body: JSON.stringify({ versionId: VERSION_ID }),
+        signal: expect.any(AbortSignal),
       },
     );
+  });
+
+  it("returns the confirmed snapshot while after waits for the dispatch response", async () => {
+    let finish!: (response: Response) => void;
+    mocks.fetch.mockReturnValue(new Promise<Response>((resolve) => { finish = resolve; }));
+
+    const result = await finalizeUpload({ versionId: VERSION_ID, attemptId: ATTEMPT_ID });
+    expect(result).toEqual({ ok: true, data: snapshot("confirmed") });
+    expect(mocks.fetch).not.toHaveBeenCalled();
+
+    let settled = false;
+    const callback = mocks.afterTasks[0];
+    const pending = Promise.resolve(callback?.()).then(() => { settled = true; });
+    await vi.waitFor(() => expect(mocks.fetch).toHaveBeenCalledOnce());
+    expect(settled).toBe(false);
+    finish(new Response(null, { status: 200 }));
+    await pending;
+    expect(settled).toBe(true);
   });
 
   it("does not schedule when already processing", async () => {
@@ -108,6 +135,7 @@ describe("finalizeUpload processing scheduling", () => {
     expect(result).toEqual({ ok: true, data: snapshot("confirmed") });
     expect(mocks.after).not.toHaveBeenCalled();
     expect(mocks.fetch).not.toHaveBeenCalled();
+    expect(mocks.captureOperationFailure).not.toHaveBeenCalled();
   });
 
   it("does not schedule when processing already failed", async () => {
@@ -117,6 +145,52 @@ describe("finalizeUpload processing scheduling", () => {
 
     expect(result).toEqual({ ok: true, data: snapshot("confirmed") });
     expect(mocks.after).not.toHaveBeenCalled();
+    expect(mocks.captureOperationFailure).not.toHaveBeenCalled();
+  });
+
+  it("reports a processing-state reread failure without changing the confirmed snapshot", async () => {
+    mocks.single.mockResolvedValue({ data: null, error: { message: "private read failure" } });
+
+    const result = await finalizeUpload({ versionId: VERSION_ID, attemptId: ATTEMPT_ID });
+
+    expect(result).toEqual({ ok: true, data: snapshot("confirmed") });
+    expect(mocks.after).not.toHaveBeenCalled();
+    expect(mocks.fetch).not.toHaveBeenCalled();
+    expect(mocks.captureOperationFailure).toHaveBeenCalledWith(expect.objectContaining({
+      operation: "process",
+      code: "PERSISTENCE_FAILED",
+      versionId: VERSION_ID,
+    }));
+    expect(JSON.stringify(mocks.captureOperationFailure.mock.calls)).not.toContain("private read failure");
+  });
+
+  it.each([401, 500])("reports HTTP %i without changing the confirmed snapshot", async (status) => {
+    mocks.fetch.mockResolvedValue(new Response(null, { status }));
+
+    const result = await finalizeUpload({ versionId: VERSION_ID, attemptId: ATTEMPT_ID });
+    await mocks.afterTasks[0]?.();
+
+    expect(result).toEqual({ ok: true, data: snapshot("confirmed") });
+    expect(mocks.captureOperationFailure).toHaveBeenCalledWith(expect.objectContaining({
+      operation: "process",
+      code: "PERSISTENCE_FAILED",
+      versionId: VERSION_ID,
+    }));
+  });
+
+  it("reports a rejected fetch as a controlled failure after finalize succeeds", async () => {
+    mocks.fetch.mockRejectedValue(new Error("private network details"));
+
+    const result = await finalizeUpload({ versionId: VERSION_ID, attemptId: ATTEMPT_ID });
+    await mocks.afterTasks[0]?.();
+
+    expect(result).toEqual({ ok: true, data: snapshot("confirmed") });
+    expect(mocks.captureOperationFailure).toHaveBeenCalledWith(expect.objectContaining({
+      operation: "process",
+      code: "PERSISTENCE_FAILED",
+      versionId: VERSION_ID,
+    }));
+    expect(JSON.stringify(mocks.captureOperationFailure.mock.calls)).not.toContain("private network details");
   });
 
   it("does not schedule when already ready", async () => {
@@ -126,6 +200,7 @@ describe("finalizeUpload processing scheduling", () => {
 
     expect(result).toEqual({ ok: true, data: snapshot("confirmed") });
     expect(mocks.after).not.toHaveBeenCalled();
+    expect(mocks.captureOperationFailure).not.toHaveBeenCalled();
   });
 
   it("does not re-read the version when the upload is still pending", async () => {
@@ -155,6 +230,11 @@ describe("finalizeUpload processing scheduling", () => {
 
     expect(result).toEqual({ ok: true, data: snapshot("confirmed") });
     expect(mocks.after).not.toHaveBeenCalled();
+    expect(mocks.captureOperationFailure).toHaveBeenCalledWith(expect.objectContaining({
+      operation: "process",
+      code: "PERSISTENCE_FAILED",
+      versionId: VERSION_ID,
+    }));
     expect(mocks.fetch).not.toHaveBeenCalled();
   });
 
@@ -167,6 +247,11 @@ describe("finalizeUpload processing scheduling", () => {
 
     expect(result).toEqual({ ok: true, data: snapshot("confirmed") });
     expect(mocks.after).not.toHaveBeenCalled();
+    expect(mocks.captureOperationFailure).toHaveBeenCalledWith(expect.objectContaining({
+      operation: "process",
+      code: "PERSISTENCE_FAILED",
+      versionId: VERSION_ID,
+    }));
   });
 
   it("schedules exactly once across a double finalize once the claim lands", async () => {
@@ -176,6 +261,7 @@ describe("finalizeUpload processing scheduling", () => {
 
     const first = await finalizeUpload({ versionId: VERSION_ID, attemptId: ATTEMPT_ID });
     const second = await finalizeUpload({ versionId: VERSION_ID, attemptId: ATTEMPT_ID });
+    await mocks.afterTasks[0]?.();
 
     expect(first).toEqual({ ok: true, data: snapshot("confirmed") });
     expect(second).toEqual({ ok: true, data: snapshot("confirmed") });

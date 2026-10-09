@@ -18,8 +18,11 @@ const mocks = vi.hoisted(() => {
     IdentityError,
     claim: vi.fn(),
     capture: vi.fn(),
+    reportProcessingFailure: vi.fn(),
     maybeSingle: vi.fn(),
+    readCalls: [] as string[],
     fetch: vi.fn(),
+    getAppOrigin: vi.fn(),
   };
 });
 
@@ -32,17 +35,25 @@ vi.mock("@/modules/identity", () => ({
 }));
 vi.mock("@/lib/supabase/service", () => ({
   createServiceClient: () => {
-    const query = {
-      select: () => query,
-      eq: () => query,
-      maybeSingle: mocks.maybeSingle,
+    return {
+      from: (table: string) => {
+        const query = {
+          select: () => query,
+          eq: () => query,
+          maybeSingle: () => mocks.maybeSingle(table),
+        };
+        mocks.readCalls.push(table);
+        return query;
+      },
     };
-    return { from: () => query };
   },
 }));
-vi.mock("@/lib/app-origin", () => ({ getAppOrigin: () => "http://127.0.0.1:3000" }));
+vi.mock("@/lib/app-origin", () => ({ getAppOrigin: () => mocks.getAppOrigin() }));
 vi.mock("@/lib/observability/operation-events", () => ({
   captureOperationFailure: mocks.capture,
+}));
+vi.mock("@/lib/observability/processing-failure.server", () => ({
+  reportProcessingFailure: (...args: unknown[]) => mocks.reportProcessingFailure(...args),
 }));
 vi.mock("@/modules/ingestion/processing-retry", () => ({
   claimProcessingRetry: mocks.claim,
@@ -76,10 +87,19 @@ beforeEach(() => {
   mocks.identityError = null;
   mocks.claim.mockReset().mockResolvedValue({ kind: "claimed", operationId: OPERATION_ID });
   mocks.capture.mockReset();
-  mocks.maybeSingle.mockReset().mockResolvedValue({
-    data: { processing_status: "ready", processing_operation_id: null },
-    error: null,
-  });
+  mocks.reportProcessingFailure.mockReset();
+  mocks.readCalls.length = 0;
+  mocks.getAppOrigin.mockReset().mockReturnValue("http://127.0.0.1:3000");
+  mocks.maybeSingle.mockReset().mockImplementation((table: string) => Promise.resolve(
+    table === "documents"
+      ? { data: { active_version_id: VERSION_ID }, error: null }
+      : { data: {
+          processing_status: "ready",
+          processing_operation_id: null,
+          version_status: "active",
+          document_id: "20000000-0000-4000-8000-000000000010",
+        }, error: null },
+  ));
   mocks.fetch.mockReset().mockResolvedValue(Response.json({ status: "processing" }));
   vi.stubGlobal("fetch", mocks.fetch);
 });
@@ -103,7 +123,19 @@ describe("retryProcessing", () => {
       method: "POST",
       headers: { "content-type": "application/json", "x-internal-token": TOKEN },
       body: JSON.stringify({ versionId: VERSION_ID, operationId: OPERATION_ID, operation: "retry" }),
+      signal: expect.any(AbortSignal),
     });
+    expect(mocks.readCalls).toEqual(["document_versions", "documents"]);
+  });
+
+  it("reconciles a lost dispatch response against ready and active persisted state", async () => {
+    mocks.fetch.mockRejectedValue(new Error("private network failure after commit"));
+
+    const result = await retryProcessing(VERSION_ID);
+
+    expect(result).toEqual({ ok: true, data: { versionId: VERSION_ID, processingStatus: "ready" } });
+    expect(mocks.reportProcessingFailure).not.toHaveBeenCalled();
+    expect(mocks.readCalls).toEqual(["document_versions", "documents"]);
   });
 
   it("returns PROCESSING_FAILED when the real worker finishes in a failed state", async () => {
@@ -157,6 +189,16 @@ describe("retryProcessing", () => {
 
     expect(result).toMatchObject({ ok: false, error: { code: "INTERNAL_ERROR" } });
     expect(mocks.claim).not.toHaveBeenCalled();
+  });
+
+  it("does not claim if the trusted app origin cannot be resolved", async () => {
+    mocks.getAppOrigin.mockImplementation(() => { throw new Error("private origin details"); });
+
+    const result = await retryProcessing(VERSION_ID);
+
+    expect(result).toMatchObject({ ok: false, error: { code: "INTERNAL_ERROR" } });
+    expect(mocks.claim).not.toHaveBeenCalled();
+    expect(mocks.fetch).not.toHaveBeenCalled();
   });
 
   it("returns a conflict if another operation replaced the claimed one", async () => {

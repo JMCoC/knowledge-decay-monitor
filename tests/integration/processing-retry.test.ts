@@ -135,6 +135,22 @@ describe("local processing retry claim", () => {
       expect(staleClaims.filter((claim) => claim.kind === "claimed")).toHaveLength(1);
       expect(staleClaims.filter((claim) => claim.kind === "conflict")).toHaveLength(1);
 
+      const { error: restoreUploadedError } = await service.from("document_versions").update({
+        processing_status: "uploaded",
+        processing_operation_id: null,
+        processing_started_at: null,
+      }).eq("id", resolvedVersionId).eq("processing_status", "processing");
+      expect(restoreUploadedError).toBeNull();
+
+      const uploadedOperationA = randomUUID();
+      const uploadedOperationB = randomUUID();
+      const uploadedClaims = await Promise.all([
+        claimProcessingRetry({ workspaceId: resolvedWorkspaceId, versionId: resolvedVersionId, operationId: uploadedOperationA }),
+        claimProcessingRetry({ workspaceId: resolvedWorkspaceId, versionId: resolvedVersionId, operationId: uploadedOperationB }),
+      ]);
+      expect(uploadedClaims.filter((claim) => claim.kind === "claimed")).toHaveLength(1);
+      expect(uploadedClaims.filter((claim) => claim.kind === "conflict")).toHaveLength(1);
+
       const { count: documents, error: countError } = await service
         .from("documents")
         .select("id", { count: "exact", head: true })
