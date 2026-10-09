@@ -5,8 +5,8 @@ import { createServiceClient } from "@/lib/supabase/service";
 /** Frozen in Task 0: gte-small outputs 384 dims (local probe, HTTP 200). */
 export const EMBEDDING_DIMS = 384;
 
-/** Frozen in Task 0: 12+ texts per call trips the isolate CPU limit (HTTP 546). */
-export const EMBEDDING_BATCH_SIZE = 8;
+/** A processing version never contains more than this many chunks. */
+export const MAX_EMBEDDING_INPUTS = 500;
 
 export type EmbeddingErrorCode = "EMBEDDING_FAILED";
 
@@ -39,14 +39,16 @@ function toPgvector(vector: unknown): string {
 }
 
 /**
- * Embeds up to 8 chunk texts via the Task 0 Edge Function
- * (`supabase/functions/embed`, gte-small 384d). Returns one pgvector string
- * per input, in order. Never persists anything; validation failures and
- * provider failures both surface as `EmbeddingError("EMBEDDING_FAILED")`
- * so Task 5 can map them without leaking provider details.
+ * Embeds up to 500 chunk texts via the Edge Function (`gte-small`, 384d),
+ * one input per request and at most two requests in flight. Returns one
+ * pgvector string per input in order and never persists anything. Failures
+ * become `EmbeddingError("EMBEDDING_FAILED")` without provider details.
  */
-export async function embedBatch(texts: string[]): Promise<string[]> {
-  if (!Array.isArray(texts) || texts.length === 0 || texts.length > EMBEDDING_BATCH_SIZE) {
+export async function embedBatch(
+  texts: string[],
+  options: { signal?: AbortSignal; assertCanStart?: () => void } = {},
+): Promise<string[]> {
+  if (!Array.isArray(texts) || texts.length === 0 || texts.length > MAX_EMBEDDING_INPUTS) {
     throw new EmbeddingError();
   }
   for (const text of texts) {
@@ -55,24 +57,71 @@ export async function embedBatch(texts: string[]): Promise<string[]> {
     }
   }
 
-  let data: EmbedFunctionData | null;
+  const externalSignal = options.signal;
+  if (externalSignal?.aborted) throw new EmbeddingError();
+
+  const controller = new AbortController();
+  const abortFromExternal = () => controller.abort();
+  let nextIndex = 0;
+  const results = new Array<string>(texts.length);
+  let workers: Promise<void>[] = [];
+
   try {
-    const service = createServiceClient();
-    const { data: responseData, error } = await service.functions.invoke("embed", {
-      body: { inputs: texts },
-    });
-    if (error) {
+    externalSignal?.addEventListener("abort", abortFromExternal, { once: true });
+    if (externalSignal?.aborted) {
+      controller.abort();
       throw new EmbeddingError();
     }
-    data = (responseData ?? null) as EmbedFunctionData | null;
+
+    const service = createServiceClient();
+    const runWorker = async () => {
+      while (true) {
+        if (controller.signal.aborted || externalSignal?.aborted) throw new EmbeddingError();
+        const index = nextIndex;
+        if (index >= texts.length) return;
+        try {
+          options.assertCanStart?.();
+        } catch {
+          controller.abort();
+          throw new EmbeddingError();
+        }
+        if (controller.signal.aborted || externalSignal?.aborted) throw new EmbeddingError();
+        nextIndex += 1;
+
+        try {
+          const { data: responseData, error } = await service.functions.invoke("embed", {
+            body: { inputs: [texts[index] as string] },
+            signal: controller.signal,
+          });
+          if (controller.signal.aborted || externalSignal?.aborted) throw new EmbeddingError();
+          const data = (responseData ?? null) as EmbedFunctionData | null;
+          if (
+            error || data?.dims !== EMBEDDING_DIMS || !Array.isArray(data.embeddings)
+            || data.embeddings.length !== 1
+          ) {
+            throw new EmbeddingError();
+          }
+          results[index] = toPgvector(data.embeddings[0]);
+        } catch (error) {
+          controller.abort();
+          if (error instanceof EmbeddingError) throw error;
+          throw new EmbeddingError();
+        }
+      }
+    };
+
+    workers = Array.from({ length: Math.min(2, texts.length) }, () => runWorker());
+    await Promise.all(workers);
+    if (controller.signal.aborted || results.some((result) => typeof result !== "string")) {
+      throw new EmbeddingError();
+    }
+    return results;
   } catch (error) {
+    controller.abort();
+    await Promise.allSettled(workers);
     if (error instanceof EmbeddingError) throw error;
     throw new EmbeddingError();
+  } finally {
+    externalSignal?.removeEventListener("abort", abortFromExternal);
   }
-
-  const embeddings = data?.embeddings;
-  if (!Array.isArray(embeddings) || embeddings.length !== texts.length) {
-    throw new EmbeddingError();
-  }
-  return embeddings.map((vector) => toPgvector(vector));
 }

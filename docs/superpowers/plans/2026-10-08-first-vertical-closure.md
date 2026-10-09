@@ -194,7 +194,7 @@ Conservar `runProcessing(versionId, operationId, operation = "process"): Promise
 **Consumes:** textos de la versión y opciones de cancelación de las interfaces compartidas.
 **Produces:** un vector por entrada, en orden, o `EmbeddingError("EMBEDDING_FAILED")`; no persiste.
 
-- [ ] **Step 1: Sustituir la expectativa de rechazo de nueve por éxito completo.** Añadir out-of-order, concurrencia, señal preabortada, fallo del primer par sin iniciar todo el backlog, mismatch `dims`, respuestas vacías y 501 entradas rechazadas antes de invocar.
+- [x] **Step 1: Sustituir la expectativa de rechazo de nueve por éxito completo.** Añadir out-of-order, concurrencia, señal preabortada, fallo del primer par sin iniciar todo el backlog, mismatch `dims`, respuestas vacías y 501 entradas rechazadas antes de invocar.
 
   ```ts
   it("embeds 9 texts individually, at most two in flight, preserving order", async () => {
@@ -214,9 +214,9 @@ Conservar `runProcessing(versionId, operationId, operation = "process"): Promise
   });
   ```
 
-- [ ] **Step 2: Ejecutar RED.** `npx pnpm@12.5.1 test:unit tests/unit/ingestion-embeddings.test.ts`. Debe fallar por el rechazo de nueve o las llamadas con múltiples entradas; no aceptar un fallo de setup como evidencia.
+- [x] **Step 2: Ejecutar RED.** `npx pnpm@12.5.1 test:unit tests/unit/ingestion-embeddings.test.ts`. Debe fallar por el rechazo de nueve o las llamadas con múltiples entradas; no aceptar un fallo de setup como evidencia.
 
-- [ ] **Step 3: Implementar el adaptador con dos runners y resultados por índice.** Validar 1–500 strings, crear controller local enlazado a la señal recibida y comprobar `signal.aborted` antes de iniciar. No combinar un timeout del SDK con una señal ya abortada. La invocación es:
+- [x] **Step 3: Implementar el adaptador con dos runners y resultados por índice.** Validar 1–500 strings, crear controller local enlazado a la señal recibida y comprobar `signal.aborted` antes de iniciar. No combinar un timeout del SDK con una señal ya abortada. La invocación es:
 
   ```ts
   const { data, error } = await service.functions.invoke("embed", {
@@ -229,9 +229,11 @@ Conservar `runProcessing(versionId, operationId, operation = "process"): Promise
 
   Cada runner comprueba `assertCanStart` y aborto antes de incrementar el índice compartido. `Promise.all` tiene handlers para los dos runners; ante fallo abortar el controller y esperar su asentamiento acotado por señal, sin retornar un array parcial. Liberar listeners en `finally`. Mantener el error externo saneado y validar las 384 cifras finitas con el helper actual.
 
-- [ ] **Step 4: Actualizar warm-up y medir el runtime.** Reemplazar el request de ocho entradas por ocho requests de una entrada con máximo dos simultáneos, textos sintéticos de aproximadamente 1.800 caracteres y chequeo de 384 dimensiones finitas. Registrar solo conteo, duración y categoría de resultado; mantener la guardia de loopback y claves en memoria. Calentar el modelo es preparación de tests, no una prueba de cold start.
+- [x] **Step 4: Actualizar warm-up y medir el runtime.** Reemplazar el request de ocho entradas por ocho requests de una entrada con máximo dos simultáneos, textos sintéticos de aproximadamente 1.800 caracteres y chequeo de 384 dimensiones finitas. Registrar solo conteo, duración y categoría de resultado; mantener la guardia de loopback y claves en memoria. Calentar el modelo es preparación de tests, no una prueba de cold start.
 
-- [ ] **Step 5: Ejecutar GREEN y medición real.** `npx pnpm@12.5.1 test:unit tests/unit/ingestion-embeddings.test.ts`; servir únicamente `embed` durante la medición y ejecutar `node scripts/warm-local-embed.mjs`. Probar también la primera invocación en frío cuando el runtime sea propio/descartable; no reiniciar un runtime ajeno. Si aparece 546 con la política nueva, documentar el resultado y bloquear la aceptación, sin subir el timeout o cambiar modelo. Commit candidato: `fix(ingestion): embed every chunk with bounded concurrency`.
+- [x] **Step 5: Ejecutar GREEN y medición real.** `npx pnpm@12.5.1 test:unit tests/unit/ingestion-embeddings.test.ts`; servir únicamente `embed` durante la medición y ejecutar `node scripts/warm-local-embed.mjs`. Probar también la primera invocación en frío cuando el runtime sea propio/descartable; no reiniciar un runtime ajeno. Si aparece 546 con la política nueva, documentar el resultado y bloquear la aceptación, sin subir el timeout o cambiar modelo. Commit candidato: `fix(ingestion): embed every chunk with bounded concurrency`.
+
+  **Resultado:** tests 13/13 y typecheck pasan. La petición individual representativa respondió 200; la medición con concurrencia 2 devolvió HTTP 546 (`WORKER_LIMIT`) y el Edge Runtime registró agotamiento de CPU. Aceptación de extremo a extremo bloqueada hasta resolver capacidad del worker.
 
 ### Task 3: Presupuesto desde el claim y cierre reconciliado
 
