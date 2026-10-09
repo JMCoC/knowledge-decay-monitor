@@ -213,13 +213,7 @@ export async function finalizeUpload(input: {
   if (isFailure(actor)) return actor;
   try {
     const snapshot = await finalizeUploadRecord(actor.userId, parsed.data.versionId, parsed.data.attemptId);
-    // Best-effort scheduling: finalization already succeeded, so nothing
-    // here may change the snapshot — any scheduling failure stays silent.
-    try {
-      // Confirmation and durable enqueue commit together in PostgreSQL.
-    } catch {
-      // Silent. The CAS in the route serializes any duplicate dispatch.
-    }
+    // Confirmation and durable enqueue commit together in PostgreSQL.
     return { ok: true, data: snapshot };
   } catch (error) {
     const denied = identityFailure(error);

@@ -3,12 +3,13 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { createServiceClient } from "../src/lib/supabase/service";
 import { loadEmbeddingModel } from "../src/modules/ingestion/worker/model";
 import { processJob } from "../src/modules/ingestion/worker/process-job";
+import { watchAttempt } from "../src/modules/ingestion/worker/attempt-watchdog";
 import { initWorkerTelemetry, reportWorkerFailure, flushWorkerTelemetry } from "../src/modules/ingestion/worker/telemetry";
 
 /** Standalone entry; service credentials never enter arguments, URLs, logs or artifacts. */
 async function main() {
   initWorkerTelemetry();
-  process.env.NEXT_PUBLIC_SUPABASE_URL = process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL;
+  process.env.NEXT_PUBLIC_SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
   const port = Number(process.env.INGESTION_WORKER_PORT ?? "8788");
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("INVALID_CONFIG");
   const service = createServiceClient();
@@ -44,6 +45,10 @@ async function main() {
         if (!job) { await sleep(1_000, undefined, { signal: shutdown.signal }); continue; }
         const lease = new AbortController();
         const signal = AbortSignal.any([shutdown.signal, lease.signal, AbortSignal.timeout(15 * 60_000)]);
+        const stopWatchdog = watchAttempt(signal, () => {
+          // Shutdown owns its exit0 timer; a stalled attempt otherwise requests restart.
+          if (!shutdown.signal.aborted) process.exit(1);
+        });
         let heartbeatBusy = false;
         const heartbeat = setInterval(async () => {
           if (heartbeatBusy || signal.aborted) return;
@@ -61,7 +66,7 @@ async function main() {
           const outcome = await processJob(job, service, model.infer, signal);
           if(outcome==="queued" || outcome==="failed" || outcome==="uncertain") reportWorkerFailure(job.version_id,outcome==="uncertain");
           console.info(JSON.stringify({ event: "ingestion_job_finished", versionId: job.version_id, outcome }));
-        } finally { clearInterval(heartbeat); }
+        } finally { clearInterval(heartbeat); stopWatchdog(); }
       } catch {
         if (!shutdown.signal.aborted) {
           console.error(JSON.stringify({ event: "ingestion_worker_poll_failed" }));
