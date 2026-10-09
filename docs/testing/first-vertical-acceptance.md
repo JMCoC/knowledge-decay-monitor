@@ -16,6 +16,7 @@ Fecha: 2026-10-09. Rama `fix/adjustment_vertical_slice`. El [diseño durable](..
 | Lint | 0 errores, 4 warnings | Warnings `no-unused-vars` en tres archivos de tests. |
 | Build web | Pasa | Build de producción Next.js. |
 | E2E completo | 33/33, 1 worker | Auth, formatos, 9/32/500 chunks, lotes, retry, crash/reclaim, roles, URLs de 300 s y Storage real. |
+| Flujo vertical sobre esquema final | 1/1, 35,8 s | Tras aplicar la migración de espera acotada: PDF/DOCX/Markdown, 9/32 chunks, archivo inválido, límite de 500, persistencia y reapertura. |
 | Imagen final | No verificada | `docker build` se detuvo después de 1930 s al expirar la descarga de `@sentry/browser-utils@10.75.0`; smoke de imagen pendiente. |
 | Fixtures HTTP | Pasa | Auth, aislamiento REST y URLs Storage firmadas/denegadas. |
 | Recovery tras restart | Pasa | Template local y datos Auth disponibles después de reiniciar el stack; usuario sintético eliminado. |
@@ -44,6 +45,8 @@ Durante la nueva aceptación, la aserción de upload reanudado omitía Queued y 
 En la ejecución E2E final, el assert del puntero comparaba versiones leídas después del procesamiento con documentos leídos antes. Se volvió a consultar los documentos tras alcanzar estados terminales; la repetición focalizada y la suite completa pasaron. El intento local de build de imagen expiró descargando una dependencia del registry; el job `Quality gates` conserva el build y smoke como gate del SHA que se publique.
 
 La revisión independiente detectó y se corrigieron el watchdog para una inferencia pendiente, la ejecución E2E serial, la URL vacía de worker:local, un bloque retirado y la codificación del runbook. La revisión estática no sustituye los resultados de runtime.
+
+La suite E2E 33/33 precede a `20261009134833_enqueue_lock_budget.sql`; después de aplicarla, el flujo vertical completo de formatos y límites se volvió a ejecutar y pasó 1/1. La integración 23/23 posterior también prueba directamente la espera concurrente de 1,5 segundos.
 
 ## Reproducción
 
