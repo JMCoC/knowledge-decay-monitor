@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 
 test.describe("observability diagnostics guard", () => {
   test("does not render diagnostic controls for an unauthenticated visitor", async ({ page }) => {

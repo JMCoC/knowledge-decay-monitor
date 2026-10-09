@@ -5,6 +5,7 @@ import type { Database } from "../../src/types/database";
 import {
   assertLocalSupabaseReady,
   cleanupLocalUser,
+  getLocalUploadMode,
   insertLocalProfile,
   newLocalUser,
   setLocalUploadMode,
@@ -39,12 +40,15 @@ function reference(bytes: Uint8Array) {
 }
 
 describe("same-workspace cross-user upload recovery", () => {
+  let previousUploadMode: "paused" | "active";
+
   beforeAll(async () => {
     await assertLocalSupabaseReady();
+    previousUploadMode = getLocalUploadMode();
     setLocalUploadMode("active");
   });
 
-  afterAll(() => setLocalUploadMode("paused"));
+  afterAll(() => setLocalUploadMode(previousUploadMode));
 
   it("allows same-workspace QA, hides foreign versions, and rejects mismatched bytes before Storage", async () => {
     const admin = await newLocalUser();

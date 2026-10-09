@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import type { Database } from "../../src/types/database";
-import { cleanupLocalUser, newLocalUser } from "./local-supabase";
+import { cleanupLocalUser, newLocalUser, seedLocalProcessingClaim } from "./local-supabase";
 
 const LOCAL_API_URL = "http://127.0.0.1:54321";
 const FIXTURE_TEXT = "# Synthetic processing fixture\n\nA valid local test document.\n";
@@ -129,6 +129,8 @@ export async function createProcessingFixture(input: {
       upsert: false,
     });
     requireNoError(uploadError, "canonical original upload");
+
+    seedLocalProcessingClaim(versionId, operationId, input.startedAt ?? new Date().toISOString());
 
     return {
       workspaceId: resolvedWorkspaceId,

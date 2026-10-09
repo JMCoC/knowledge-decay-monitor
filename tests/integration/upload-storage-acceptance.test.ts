@@ -9,6 +9,7 @@ import {
   cleanupLocalUser,
   expireLocalRecoveryLease,
   expireLocalVerificationLease,
+  getLocalUploadMode,
   insertLocalProfile,
   newLocalUser,
   setLocalUploadMode,
@@ -53,12 +54,15 @@ function runLocalAttemptCleanup(mode: "inspect" | "apply") {
 }
 
 describe("real local Storage upload acceptance", () => {
+  let previousUploadMode: "paused" | "active";
+
   beforeAll(async () => {
     await assertLocalSupabaseReady();
+    previousUploadMode = getLocalUploadMode();
     setLocalUploadMode("active");
   });
 
-  afterAll(() => setLocalUploadMode("paused"));
+  afterAll(() => setLocalUploadMode(previousUploadMode));
 
   it("verifies, publishes, and authorizes a real 10 MiB original", async () => {
     const service = serviceClient();

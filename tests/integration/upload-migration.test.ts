@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import type { Database } from "../../src/types/database";
 import { runLegacyReconciliation } from "../../scripts/upload-maintenance.mjs";
-import { assertLocalSupabaseReady, cleanupLocalUser, newLocalUser, ownWorkspaceId, setLocalUploadMode } from "../support/local-supabase";
+import { assertLocalSupabaseReady, cleanupLocalUser, getLocalUploadMode, newLocalUser, ownWorkspaceId, setLocalUploadMode } from "../support/local-supabase";
 
 const LOCAL_API_URL = "http://127.0.0.1:54321";
 
@@ -18,12 +18,15 @@ function serviceClient() {
 }
 
 describe("legacy upload reconciliation against local Postgres and Storage", () => {
+  let previousUploadMode: "paused" | "active";
+
   beforeAll(async () => {
     await assertLocalSupabaseReady();
+    previousUploadMode = getLocalUploadMode();
     setLocalUploadMode("paused");
   });
 
-  afterAll(() => setLocalUploadMode("paused"));
+  afterAll(() => setLocalUploadMode(previousUploadMode));
   afterEach(() => vi.unstubAllGlobals());
 
   it("confirms valid legacy bytes and preserves missing and already-processed rows idempotently", async () => {
