@@ -1,0 +1,17 @@
+FROM node:24.11.0-bookworm-slim
+WORKDIR /app
+ENV ONNXRUNTIME_NODE_INSTALL=skip
+RUN npm install --global pnpm@12.5.1
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY tsconfig.json ./
+COPY src ./src
+COPY scripts/ingestion-worker.ts scripts/warm-ingestion-model.ts ./scripts/
+ENV INGESTION_MODEL_CACHE=/app/model-cache
+RUN pnpm exec tsx --conditions=react-server scripts/warm-ingestion-model.ts
+ENV INGESTION_MODEL_OFFLINE=1 INGESTION_WORKER_HOST=0.0.0.0 INGESTION_WORKER_PORT=8788
+RUN chown -R node:node /app
+USER node
+EXPOSE 8788
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 CMD node -e "fetch('http://127.0.0.1:8788/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+CMD ["node","--conditions=react-server","--import","tsx","scripts/ingestion-worker.ts"]

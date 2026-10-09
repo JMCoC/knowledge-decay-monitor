@@ -1,4 +1,7 @@
 allowBuilds:
   '@sentry/cli': true
+  esbuild: true
+  onnxruntime-node: true
+  protobufjs: true
   sharp: false
   unrs-resolver: false
