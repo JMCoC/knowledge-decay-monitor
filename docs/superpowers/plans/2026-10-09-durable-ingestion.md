@@ -56,6 +56,7 @@ Interfaces: upload transaction owns enqueue; retry action calls authorized queue
 Files: existing dirty Task 6 tests/parser fix, E2E worker fixture, workflow, local worker runner, acceptance/cutover runbook, ADR and PR body.
 
 - [x] Run full local unit, SQL, integration, fixture, recovery and 33-case E2E suites with the real worker/model; strengthen batch and boundary coverage. Failures are diagnosed, not hidden by retries or mocks.
-- [ ] Replace CI Edge warmup with worker lifecycle; build/test image, safe model cache and health checks. The workflow gate is configured, but local image build timed out fetching an npm package and the image smoke remains pending.
+- [x] Replace CI Edge warmup with worker lifecycle and configure CI to build/smoke the final non-root offline image with real local processing. The local image build timed out fetching an npm package, so this gate still needs a green run on the PR SHA.
 - [x] Document exact worker deployment/config, migration order, pause/rollback/recovery and remaining remote acceptance. Prepare PR text for final branch behavior.
-- [ ] Run diff/secret/file-scope review and fresh whole-branch review; fix significant findings and reverify before final commits.
+- [x] Run whitespace, changed-file scope and common credential-literal pattern checks plus an independent whole-branch review; fix enqueue lock contention with a bounded migration and passing regression test. Re-run integration, SQL, types, typecheck, lint and diff checks.
+- [ ] Receive green CI/image smoke for the PR SHA, then complete Preview/Production acceptance and the remote cutover using the runbook.
