@@ -52,6 +52,18 @@ async function main() {
   if (before.apiUrl !== LOCAL_API_URL) throw new Error("Local API URL changed unexpectedly.");
   process.env.KDM_MAILPIT_URL = before.mailpitUrl;
   const account = await signUp(before);
+  try {
+    await verifyRestart(before, account);
+  } finally {
+    const admin = createClient(before.apiUrl, before.serviceRoleKey, {
+      auth: { autoRefreshToken:false, detectSessionInUrl:false, persistSession:false },
+    });
+    const { error } = await admin.auth.admin.deleteUser(account.userId);
+    if (error) throw new Error("Could not remove the synthetic local restart user.");
+  }
+}
+
+async function verifyRestart(before, account) {
 
   await requestRecovery(before, account.email);
   const firstLink = await waitForRecoveryLink(account.email);

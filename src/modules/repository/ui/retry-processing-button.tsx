@@ -9,9 +9,10 @@ import { retryProcessing } from "@/modules/ingestion";
 
 interface Props {
   versionId: string;
+  action: "start" | "retry";
 }
 
-export function RetryProcessingButton({ versionId }: Props) {
+export function RetryProcessingButton({ versionId, action }: Props) {
   const router = useRouter();
   const [isPending, setIsPending] = useState(false);
   const [error, setError] = useState<ActionError | null>(null);
@@ -28,9 +29,7 @@ export function RetryProcessingButton({ versionId }: Props) {
         setError(result.error);
         return;
       }
-      setMessage(result.data.processingStatus === "ready"
-        ? "Retry completed successfully."
-        : "Retry started. Processing is in progress.");
+      setMessage("Processing queued.");
       router.refresh();
     } catch {
       setError(captureClientTransportFailure());
@@ -47,7 +46,7 @@ export function RetryProcessingButton({ versionId }: Props) {
         disabled={isPending}
         className="inline-flex items-center gap-1.5 rounded border border-rose-200 bg-white px-2.5 py-1 text-xs font-medium text-rose-700 shadow-sm transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
       >
-        {isPending ? "Starting..." : "Retry Processing"}
+        {isPending ? "Starting..." : action === "start" ? "Start Processing" : "Retry Processing"}
       </button>
       {message && <p className="text-[11px] text-emerald-700" role="status">{message}</p>}
       {error && (

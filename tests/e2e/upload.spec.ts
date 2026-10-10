@@ -1,9 +1,10 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
+import { markdownSections } from "../support/processing-inputs";
 import { createHash, randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import type { Database } from "../../src/types/database";
 import { loginAs } from "./auth.helper";
-import { setLocalUploadMode } from "../support/local-supabase";
+import { getLocalUploadMode, setLocalUploadMode } from "../support/local-supabase";
 
 const LOCAL_API_URL = "http://127.0.0.1:54321";
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
@@ -53,8 +54,12 @@ test.describe("Repository upload", () => {
   // These E2E cases share the database-backed upload mode flag, so fullyParallel is unsafe here.
   test.describe.configure({ mode: "serial" });
 
-  test.beforeAll(() => setLocalUploadMode("active"));
-  test.afterAll(() => setLocalUploadMode("paused"));
+  let previousUploadMode: "paused" | "active";
+  test.beforeAll(() => {
+    previousUploadMode = getLocalUploadMode();
+    setLocalUploadMode("active");
+  });
+  test.afterAll(() => setLocalUploadMode(previousUploadMode));
 
   test.beforeEach(async ({ context }) => {
     await loginAs(context, "admin.a@example.test");
@@ -69,7 +74,7 @@ test.describe("Repository upload", () => {
     await page.getByLabel("Choose PDF, DOCX, or Markdown files").setInputFiles({
       name: "guide.md",
       mimeType: "text/markdown",
-      buffer: Buffer.from("a"),
+      buffer: markdownSections(32),
     });
     await expect(page.getByRole("region", { name: "Upload documents" }).getByLabel("Category").first()).toBeVisible();
     await expect(page.getByLabel("Owner").first()).toBeVisible();
@@ -81,7 +86,7 @@ test.describe("Repository upload", () => {
     const files = Array.from({ length: 11 }, (_, index) => ({
       name: `guide-${index}.md`,
       mimeType: "text/markdown",
-      buffer: Buffer.from("a"),
+      buffer: markdownSections(32),
     }));
 
     await page.getByLabel("Choose PDF, DOCX, or Markdown files").setInputFiles(files);
@@ -167,7 +172,7 @@ test.describe("Repository upload", () => {
         if (result.error) return "missing";
         return result.data.upload_state === "confirmed" ? result.data.processing_status : "unconfirmed";
       }, { timeout: 60_000 }).toMatch(/^(uploaded|processing|ready|processing_failed)$/);
-      await expect(row.getByText(/^(Uploaded — processing pending|Processing|Ready|Processing failed)$/))
+      await expect(row.getByText(/^(Queued|Uploaded — processing pending|Processing|Ready|Processing failed)$/))
         .toBeVisible();
       const { data: confirmedVersion, error: confirmedError } = await service.from("document_versions")
         .select("id,upload_state,storage_path")
@@ -188,6 +193,7 @@ test.describe("Repository upload", () => {
   });
 
   test("uploads ten files and a 10 MiB file through Storage while Next.js receives only metadata", async ({ page }) => {
+    test.setTimeout(240_000);
     const suffix = randomUUID();
     const batchNames = Array.from({ length: 10 }, (_, index) => `S1-02 batch ${suffix} ${index}`);
     const maxFileName = `S1-02 limit ${suffix}`;
@@ -225,21 +231,8 @@ test.describe("Repository upload", () => {
       const boundary = url.origin === LOCAL_API_URL
         ? url.pathname.startsWith("/storage/") ? "storage" : "supabase-api"
         : url.origin === "http://127.0.0.1:3000" ? "next" : "other";
-      let detail = "";
-      if (boundary === "storage") {
-        try {
-          const body = await response.json() as Record<string, unknown>;
-          const error = typeof body.error === "string" ? body.error.slice(0, 100) : "";
-          const statusCode = typeof body.statusCode === "string" ? body.statusCode.slice(0, 20) : "";
-          const message = typeof body.message === "string"
-            ? body.message.slice(0, 160).replace(/\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/gi, "[id]")
-            : "";
-          detail = `:${JSON.stringify({ statusCode, error, message })}`;
-        } catch {
-          detail = ":unreadable-error-body";
-        }
-      }
-      failedRequests.push(`${boundary}:${response.status()}${detail}`);
+      // Only the boundary/status enter artifacts; provider response bodies stay private.
+      failedRequests.push(`${boundary}:${response.status()}`);
     });
 
     try {
@@ -248,7 +241,7 @@ test.describe("Repository upload", () => {
       await fileInput.setInputFiles(batchNames.map((name) => ({
         name: `${name}.md`,
         mimeType: "text/markdown",
-        buffer: Buffer.from("a"),
+        buffer: markdownSections(32),
       })));
       await expect(page.getByLabel("Document name")).toHaveCount(10);
       for (const [index, name] of batchNames.entries()) {
@@ -291,38 +284,101 @@ test.describe("Repository upload", () => {
       const service = serviceClient();
       const documents = await service.from("documents").select("id,name,active_version_id")
         .in("name", allNames);
-      expect(documents.error === null).toBe(true);
-      expect(documents.data?.length === 11).toBe(true);
+      expect(documents.error).toBeNull();
+      if (documents.error || documents.data.length !== 11) {
+        throw new Error("The ten-file batch and 10 MiB upload were not all confirmed.");
+      }
       const versions = await service.from("document_versions")
-        .select("id,document_id,processing_status,version_status,upload_state,storage_path")
-        .in("document_id", documents.data?.map((document) => document.id) ?? []);
-      expect(versions.error === null).toBe(true);
-      expect(versions.data?.length === 11).toBe(true);
-      expect(versions.data?.every((version) =>
-        ["uploaded", "processing", "ready", "processing_failed"].includes(version.processing_status ?? "")
-        && (version.processing_status === "ready" ? version.version_status === "active" : version.version_status === null)
-        && version.upload_state === "confirmed",
-      )).toBe(true);
-      const versionsByDocument = new Map(versions.data?.map((version) => [version.document_id, version]));
-      expect(documents.data?.every((document) => {
-        const version = versionsByDocument.get(document.id);
-        return version?.processing_status === "ready"
-          ? document.active_version_id === version.id
-          : document.active_version_id === null;
-      })).toBe(true);
+        .select("id,document_id,processing_status,version_status,upload_state,storage_path,expected_sha256")
+        .in("document_id", documents.data.map((document) => document.id));
+      expect(versions.error).toBeNull();
+      if (versions.error || versions.data.length !== 11) {
+        throw new Error("The confirmed uploads did not each produce exactly one version.");
+      }
 
-      const maximumVersion = versions.data?.find((version) =>
-        documents.data?.some((document) => document.id === version.document_id && document.name === maxFileName));
-      expect(maximumVersion?.storage_path).toBeTruthy();
-      if (!maximumVersion?.storage_path) throw new Error("The 10 MiB upload has no confirmed canonical path.");
+      await expect.poll(async () => {
+        const current = await service.from("document_versions")
+          .select("processing_status")
+          .in("id", versions.data.map((version) => version.id));
+        if (current.error) throw new Error("Could not poll local batch processing status.");
+        return current.data.length === 11 && current.data.every((version) =>
+          version.processing_status === "ready" || version.processing_status === "processing_failed",
+        );
+      }, { timeout: 120_000, intervals: [500, 1000, 2000] }).toBe(true);
+
+      const settledVersions = await service.from("document_versions")
+        .select("id,document_id,processing_status,version_status,upload_state,storage_path,expected_sha256")
+        .in("id", versions.data.map((version) => version.id));
+      expect(settledVersions.error).toBeNull();
+      if (settledVersions.error || settledVersions.data.length !== 11) {
+        throw new Error("Could not verify all terminal local processing versions.");
+      }
+      const versionsByDocument = new Map(settledVersions.data.map((version) => [version.document_id, version]));
+      const settledDocuments = await service.from("documents").select("id,name,active_version_id")
+        .in("name", allNames);
+      expect(settledDocuments.error).toBeNull();
+      if (settledDocuments.error || settledDocuments.data.length !== 11) {
+        throw new Error("Could not verify all settled upload documents.");
+      }
+      const documentsByName = new Map(settledDocuments.data.map((document) => [document.name, document]));
+
+      for (const name of batchNames) {
+        const document = documentsByName.get(name);
+        const version = document ? versionsByDocument.get(document.id) : undefined;
+        expect(version).toMatchObject({ processing_status: "ready", version_status: "active", upload_state: "confirmed" });
+        expect(document?.active_version_id).toBe(version?.id);
+        if (!version) throw new Error("A batch upload is missing its persisted version.");
+
+        const chunks = await service.from("document_chunks").select("chunk_index,embedding")
+          .eq("version_id", version.id).order("chunk_index", { ascending: true });
+        expect(chunks.error).toBeNull();
+        if (chunks.error) throw new Error("Could not verify a batch upload embedding.");
+        expect(chunks.data).toHaveLength(32);
+        expect(chunks.data[0]?.chunk_index).toBe(0);
+        if (!chunks.data[0]) throw new Error("A ready batch upload has no persisted chunk.");
+        const vector = JSON.parse(chunks.data[0].embedding) as unknown;
+        expect(Array.isArray(vector) && vector.length === 384 && vector.every(Number.isFinite)).toBe(true);
+
+        const original = await service.storage.from("documents").download(version.storage_path);
+        expect(original.error).toBeNull();
+        if (!original.data) throw new Error("A batch original could not be opened from local Storage.");
+        const expectedHash = createHash("sha256").update(markdownSections(32)).digest("hex");
+        const actualHash = createHash("sha256").update(new Uint8Array(await original.data.arrayBuffer())).digest("hex");
+        expect(version.expected_sha256).toBe(expectedHash);
+        expect(actualHash).toBe(expectedHash);
+      }
+
+      const maxDocument = documentsByName.get(maxFileName);
+      const maximumVersion = maxDocument ? versionsByDocument.get(maxDocument.id) : undefined;
+      expect(maximumVersion).toMatchObject({
+        processing_status: "processing_failed",
+        version_status: null,
+        upload_state: "confirmed",
+      });
+      expect(maxDocument?.active_version_id).toBeNull();
+      if (!maximumVersion) throw new Error("The 10 MiB upload has no confirmed canonical version.");
+
+      const maximumChunks = await service.from("document_chunks").select("id", { count: "exact", head: true })
+        .eq("version_id", maximumVersion.id);
+      expect(maximumChunks.error).toBeNull();
+      expect(maximumChunks.count).toBe(0);
+
       const downloaded = await service.storage.from("documents").download(maximumVersion.storage_path);
-      expect(downloaded.error === null).toBe(true);
+      expect(downloaded.error).toBeNull();
       if (!downloaded.data) throw new Error("The 10 MiB canonical original could not be opened.");
       const actualHash = createHash("sha256")
         .update(new Uint8Array(await downloaded.data.arrayBuffer()))
         .digest("hex");
       const expectedHash = createHash("sha256").update(maximumSizeBytes).digest("hex");
-      expect(actualHash === expectedHash).toBe(true);
+      expect(actualHash).toBe(expectedHash);
+      expect(maximumVersion.expected_sha256).toBe(expectedHash);
+
+      expect(settledDocuments.data.every((document) => {
+        const version = versionsByDocument.get(document.id);
+        return version?.processing_status === "ready"
+          ? document.active_version_id === version.id
+          : document.active_version_id === null;
+      })).toBe(true);
 
       await Promise.all(sizeObservations);
       expect(appPostBodySizes.length, JSON.stringify({ appPostObservations, failedRequests }))

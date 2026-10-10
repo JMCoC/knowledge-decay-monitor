@@ -81,6 +81,7 @@ describe("Repository query validation and literal filters", () => {
     expect(calls).toContainEqual(["is", ["latest_version_status", null]]);
     expect(calls).toContainEqual(["range", [10, 19]]);
     expect(calls.find(([name]) => name === "select")?.[1]).toContainEqual({ count: "exact" });
+    expect(calls.find(([name]) => name === "select")?.[1]?.[0]).toContain("latest_processing_started_at");
   });
 
   it("requests a five-minute signed URL and reports an approximately 300-second expiry", async () => {

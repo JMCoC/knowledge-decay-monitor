@@ -23,10 +23,11 @@ if (process.env.KDM_TEST_EDGE === "1") {
 
 export default defineConfig({
   testDir: "./tests/e2e",
-  fullyParallel: true,
+  // The suite owns one consumer of a shared local queue, including crash tests.
+  fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
-  workers: process.env.CI ? 1 : undefined,
+  workers: 1,
   reporter: "list",
   outputDir: ".artifacts/playwright",
   timeout: 90_000,
@@ -55,7 +56,6 @@ export default defineConfig({
     env: {
       NEXT_PUBLIC_SUPABASE_URL: LOCAL_API_URL,
       KDM_LOCAL_SUPABASE_URL: LOCAL_API_URL,
-      INGESTION_INTERNAL_TOKEN: process.env.INGESTION_INTERNAL_TOKEN ?? "",
       KDM_DISABLE_SENTRY: "1",
       NEXT_PUBLIC_KDM_DISABLE_SENTRY: "1",
       KDM_SENTRY_DIAGNOSTICS_ENABLED: "0",

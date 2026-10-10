@@ -35,8 +35,14 @@ vi.mock("@/modules/ingestion/ui/recover-upload-button", () => ({
 }));
 
 vi.mock("@/modules/repository/ui/retry-processing-button", () => ({
-    RetryProcessingButton: ({ versionId }: { versionId: string }) =>
-        createElement("button", { "data-retry-version": versionId }, "Retry Processing"),
+    RetryProcessingButton: ({ versionId, action }: { versionId: string; action: "start" | "retry" }) =>
+        createElement("button", { "data-retry-version": versionId, "data-action": action },
+            action === "start" ? "Start Processing" : "Retry Processing"),
+}));
+
+vi.mock("@/modules/repository/ui/processing-lease-refresh", () => ({
+    ProcessingLeaseRefresh: ({ enabled }: { enabled: boolean }) =>
+        createElement("span", { "data-refresh-enabled": enabled }),
 }));
 
 vi.mock("@/modules/repository/ui/processing-status-badge", () => ({
@@ -114,6 +120,7 @@ describe("RepositoryPage", () => {
                 total: 1,
                 page: 1,
                 pageSize: 25,
+                asOfMs: Date.now(),
             },
         });
 
@@ -152,6 +159,7 @@ describe("RepositoryPage", () => {
                 total: 1,
                 page: 1,
                 pageSize: 25,
+                asOfMs: Date.now(),
             },
         });
 
@@ -160,6 +168,85 @@ describe("RepositoryPage", () => {
         expect(markup).toContain('data-retry-version="version-failed"');
         expect(markup).toContain("Retry Processing");
         expect(markup).not.toContain('data-recover-version="version-failed"');
+    });
+
+    it("offers Start for confirmed uploaded v1 and keeps the confirmed original open action", async () => {
+        listRepositoryDocuments.mockResolvedValue({
+            ok: true,
+            data: {
+                items: [{
+                    id: "document-uploaded",
+                    name: "Uploaded handbook",
+                    category: "SOP",
+                    owner: null,
+                    activeVersionId: null,
+                    latestVersion: {
+                        id: "version-uploaded",
+                        version_number: 1,
+                        processing_status: "uploaded",
+                        version_status: null,
+                        analysis_status: "pending_reanalysis",
+                        uploadState: "confirmed",
+                        canOpen: true,
+                        processingQueued: false,
+                        processingLeaseExpiresAt: null,
+                        processingStartedAt: null,
+                    },
+                    createdAt: "2026-10-07T00:00:00.000Z",
+                }],
+                total: 1,
+                page: 1,
+                pageSize: 25,
+                asOfMs: Date.now(),
+            },
+        });
+
+        const markup = renderToStaticMarkup(await RepositoryPage({ searchParams: Promise.resolve({}) }));
+
+        expect(markup).toContain('data-retry-version="version-uploaded"');
+        expect(markup).toContain('data-action="start"');
+        expect(markup).toContain("Start Processing");
+        expect(markup).toContain("open");
+    });
+
+    it("offers Retry for a stale processing lease and enables lease refresh", async () => {
+        listRepositoryDocuments.mockResolvedValue({
+            ok: true,
+            data: {
+                items: [{
+                    id: "document-stale",
+                    name: "Stale handbook",
+                    category: "SOP",
+                    owner: null,
+                    activeVersionId: null,
+                    latestVersion: {
+                        id: "version-stale",
+                        version_number: 1,
+                        processing_status: "processing",
+                        version_status: null,
+                        analysis_status: "pending_reanalysis",
+                        uploadState: "confirmed",
+                        canOpen: true,
+                        processingQueued: false,
+                        processingLeaseExpiresAt: null,
+                        processingStartedAt: new Date(Date.now() - 181_000).toISOString(),
+                    },
+                    createdAt: "2026-10-07T00:00:00.000Z",
+                }],
+                total: 1,
+                page: 1,
+                pageSize: 25,
+                asOfMs: Date.now(),
+            },
+        });
+
+        const markup = renderToStaticMarkup(await RepositoryPage({ searchParams: Promise.resolve({}) }));
+
+        expect(markup).toContain('data-retry-version="version-stale"');
+        expect(markup).toContain('data-action="retry"');
+        expect(markup).toContain("Retry Processing");
+        expect(markup).toContain('data-refresh-enabled="true"');
+        expect(markup).toContain("open");
     });
 
     it("does not render the upload panel when document access is denied", async () => {

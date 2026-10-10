@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createHash, randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import type { Database } from "../../src/types/database";
-import { assertLocalSupabaseReady, cleanupLocalUser, newLocalUser, setLocalUploadMode } from "../support/local-supabase";
+import { assertLocalSupabaseReady, cleanupLocalUser, getLocalUploadMode, newLocalUser, setLocalUploadMode } from "../support/local-supabase";
 
 vi.mock("server-only", () => ({}));
 
@@ -27,14 +27,20 @@ function bodyResponse(bytes: Uint8Array) {
 }
 
 describe("local PostgreSQL upload finalization", () => {
+  let previousUploadMode: "paused" | "active";
+
   beforeAll(async () => {
     await assertLocalSupabaseReady();
+    previousUploadMode = getLocalUploadMode();
     setLocalUploadMode("active");
   });
 
   afterAll(() => {
-    setLocalUploadMode("paused");
-    vi.unstubAllGlobals();
+    try {
+      setLocalUploadMode(previousUploadMode);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("uses persisted CAS, publishes verified bytes, reconciles a lost response, and retires only temporaries", async () => {

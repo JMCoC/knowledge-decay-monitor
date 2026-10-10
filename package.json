@@ -16,13 +16,19 @@
     "test:e2e:local": "node scripts/with-local-supabase.mjs e2e",
     "test:db": "supabase test db --local",
     "test:fixtures": "node scripts/check-local-fixtures.mjs",
-    "test:processing": "node scripts/check-processing-fixtures.mjs",
+    "test:processing": "node scripts/with-local-supabase.mjs integration tests/integration/ingestion-worker.test.ts",
     "test:integration": "node scripts/with-local-supabase.mjs integration",
     "test:e2e:auth": "node scripts/with-local-supabase.mjs e2e",
-    "test:auth:restart": "node scripts/check-auth-restart.mjs"
+    "test:auth:restart": "node scripts/check-auth-restart.mjs",
+    "worker:ingestion": "node --conditions=react-server --import tsx scripts/ingestion-worker.ts",
+    "worker:warm": "tsx --conditions=react-server scripts/warm-ingestion-model.ts",
+    "worker:local": "node scripts/with-local-supabase.mjs worker",
+    "test:worker:image": "node scripts/with-local-supabase.mjs image"
   },
   "dependencies": {
+    "@huggingface/transformers": "4.3.1",
     "@sentry/nextjs": "^10.75.0",
+    "@sentry/node": "10.75.0",
     "@supabase/ssr": "0.12.7",
     "@supabase/supabase-js": "2.117.2",
     "clsx": "^2.1.1",
@@ -46,6 +52,7 @@
     "eslint-config-next": "16.3.5",
     "supabase": "^2.117.0",
     "tailwindcss": "^4",
+    "tsx": "4.23.15",
     "typescript": "^5",
     "vite": "8.3.1",
     "vitest": "5.0.2"

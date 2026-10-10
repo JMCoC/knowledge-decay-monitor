@@ -162,8 +162,10 @@ select is((select count(*) from storage.objects
     and name = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/20000000-0000-4000-8000-0000000000f1/30000000-0000-4000-8000-0000000000f1/original.md'),
   1::bigint,
   'The privileged fixture object remains at its canonical path');
-select lives_ok($$update document_versions set processing_status = 'processing'
-  where id = '30000000-0000-4000-8000-0000000000f1'$$);
+select throws_ok($$update document_versions set processing_status = 'processing'
+  where id = '30000000-0000-4000-8000-0000000000f1'$$,
+  '22023','Durable processing claim requires a live worker job',
+  'legacy direct state change cannot start processing without a durable job');
 
 -- The new column is bounded when present and absent otherwise.
 select throws_ok($$update document_versions set size_bytes = 0 where id = '30000000-0000-4000-8000-000000000001'$$,

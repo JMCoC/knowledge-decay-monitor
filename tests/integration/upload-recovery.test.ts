@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { createClient } from "@supabase/supabase-js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Database } from "../../src/types/database";
-import { assertLocalSupabaseReady, cleanupLocalUser, newLocalUser, setLocalUploadMode } from "../support/local-supabase";
+import { assertLocalSupabaseReady, cleanupLocalUser, getLocalUploadMode, newLocalUser, setLocalUploadMode } from "../support/local-supabase";
 
 const storageMock = vi.hoisted(() => ({
   remove: vi.fn(),
@@ -55,12 +55,15 @@ function runCleanup(mode: "inspect" | "apply") {
 }
 
 describe("local upload recovery and maintenance cleanup", () => {
+  let previousUploadMode: "paused" | "active";
+
   beforeAll(async () => {
     await assertLocalSupabaseReady();
+    previousUploadMode = getLocalUploadMode();
     setLocalUploadMode("active");
   });
 
-  afterAll(() => setLocalUploadMode("paused"));
+  afterAll(() => setLocalUploadMode(previousUploadMode));
 
   beforeEach(() => vi.resetAllMocks());
 

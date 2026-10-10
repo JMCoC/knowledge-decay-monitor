@@ -1,10 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { LOCAL_API_URL, PROJECT_ROOT, readLocalSupabaseRuntime } from "./local-supabase.mjs";
 
 const commands = {
+  image: [resolve(PROJECT_ROOT, "node_modules/vitest/vitest.mjs"), "run", "--config", "vitest.image.config.ts"],
+  worker: [resolve(PROJECT_ROOT, "node_modules/tsx/dist/cli.mjs"), "--conditions=react-server", resolve(PROJECT_ROOT, "scripts/ingestion-worker.ts")],
   integration: [resolve(PROJECT_ROOT, "node_modules/vitest/vitest.mjs"), "run", "--config", "vitest.integration.config.ts"],
   e2e: [resolve(PROJECT_ROOT, "node_modules/@playwright/test/cli.js"), "test", "--config", "playwright.config.ts"],
   build: [resolve(PROJECT_ROOT, "node_modules/next/dist/bin/next"), "build"],
@@ -28,7 +29,7 @@ export function runWithLocalSupabase({
   logError = console.error,
 } = {}) {
   if (!Object.hasOwn(commands, selected)) {
-    logError("Usage: node scripts/with-local-supabase.mjs <integration|e2e|build>");
+    logError("Usage: node scripts/with-local-supabase.mjs <integration|e2e|build|worker|image>");
     return 2;
   }
 
@@ -53,7 +54,7 @@ export function runWithLocalSupabase({
     NEXT_PUBLIC_SUPABASE_ANON_KEY: "",
     KDM_LOCAL_SUPABASE_URL: LOCAL_API_URL,
     KDM_MAILPIT_URL: runtime.mailpitUrl,
-    SUPABASE_URL: "",
+    SUPABASE_URL: selected === "worker" ? LOCAL_API_URL : "",
     SUPABASE_PUBLISHABLE_KEY: "",
     SUPABASE_ANON_KEY: "",
     SENTRY_DSN: "",
@@ -67,10 +68,7 @@ export function runWithLocalSupabase({
     KDM_SENTRY_DIAGNOSTICS_OPERATOR_IDS: "",
     KDM_SENTRY_DIAGNOSTICS_EXPIRES_AT: "",
   };
-  if (selected === "e2e") {
-    // The test web server uses the same one-run local token for internal ingestion dispatch.
-    childEnv.INGESTION_INTERNAL_TOKEN = randomBytes(32).toString("hex");
-  }
+  delete childEnv.INGESTION_INTERNAL_TOKEN;
   delete childEnv.SUPABASE_SECRET_KEY;
   if (selected === "build") {
     delete childEnv.SUPABASE_SERVICE_ROLE_KEY;

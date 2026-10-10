@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import type { Database } from "../../src/types/database";
 import { claimProcessingRetry } from "../../src/modules/ingestion/processing-retry";
-import { assertLocalSupabaseReady, cleanupLocalUser, newLocalUser } from "../support/local-supabase";
+import { assertLocalSupabaseReady, cleanupLocalUser, newLocalUser, seedLocalProcessingClaim } from "../support/local-supabase";
 
 vi.mock("server-only", () => ({}));
 
@@ -89,58 +89,25 @@ describe("local processing retry claim", () => {
       }).eq("id", resolvedVersionId);
       expect(confirmError).toBeNull();
 
-      const firstOperation = randomUUID();
-      const secondOperation = randomUUID();
-      const simultaneousClaims = await Promise.all([
-        claimProcessingRetry({ workspaceId: resolvedWorkspaceId, versionId: resolvedVersionId, operationId: firstOperation }),
-        claimProcessingRetry({ workspaceId: resolvedWorkspaceId, versionId: resolvedVersionId, operationId: secondOperation }),
+      const simultaneous = await Promise.all([
+        claimProcessingRetry({workspaceId:resolvedWorkspaceId,versionId:resolvedVersionId}),
+        claimProcessingRetry({workspaceId:resolvedWorkspaceId,versionId:resolvedVersionId}),
       ]);
-      expect(simultaneousClaims.filter((claim) => claim.kind === "claimed")).toHaveLength(1);
-      expect(simultaneousClaims.filter((claim) => claim.kind === "conflict")).toHaveLength(1);
-
-      const { data: claimedVersion, error: claimReadError } = await service
-        .from("document_versions")
-        .select("processing_status,processing_operation_id,upload_state,version_status")
-        .eq("id", resolvedVersionId)
-        .single();
-      expect(claimReadError).toBeNull();
-      expect(claimedVersion).toMatchObject({
-        processing_status: "processing",
-        upload_state: "confirmed",
-        version_status: null,
-      });
-      expect([firstOperation, secondOperation]).toContain(claimedVersion?.processing_operation_id);
-
-      const foreignWorkspaceClaim = await claimProcessingRetry({
-        workspaceId: randomUUID(),
-        versionId: resolvedVersionId,
-        operationId: randomUUID(),
-      });
-      expect(foreignWorkspaceClaim).toEqual({ kind: "not_found" });
-
-      const oldOperationId = claimedVersion?.processing_operation_id;
-      if (!oldOperationId) throw new Error("The local retry claim did not persist its operation ID.");
-      const staleStartedAt = new Date(Date.now() - 181_000).toISOString();
-      const { error: expireError } = await service.from("document_versions").update({
-        processing_started_at: staleStartedAt,
-      }).eq("id", resolvedVersionId).eq("processing_operation_id", oldOperationId);
-      expect(expireError).toBeNull();
-
-      const staleOperationA = randomUUID();
-      const staleOperationB = randomUUID();
-      const staleClaims = await Promise.all([
-        claimProcessingRetry({ workspaceId: resolvedWorkspaceId, versionId: resolvedVersionId, operationId: staleOperationA }),
-        claimProcessingRetry({ workspaceId: resolvedWorkspaceId, versionId: resolvedVersionId, operationId: staleOperationB }),
+      expect(simultaneous.filter(r=>r.kind==='queued')).toHaveLength(1);
+      expect(simultaneous.filter(r=>r.kind==='conflict')).toHaveLength(1);
+      expect(await claimProcessingRetry({workspaceId:randomUUID(),versionId:resolvedVersionId})).toEqual({kind:'not_found'});
+      const oldOperation=randomUUID();
+      seedLocalProcessingClaim(resolvedVersionId,oldOperation,new Date().toISOString());
+      expect(await claimProcessingRetry({workspaceId:resolvedWorkspaceId,versionId:resolvedVersionId})).toEqual({kind:'conflict'});
+      seedLocalProcessingClaim(resolvedVersionId,oldOperation,new Date(Date.now()-181_000).toISOString());
+      const retries=await Promise.all([
+        claimProcessingRetry({workspaceId:resolvedWorkspaceId,versionId:resolvedVersionId}),
+        claimProcessingRetry({workspaceId:resolvedWorkspaceId,versionId:resolvedVersionId}),
       ]);
-      expect(staleClaims.filter((claim) => claim.kind === "claimed")).toHaveLength(1);
-      expect(staleClaims.filter((claim) => claim.kind === "conflict")).toHaveLength(1);
-
-      const { count: documents, error: countError } = await service
-        .from("documents")
-        .select("id", { count: "exact", head: true })
-        .eq("id", documentId);
-      expect(countError).toBeNull();
-      expect(documents).toBe(1);
+      expect(retries.filter(r=>r.kind==='queued')).toHaveLength(1);
+      expect(retries.filter(r=>r.kind==='conflict')).toHaveLength(1);
+      const current=await service.from('document_versions').select('processing_status,processing_queued,processing_operation_id').eq('id',resolvedVersionId).single();
+      expect(current.data).toMatchObject({processing_status:'uploaded',processing_queued:true,processing_operation_id:null});
     } finally {
       await cleanupLocalUser(userId);
     }

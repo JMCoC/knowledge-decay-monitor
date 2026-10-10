@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { expect, test } from "@playwright/test";
+import { expect, test } from "../fixtures";
 import { waitForRecoveryLink, tokenHashFromRecoveryLink } from "../../../scripts/mailpit.mjs";
 import { registerThroughUi } from "../../support/auth-ui";
 import { expireLocalRecoveryToken, newLocalUser } from "../../support/local-supabase";

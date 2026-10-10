@@ -37,6 +37,12 @@ describe("Repository upload and processing states", () => {
       uploadState: "confirmed",
     }));
 
-    expect(markup).toContain("Uploaded — processing pending");
+    expect(markup).toContain("Uploaded");
+  });
+  it("identifies an accepted durable job as queued", () => {
+    const markup=renderToStaticMarkup(createElement(ProcessingStatusBadge,{
+      hasVersion:true,processingStatus:"uploaded",uploadState:"confirmed",processingQueued:true,
+    }));
+    expect(markup).toContain("Queued");
   });
 });

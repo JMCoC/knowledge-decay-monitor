@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 vi.mock("server-only", () => ({}));
 import {
   CHARS_PER_TOKEN,
@@ -8,6 +10,7 @@ import {
   parseDocument,
   type ParsedSection,
 } from "@/modules/ingestion/chunking";
+import { markdownSections } from "../support/processing-inputs";
 
 const md = (body: string) => new TextEncoder().encode(body);
 
@@ -141,5 +144,48 @@ describe("chunkDeterministic", () => {
       expect(error).toBeInstanceOf(ParseError);
       expect((error as ParseError).code).toBe("CHUNK_LIMIT_EXCEEDED");
     }
+  });
+
+  it.each([9, 32])("generates exactly %i chunks from synthetic markdown sections", async (count) => {
+    const { sections } = await parseDocument(markdownSections(count), "md");
+    const chunks = chunkDeterministic(sections);
+
+    expect(chunks).toHaveLength(count);
+    expect(chunks.map((chunk) => chunk.chunk_index)).toEqual(
+      Array.from({ length: count }, (_, index) => index),
+    );
+    expect(chunks.every((chunk) => chunk.text_content.length <= 450 * CHARS_PER_TOKEN)).toBe(true);
+  });
+
+  it("rejects 501 real markdown sections before embedding", async () => {
+    const { sections } = await parseDocument(markdownSections(MAX_CHUNKS_PER_VERSION + 1), "md");
+    let thrown: unknown;
+    try {
+      chunkDeterministic(sections);
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toMatchObject({ code: "CHUNK_LIMIT_EXCEEDED" });
+  });
+
+  it("parses the checked-in DOCX and text PDF fixtures with real parsers", async () => {
+    const docx = readFileSync(resolve("tests/fixtures/processing/docx/original.docx"));
+    const pdf = readFileSync(resolve("tests/fixtures/processing/pdf-text/original.pdf"));
+    const [docxParsed, pdfParsed] = await Promise.all([
+      parseDocument(docx, "docx"),
+      parseDocument(pdf, "pdf"),
+    ]);
+
+    expect(chunkDeterministic(docxParsed.sections).length).toBeGreaterThan(0);
+    expect(chunkDeterministic(pdfParsed.sections).length).toBeGreaterThan(0);
+    expect(pdfParsed.sections.flatMap((section) => section.paragraphs).join(" "))
+      .toContain("Synthetic PDF acceptance procedure");
+  });
+
+  it("rejects the checked-in empty PDF with the controlled no-text error", async () => {
+    const pdf = readFileSync(resolve("tests/fixtures/processing/pdf-empty/original-empty.pdf"));
+
+    await expect(parseDocument(pdf, "pdf")).rejects.toMatchObject({ code: "NO_TEXT" });
   });
 });

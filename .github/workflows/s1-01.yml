@@ -15,6 +15,8 @@ jobs:
     name: Quality gates
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      ONNXRUNTIME_NODE_INSTALL: skip
     outputs:
       tested_sha: ${{ steps.revision.outputs.sha }}
     steps:
@@ -74,12 +76,16 @@ jobs:
       - name: Install Chromium and system dependencies
         run: pnpm exec playwright install --with-deps chromium
 
-      - name: Serve and warm local embedding function
-        shell: bash
-        run: |
-          pnpm exec supabase functions serve embed > /tmp/kdm-embed.log 2>&1 &
-          echo $! > /tmp/kdm-embed.pid
-          node scripts/warm-local-embed.mjs
+      - name: Warm pinned worker model
+        run: pnpm worker:warm
+
+      - name: Build ingestion worker image
+        run: docker build -f Dockerfile.ingestion -t kdm-ingestion:${{ steps.revision.outputs.sha }} .
+
+      - name: Verify final non-root offline worker image
+        env:
+          KDM_WORKER_IMAGE: kdm-ingestion:${{ steps.revision.outputs.sha }}
+        run: pnpm test:worker:image
 
       - name: Local browser acceptance
         run: pnpm test:e2e:local

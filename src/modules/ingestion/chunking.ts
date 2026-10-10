@@ -48,25 +48,23 @@ export interface DocumentLoaders {
 }
 
 function defaultLoaders(): Required<DocumentLoaders> {
-  // String (never literal) dynamic imports: no static dependency on parser
-  // packages, so this module typechecks before `pnpm add unpdf mammoth`
-  // (required before Task 7) and stays out of any client bundle.
+  // Literal dynamic imports keep both parsers server-side and allow the
+  // production bundler and test runner to resolve their installed packages.
   return {
     extractPdfText: async (bytes: Uint8Array) => {
-      const moduleName = "unpdf";
       try {
-        const mod = await import(moduleName);
-        const result = (await mod.extractText(bytes)) as { text: string[] };
+        const mod = await import("unpdf");
+        // Buffer subclasses Uint8Array, but PDF.js rejects the Buffer brand.
+        const result = (await mod.extractText(new Uint8Array(bytes))) as { text: string[] };
         return result.text;
       } catch {
         throw new ParseError("EXTRACTION_FAILED", "The PDF parser is unavailable or failed.");
       }
     },
     convertDocxToHtml: async (bytes: Uint8Array) => {
-      const moduleName = "mammoth";
       try {
-        const mod = await import(moduleName);
-        const result = (await mod.convertToHtml({ buffer: bytes })) as { value: string };
+        const mod = await import("mammoth");
+        const result = (await mod.convertToHtml({ buffer: Buffer.from(bytes) })) as { value: string };
         return result.value;
       } catch {
         throw new ParseError("EXTRACTION_FAILED", "The DOCX parser is unavailable or failed.");

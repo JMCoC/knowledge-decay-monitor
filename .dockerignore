@@ -1,0 +1,11 @@
+node_modules
+.git
+.next
+.env*
+.artifacts
+.superpowers
+.agents
+.claude
+supabase/snippets
+test-results
+playwright-report

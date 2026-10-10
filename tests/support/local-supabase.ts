@@ -151,6 +151,38 @@ export function setLocalUploadMode(mode: "paused" | "active") {
   }
 }
 
+/** Reads the local upload gate so suites can restore the exact starting state. */
+export function getLocalUploadMode(): "paused" | "active" {
+  if (process.env.KDM_LOCAL_SUPABASE_URL !== LOCAL_API_URL) {
+    throw new Error("Refusing to inspect upload mode outside the expected local Supabase project.");
+  }
+  const mode = runLocalSql("SELECT mode::text FROM private.upload_control WHERE singleton;", {});
+  if (mode !== "paused" && mode !== "active") {
+    throw new Error("The local upload gate did not return one supported mode.");
+  }
+  return mode;
+}
+
+/** Looks up only an Auth user created by the local UI acceptance tests. */
+export function localTestUserIdByEmail(email: string): string | null {
+  if (
+    process.env.KDM_LOCAL_SUPABASE_URL !== LOCAL_API_URL
+    || !/^kdm-[0-9a-f-]{36}@example\.test$/i.test(email)
+  ) {
+    throw new Error("Refusing to look up an Auth user outside the synthetic local test namespace.");
+  }
+  const rows = runLocalSql(
+    "SELECT id::text FROM auth.users WHERE email = :'email' ORDER BY id LIMIT 2;",
+    { email },
+  ).split(/\r?\n/).filter(Boolean);
+  if (rows.length > 1) throw new Error("The synthetic local Auth email matched multiple users.");
+  if (rows.length === 0) return null;
+  if (!/^[0-9a-f-]{36}$/i.test(rows[0])) {
+    throw new Error("The synthetic local Auth user id was invalid.");
+  }
+  return rows[0];
+}
+
 /** Expires only a synthetic local verification lease to test retry after a lost response. */
 export function expireLocalVerificationLease(versionId: string) {
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -173,6 +205,23 @@ export function expireLocalRecoveryLease(versionId: string) {
   if (runLocalSql(sql, { version_id: versionId }) !== "1") {
     throw new Error("Expected exactly one synthetic local recovery lease to expire.");
   }
+}
+
+/** Installs only a synthetic test claim; never usable against a remote project. */
+export function seedLocalProcessingClaim(versionId: string,operationId: string,startedAt: string) {
+  if(process.env.KDM_LOCAL_SUPABASE_URL!==LOCAL_API_URL || !/^[0-9a-f-]{36}$/i.test(versionId)
+    || !/^[0-9a-f-]{36}$/i.test(operationId) || !Number.isFinite(Date.parse(startedAt))) throw new Error("Invalid local claim fixture.");
+  const sql=`WITH fixture AS (
+    SELECT v.id,v.workspace_id FROM public.document_versions v JOIN public.documents d ON d.id=v.document_id
+    WHERE v.id=:'version_id'::uuid AND (d.name LIKE 'Processing-%' OR d.name LIKE 'Retry-%' OR d.name LIKE 'S1-07 Retry %')
+  ), changed AS (
+    INSERT INTO private.ingestion_jobs(version_id,workspace_id,status,attempt_count,operation_id,started_at,lease_expires_at)
+    SELECT id,workspace_id,'running',1,:'operation_id'::uuid,:'started_at'::timestamptz,:'started_at'::timestamptz+interval '180 seconds' FROM fixture
+    ON CONFLICT(version_id) DO UPDATE SET status='running',attempt_count=1,operation_id=EXCLUDED.operation_id,started_at=EXCLUDED.started_at,lease_expires_at=EXCLUDED.lease_expires_at RETURNING version_id
+  ), projected AS (UPDATE public.document_versions SET processing_status='processing',processing_queued=false,processing_operation_id=:'operation_id'::uuid,
+    processing_started_at=:'started_at'::timestamptz,processing_lease_expires_at=:'started_at'::timestamptz+interval '180 seconds'
+    WHERE id IN(SELECT version_id FROM changed) RETURNING id) SELECT count(*)::text FROM projected;`;
+  if(runLocalSql(sql,{version_id:versionId,operation_id:operationId,started_at:startedAt})!=='1') throw new Error("Synthetic processing claim not found.");
 }
 
 /** Deletes only the workspace/profile generated for a synthetic local Auth user. */

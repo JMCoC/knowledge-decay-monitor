@@ -8,6 +8,7 @@ import { reserveUploadRecord } from "../../src/modules/ingestion/upload-store";
 import {
   assertLocalSupabaseReady,
   cleanupLocalUser,
+  getLocalUploadMode,
   insertLocalActiveVersion,
   insertLocalProfile,
   newLocalUser,
@@ -49,12 +50,15 @@ function addRoleProfile(user: LocalUser, workspaceId: string, role: "QA Lead" | 
 }
 
 describe("tenant and role authorization against local PostgREST", () => {
+  let previousUploadMode: "paused" | "active";
+
   beforeAll(async () => {
     await assertLocalSupabaseReady();
+    previousUploadMode = getLocalUploadMode();
     setLocalUploadMode("active");
   });
 
-  afterAll(() => setLocalUploadMode("paused"));
+  afterAll(() => setLocalUploadMode(previousUploadMode));
 
   it("keeps both workspace directions isolated and enforces each role's database permissions", async () => {
     const service = serviceClient();

@@ -7,8 +7,24 @@ select ok((select not exists (
   select 1 from profiles p
   where not exists (select 1 from auth.identities i where i.user_id = p.id and i.provider = 'email')
 )), 'All profiles have email identities');
-select is((select count(*) from document_chunks where vector_dims(embedding) = 384), 3::bigint, 'All mock vectors have 384 dimensions');
-select is((select count(*) from documents where active_version_id is null), 2::bigint, 'Incomplete v1 documents have no active pointer');
+select is((select count(*) from document_chunks c
+  join document_versions v on v.id = c.version_id
+  where c.id in (
+    '40000000-0000-4000-8000-000000000001',
+    '40000000-0000-4000-8000-000000000002',
+    '40000000-0000-4000-8000-000000000003'
+  ) and v.document_id in (
+    '20000000-0000-4000-8000-000000000001',
+    '20000000-0000-4000-8000-000000000002',
+    '20000000-0000-4000-8000-000000000003',
+    '20000000-0000-4000-8000-000000000004'
+  ) and vector_dims(c.embedding) = 384), 3::bigint, 'All seed mock vectors have 384 dimensions');
+select is((select count(*) from documents where active_version_id is null and id in (
+  '20000000-0000-4000-8000-000000000001',
+  '20000000-0000-4000-8000-000000000002',
+  '20000000-0000-4000-8000-000000000003',
+  '20000000-0000-4000-8000-000000000004'
+)), 2::bigint, 'Incomplete seed v1 documents have no active pointer');
 select ok((select bool_and(version_status is null) from document_versions where processing_status <> 'ready'), 'Incomplete processing has no functional status');
 select ok((select not public from storage.buckets where id = 'documents'), 'Document bucket is private');
 select is((select file_size_limit from storage.buckets where id = 'documents'), 10485760::bigint, 'Bucket enforces 10 MiB');

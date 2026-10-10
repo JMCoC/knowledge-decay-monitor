@@ -119,7 +119,7 @@ tests/e2e/
 | `supabase/tests/database/010_processing.test.sql` | Dev 2 | Cubre RPC `finish_processing`, CAS claim, aislamiento tenant |
 | `supabase/migrations/<ts>_finish_processing.sql` | Dev 2 redacta; Dev 1 revisa orden y regenera tipos | Cerrada en S1-04 |
 | `supabase/functions/embed/**` | Dev 2 | Edge Function `supabase.ai.Session('gte-small')`, 384 dims; consumida por `embeddings.ts` |
-| `src/app/api/ingestion/process/**` | Dev 2 | Route Handler interno con token `INGESTION_INTERNAL_TOKEN` (server-only) |
+| `src/modules/ingestion/worker/**`, `scripts/ingestion-worker.ts`, `Dockerfile.ingestion` | Dev 2 | Worker durable independiente; la ruta HTTP de procesamiento queda retirada (410), según ADR-002 |
 | `scripts/check-processing-fixtures.mjs` | Dev 2 | Escenario end-to-end S1-04; requiere Next.js dev + Edge Function |
 | `tests/fixtures/processing/**` | Dev 2 | Fixtures DOCX real y PDF vacío (fuera de `supabase/fixtures/storage/` para no romper `seed buckets`) |
 | `scripts/check-local-fixtures.mjs` | Dev 1 | Dev 2/3 solicitan nuevos escenarios |

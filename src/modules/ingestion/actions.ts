@@ -12,9 +12,6 @@ import type {
   UploadSnapshot,
   UploadTarget,
 } from "@/types/contracts";
-import { after } from "next/server";
-import { createServiceClient } from "@/lib/supabase/service";
-import { getAppOrigin } from "@/lib/app-origin";
 import {
   computeRequestFingerprint,
   finalizeUploadRecord,
@@ -33,6 +30,7 @@ import {
 } from "./schemas";
 import { actionCodeForSqlstate, extensionFromFileName } from "./validation";
 import { captureOperationFailure } from "@/lib/observability/operation-events";
+import { claimProcessingRetry } from "./processing-retry";
 
 const GENERIC_OWNER_MESSAGE = "The selected owner is not available.";
 const GENERIC_UPLOAD_MESSAGE = "This file cannot be uploaded.";
@@ -100,46 +98,6 @@ async function documentActor(operation: IngestionOperation): Promise<Actor | Fai
 
 function isFailure(value: Actor | FailedResult): value is FailedResult {
   return "ok" in value;
-}
-
-/**
- * Dispatches the S1-04 worker exactly when a confirmed version is still
- * waiting (`uploaded`). The snapshot carries no `processing_status`, so the
- * minimal row is re-read with `service_role` instead of widening the
- * contract. Any other state — or any scheduling failure — schedules
- * nothing and never touches the snapshot.
- */
-async function scheduleProcessingIfUploaded(
-  uploadState: UploadSnapshot["uploadState"],
-  versionId: string,
-): Promise<void> {
-  if (uploadState !== "confirmed") return;
-  const service = createServiceClient();
-  const { data } = await service
-    .from("document_versions")
-    .select("processing_status")
-    .eq("id", versionId)
-    .single();
-  if (data?.processing_status !== "uploaded") return;
-  const token = process.env.INGESTION_INTERNAL_TOKEN;
-  if (!token) return;
-  let origin: string | null = null;
-  try {
-    origin = getAppOrigin();
-  } catch {
-    origin = null;
-  }
-  if (!origin) return;
-  after(() => {
-    void fetch(`${origin}/api/ingestion/process`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-internal-token": token,
-      },
-      body: JSON.stringify({ versionId }),
-    });
-  });
 }
 
 export async function reserveUpload(items: UploadItemInput[]): Promise<ActionResult<UploadItemResult[]>> {
@@ -255,13 +213,7 @@ export async function finalizeUpload(input: {
   if (isFailure(actor)) return actor;
   try {
     const snapshot = await finalizeUploadRecord(actor.userId, parsed.data.versionId, parsed.data.attemptId);
-    // Best-effort scheduling: finalization already succeeded, so nothing
-    // here may change the snapshot — any scheduling failure stays silent.
-    try {
-      await scheduleProcessingIfUploaded(snapshot.uploadState, parsed.data.versionId);
-    } catch {
-      // Silent. The CAS in the route serializes any duplicate dispatch.
-    }
+    // Confirmation and durable enqueue commit together in PostgreSQL.
     return { ok: true, data: snapshot };
   } catch (error) {
     const denied = identityFailure(error);
@@ -324,73 +276,17 @@ export async function recoverUpload(versionId: string): Promise<ActionResult<Upl
 
 export async function retryProcessing(
   versionId: string,
-): Promise<ActionResult<{ versionId: string; processingStatus: "processing" | "ready" }>> {
+): Promise<ActionResult<{ versionId: string; processingStatus: "queued" }>> {
   if (!versionIdSchema.safeParse(versionId).success) {
     return failure("INVALID_INPUT", "The version ID is invalid.");
   }
   const actor = await documentActor("retry");
   if (isFailure(actor)) return actor;
-
-  const token = process.env.INGESTION_INTERNAL_TOKEN;
-  if (!token) return reportInternalFailure("retry", GENERIC_INTERNAL_MESSAGE);
-  let origin: string;
   try {
-    origin = getAppOrigin();
-  } catch {
-    return reportInternalFailure("retry", GENERIC_INTERNAL_MESSAGE);
-  }
-
-  const operationId = crypto.randomUUID();
-  try {
-    const { claimProcessingRetry } = await import("./processing-retry");
-    const claim = await claimProcessingRetry({
-      workspaceId: actor.workspaceId,
-      versionId,
-      operationId,
-    });
-    if (claim.kind === "not_found") {
-      return failure("NOT_FOUND", "That version is not available.");
-    }
-    if (claim.kind === "conflict") {
-      return failure("CONFLICT", "This version cannot be retried right now. Refresh and try again.");
-    }
-
-    let response: Response;
-    try {
-      response = await fetch(`${origin}/api/ingestion/process`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-internal-token": token,
-        },
-        body: JSON.stringify({ versionId, operationId, operation: "retry" }),
-      });
-    } catch {
-      return reportInternalFailure("retry", GENERIC_INTERNAL_MESSAGE);
-    }
-    if (!response.ok) return reportInternalFailure("retry", GENERIC_INTERNAL_MESSAGE);
-
-    const { data: completed, error } = await createServiceClient()
-      .from("document_versions")
-      .select("processing_status, processing_operation_id")
-      .eq("id", versionId)
-      .eq("workspace_id", actor.workspaceId)
-      .maybeSingle();
-    if (error) return reportInternalFailure("retry", GENERIC_INTERNAL_MESSAGE);
-    if (!completed) return failure("NOT_FOUND", "That version is not available.");
-    if (completed.processing_status === "processing_failed") {
-      return failure("PROCESSING_FAILED", "Processing failed. Review the document and try again.");
-    }
-    if (completed.processing_status === "ready") {
-      return { ok: true, data: { versionId, processingStatus: "ready" } };
-    }
-    if (
-      completed.processing_status === "processing" &&
-      completed.processing_operation_id === operationId
-    ) {
-      return { ok: true, data: { versionId, processingStatus: "processing" } };
-    }
-    return failure("CONFLICT", "This version changed while retrying. Refresh and try again.");
+    const result = await claimProcessingRetry({ workspaceId: actor.workspaceId, versionId });
+    if (result.kind === "not_found") return failure("NOT_FOUND", "That version is not available.");
+    if (result.kind === "conflict") return failure("CONFLICT", "This version cannot be retried right now. Refresh and try again.");
+    return { ok: true, data: { versionId, processingStatus: "queued" } };
   } catch {
     return reportInternalFailure("retry", GENERIC_INTERNAL_MESSAGE);
   }
