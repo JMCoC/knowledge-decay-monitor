@@ -205,6 +205,7 @@ jobs:
           QUALITY_RESULT: ${{ needs.quality.result }}
           TESTED_SHA: ${{ needs.quality.outputs.tested_sha }}
           KDM_DEPLOY_ENVIRONMENT: Production
+          APP_ORIGIN: ${{ vars.APP_ORIGIN }}
         run: node scripts/deploy-vercel.mjs production --preflight
 
       - name: Deploy verified Production
