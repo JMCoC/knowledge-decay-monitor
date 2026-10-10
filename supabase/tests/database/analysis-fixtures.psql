@@ -1,0 +1,527 @@
+create temporary table analysis_case (
+  analysis_id uuid not null,
+  workspace_id uuid not null,
+  document_id uuid not null,
+  version_id uuid not null,
+  chunk_id uuid not null,
+  ordinal integer not null,
+  primary key (analysis_id, ordinal)
+) on commit drop;
+
+create temporary table analysis_fixture_ids (
+  name text primary key,
+  analysis_id uuid not null
+) on commit drop;
+
+create temporary table finding_fixture_ids (
+  name text primary key,
+  finding_id uuid not null,
+  analysis_id uuid not null
+) on commit drop;
+
+create temporary table evidence_fixture_ids (
+  name text primary key,
+  evidence_id uuid not null,
+  analysis_id uuid not null
+) on commit drop;
+
+create function pg_temp.analysis_fixture_id(p_name text)
+returns uuid
+language sql stable
+set search_path = pg_temp, public
+as $$
+  select analysis_id from pg_temp.analysis_fixture_ids where name = p_name
+$$;
+
+create function pg_temp.expect_count(p_query text, p_expected integer)
+returns void
+language plpgsql
+set search_path = pg_temp, public
+as $$
+declare
+  v_count integer;
+begin
+  execute p_query into v_count;
+  if v_count is distinct from p_expected then
+    raise exception using errcode = 'P0001', message = 'Unexpected fixture row count.';
+  end if;
+end;
+$$;
+
+create function pg_temp.expect_text(p_query text, p_expected text)
+returns void
+language plpgsql
+set search_path = pg_temp, public
+as $$
+declare
+  v_value text;
+begin
+  execute p_query into v_value;
+  if v_value is distinct from p_expected then
+    raise exception using errcode = 'P0001', message = 'Unexpected fixture text.';
+  end if;
+end;
+$$;
+
+create function pg_temp.create_analysis_fixture(
+  p_workspace uuid,
+  p_initiator uuid,
+  p_status public.analysis_job_status,
+  p_version_count integer
+) returns uuid
+language plpgsql
+set search_path = pg_temp, public, extensions
+as $$
+declare
+  v_analysis uuid := gen_random_uuid();
+  v_document uuid;
+  v_version uuid;
+  v_chunk uuid;
+  v_ordinal integer;
+begin
+  if p_version_count < 0 or p_version_count > 21 then
+    raise exception using errcode = '22023', message = 'Invalid synthetic fixture size.';
+  end if;
+
+  set constraints all deferred;
+  insert into public.analyses(
+    id, workspace_id, initiator_id, status, fixed_cost, reserved_credits,
+    idempotency_key, request_fingerprint, retrieval_config, pricing_version,
+    prompt_version, output_schema_version, provider_config, attempt_count,
+    operation_id, lease_expires_at, started_at, finished_at, error_code
+  ) values (
+    v_analysis, p_workspace, p_initiator, p_status, 3, 3,
+    v_analysis::text, v_analysis::text,
+    '{"topK":5,"similarityThreshold":0.75,"chunksRevision":"synthetic","embeddingRevision":"synthetic","fingerprint":"synthetic"}'::jsonb,
+    'synthetic-v1', 'synthetic-v1', 'synthetic-v1',
+    '{"primary":{"provider":"synthetic","model":"synthetic"},"fallback":{"provider":"synthetic","model":"synthetic"}}'::jsonb,
+    case when p_status = 'queued' then 0 else 1 end,
+    case when p_status = 'processing' then gen_random_uuid() else null end,
+    case when p_status = 'processing' then now() + interval '60 seconds' else null end,
+    case when p_status = 'queued' then null else now() end,
+    case when p_status in ('completed', 'failed') then now() else null end,
+    case when p_status = 'failed' then 'INTERNAL_ERROR'::public.analysis_failure_code else null end
+  );
+
+  for v_ordinal in 1..p_version_count loop
+    v_document := gen_random_uuid();
+    v_version := gen_random_uuid();
+    v_chunk := gen_random_uuid();
+
+    insert into public.documents(id, workspace_id, name, category, owner_id)
+    values (v_document, p_workspace, 'Synthetic analysis document', 'SOP', p_initiator);
+
+    insert into public.document_versions(
+      id, workspace_id, document_id, version_number, storage_path, processing_status, version_status
+    ) values (
+      v_version, p_workspace, v_document, 1,
+      p_workspace::text || '/' || v_document::text || '/' || v_version::text || '/original.md',
+      'ready', 'active'
+    );
+    update public.documents set active_version_id = v_version where id = v_document;
+
+    insert into public.document_chunks(id, workspace_id, version_id, chunk_index, text_content, embedding)
+    values (
+      v_chunk, p_workspace, v_version, 0, 'Synthetic analysis fixture',
+      ('[1,' || repeat('0,', 382) || '0]')::extensions.vector(384)
+    );
+    insert into public.analysis_documents(analysis_id, workspace_id, document_id, version_id, role)
+    values (v_analysis, p_workspace, v_document, v_version, 'source');
+    insert into pg_temp.analysis_case(analysis_id, workspace_id, document_id, version_id, chunk_id, ordinal)
+    values (v_analysis, p_workspace, v_document, v_version, v_chunk, v_ordinal);
+  end loop;
+
+  return v_analysis;
+end;
+$$;
+
+create function pg_temp.insert_analysis_row(
+  p_workspace uuid,
+  p_initiator uuid,
+  p_status public.analysis_job_status default 'completed',
+  p_fixed_cost integer default 3,
+  p_reserved_credits integer default 3,
+  p_idempotency_key text default null,
+  p_request_fingerprint text default null,
+  p_attempt_count integer default 0,
+  p_retry_of_analysis_id uuid default null,
+  p_retrieval_config jsonb default '{"topK":5}'::jsonb,
+  p_pricing_version text default 'pricing-v1',
+  p_prompt_version text default 'prompt-v1',
+  p_output_schema_version text default 'schema-v1',
+  p_provider_config jsonb default '{"primary":{"provider":"synthetic","model":"synthetic"}}'::jsonb
+) returns uuid
+language plpgsql
+set search_path = pg_temp, public, extensions
+as $$
+declare
+  v_id uuid := gen_random_uuid();
+begin
+  insert into public.analyses(
+    id, workspace_id, initiator_id, status, fixed_cost, reserved_credits,
+    idempotency_key, request_fingerprint, retry_of_analysis_id,
+    retrieval_config, pricing_version, prompt_version, output_schema_version,
+    provider_config, attempt_count, operation_id, lease_expires_at,
+    started_at, finished_at, error_code
+  ) values (
+    v_id, p_workspace, p_initiator, p_status, p_fixed_cost, p_reserved_credits,
+    coalesce(p_idempotency_key, v_id::text), coalesce(p_request_fingerprint, v_id::text),
+    p_retry_of_analysis_id,
+    p_retrieval_config, p_pricing_version, p_prompt_version, p_output_schema_version,
+    p_provider_config,
+    p_attempt_count,
+    case when p_status = 'processing' then gen_random_uuid() else null end,
+    case when p_status = 'processing' then now() + interval '60 seconds' else null end,
+    case when p_status = 'queued' then null else now() end,
+    case when p_status in ('completed', 'failed') then now() else null end,
+    case when p_status = 'failed' then 'INTERNAL_ERROR'::public.analysis_failure_code else null end
+  );
+  return v_id;
+end;
+$$;
+
+create function pg_temp.insert_evidence_row(
+  p_workspace uuid,
+  p_analysis uuid,
+  p_finding uuid,
+  p_document uuid,
+  p_version uuid,
+  p_chunk uuid,
+  p_snapshot text,
+  p_page_number integer default null
+) returns uuid
+language plpgsql
+set search_path = pg_temp, public, extensions
+as $$
+declare
+  v_id uuid := gen_random_uuid();
+begin
+  insert into public.finding_evidence(
+    id, workspace_id, analysis_id, finding_id, document_id, version_id,
+    chunk_id, page_number, snapshot
+  ) values (
+    v_id, p_workspace, p_analysis, p_finding, p_document, p_version,
+    p_chunk, p_page_number, p_snapshot
+  );
+  return v_id;
+end;
+$$;
+
+create function pg_temp.insert_fixture_evidence(
+  p_analysis_name text,
+  p_finding_name text,
+  p_scope_analysis_name text,
+  p_version_ordinal integer,
+  p_snapshot text,
+  p_page_number integer default null,
+  p_chunk_ordinal integer default null
+) returns uuid
+language plpgsql
+set search_path = pg_temp, public, extensions
+as $$
+declare
+  v_analysis uuid := pg_temp.analysis_fixture_id(p_analysis_name);
+  v_scope_analysis uuid := pg_temp.analysis_fixture_id(p_scope_analysis_name);
+  v_finding uuid;
+  v_workspace uuid;
+  v_document uuid;
+  v_version uuid;
+  v_chunk uuid;
+begin
+  select finding_id into v_finding from pg_temp.finding_fixture_ids
+    where name = p_finding_name and analysis_id = v_analysis;
+  select workspace_id, document_id, version_id into v_workspace, v_document, v_version
+    from pg_temp.analysis_case
+    where analysis_id = v_scope_analysis and ordinal = p_version_ordinal;
+  select chunk_id into v_chunk from pg_temp.analysis_case
+    where analysis_id = v_scope_analysis and ordinal = coalesce(p_chunk_ordinal, p_version_ordinal);
+  return pg_temp.insert_evidence_row(
+    v_workspace, v_analysis, v_finding, v_document, v_version, v_chunk, p_snapshot, p_page_number
+  );
+end;
+$$;
+
+create function pg_temp.insert_finding_row(
+  p_analysis uuid,
+  p_workspace uuid,
+  p_confidence double precision,
+  p_explanation text default 'Synthetic finding explanation',
+  p_fingerprint text default null,
+  p_assignee uuid default null
+) returns uuid
+language plpgsql
+set search_path = pg_temp, public, extensions
+as $$
+declare
+  v_id uuid := gen_random_uuid();
+begin
+  insert into public.findings(
+    id, workspace_id, analysis_id, type, severity_original, severity_current,
+    confidence, explanation, assignee_id, fingerprint
+  ) values (
+    v_id, p_workspace, p_analysis, 'contradiction', 'Medium', 'Medium',
+    p_confidence, p_explanation, p_assignee, coalesce(p_fingerprint, v_id::text)
+  );
+  return v_id;
+end;
+$$;
+
+create function pg_temp.force_analysis_checks()
+returns void
+language plpgsql
+set search_path = pg_temp, public
+as $$
+begin
+  set constraints all immediate;
+  set constraints all deferred;
+end;
+$$;
+
+create function pg_temp.create_analysis_fixture_and_check(
+  p_workspace uuid,
+  p_initiator uuid,
+  p_status public.analysis_job_status,
+  p_version_count integer
+) returns uuid
+language plpgsql
+set search_path = pg_temp, public
+as $$
+declare
+  v_analysis uuid;
+begin
+  v_analysis := pg_temp.create_analysis_fixture(p_workspace, p_initiator, p_status, p_version_count);
+  perform pg_temp.force_analysis_checks();
+  return v_analysis;
+end;
+$$;
+
+create function pg_temp.remove_all_source_and_check(
+  p_workspace uuid,
+  p_initiator uuid
+) returns void
+language plpgsql
+set search_path = pg_temp, public
+as $$
+declare
+  v_analysis uuid;
+begin
+  v_analysis := pg_temp.create_analysis_fixture(p_workspace, p_initiator, 'completed', 1);
+  delete from public.analysis_documents where analysis_id = v_analysis;
+  perform pg_temp.force_analysis_checks();
+end;
+$$;
+
+create function pg_temp.create_delete_empty_analysis_and_check(
+  p_workspace uuid,
+  p_initiator uuid
+) returns void
+language plpgsql
+set search_path = pg_temp, public
+as $$
+declare
+  v_analysis uuid;
+begin
+  v_analysis := pg_temp.create_analysis_fixture(p_workspace, p_initiator, 'completed', 0);
+  delete from public.analyses where id = v_analysis;
+  perform pg_temp.force_analysis_checks();
+end;
+$$;
+
+create function pg_temp.create_overlap_analysis_and_check(
+  p_workspace uuid,
+  p_initiator uuid
+) returns uuid
+language plpgsql
+set search_path = pg_temp, public
+as $$
+declare
+  v_analysis uuid;
+  v_case pg_temp.analysis_case%rowtype;
+begin
+  v_analysis := pg_temp.create_analysis_fixture(p_workspace, p_initiator, 'completed', 1);
+  select * into v_case from pg_temp.analysis_case where analysis_id = v_analysis and ordinal = 1;
+  insert into public.analysis_documents(analysis_id, workspace_id, document_id, version_id, role)
+  values (v_analysis, v_case.workspace_id, v_case.document_id, v_case.version_id, 'comparison');
+  perform pg_temp.force_analysis_checks();
+  return v_analysis;
+end;
+$$;
+
+create function pg_temp.create_out_of_scope_evidence_and_check(
+  p_workspace uuid,
+  p_initiator uuid
+) returns void
+language plpgsql
+set search_path = pg_temp, public
+as $$
+declare
+  v_analysis uuid;
+  v_extra uuid;
+  v_finding uuid;
+begin
+  v_analysis := pg_temp.create_analysis_fixture(p_workspace, p_initiator, 'completed', 1);
+  v_extra := pg_temp.create_analysis_fixture(p_workspace, p_initiator, 'completed', 1);
+  insert into pg_temp.analysis_fixture_ids(name, analysis_id) values
+    ('scope_target', v_analysis), ('scope_extra', v_extra);
+  v_finding := pg_temp.insert_finding_row(v_analysis, p_workspace, 0.5);
+  insert into pg_temp.finding_fixture_ids(name, finding_id, analysis_id)
+  values ('scope_target_finding', v_finding, v_analysis);
+  perform pg_temp.insert_fixture_evidence(
+    'scope_target', 'scope_target_finding', 'scope_extra', 1, 'Synthetic out-of-scope evidence'
+  );
+  perform pg_temp.force_analysis_checks();
+end;
+$$;
+
+create function pg_temp.remove_analysis_scope_and_check(
+  p_analysis uuid,
+  p_ordinal integer,
+  p_role public.analysis_scope_role
+) returns void
+language plpgsql
+set search_path = pg_temp, public
+as $$
+declare
+  v_version uuid;
+begin
+  select version_id into v_version from pg_temp.analysis_case
+  where analysis_id = p_analysis and ordinal = p_ordinal;
+  delete from public.analysis_documents
+  where analysis_id = p_analysis and version_id = v_version and role = p_role;
+  perform pg_temp.force_analysis_checks();
+end;
+$$;
+
+create function pg_temp.move_analysis_scope_and_check(
+  p_source_name text,
+  p_target_name text
+) returns void
+language plpgsql
+set search_path = pg_temp, public
+as $$
+declare
+  v_source uuid := pg_temp.analysis_fixture_id(p_source_name);
+  v_target uuid := pg_temp.analysis_fixture_id(p_target_name);
+  v_old_version uuid;
+  v_target_case pg_temp.analysis_case%rowtype;
+begin
+  select version_id into v_old_version from pg_temp.analysis_case
+  where analysis_id = v_source and ordinal = 1;
+  select * into v_target_case from pg_temp.analysis_case
+  where analysis_id = v_target and ordinal = 1;
+  update public.analysis_documents set
+    analysis_id = v_target,
+    workspace_id = v_target_case.workspace_id,
+    document_id = v_target_case.document_id,
+    version_id = v_target_case.version_id,
+    role = 'comparison'
+  where analysis_id = v_source and version_id = v_old_version and role = 'source';
+  perform pg_temp.force_analysis_checks();
+end;
+$$;
+
+create function pg_temp.record_fixture_evidence_and_check(
+  p_name text,
+  p_analysis_name text,
+  p_finding_name text,
+  p_scope_analysis_name text,
+  p_ordinal integer,
+  p_snapshot text,
+  p_page_number integer default null
+) returns uuid
+language plpgsql
+set search_path = pg_temp, public
+as $$
+declare
+  v_evidence uuid;
+  v_analysis uuid := pg_temp.analysis_fixture_id(p_analysis_name);
+begin
+  v_evidence := pg_temp.insert_fixture_evidence(
+    p_analysis_name, p_finding_name, p_scope_analysis_name, p_ordinal, p_snapshot, p_page_number
+  );
+  insert into pg_temp.evidence_fixture_ids(name, evidence_id, analysis_id)
+  values (p_name, v_evidence, v_analysis);
+  perform pg_temp.force_analysis_checks();
+  return v_evidence;
+end;
+$$;
+
+create function pg_temp.update_evidence_chunk_and_check(
+  p_evidence_name text,
+  p_analysis_name text,
+  p_ordinal integer
+) returns uuid
+language plpgsql
+set search_path = pg_temp, public, extensions
+as $$
+declare
+  v_evidence uuid;
+  v_analysis uuid := pg_temp.analysis_fixture_id(p_analysis_name);
+  v_case pg_temp.analysis_case%rowtype;
+  v_chunk uuid := gen_random_uuid();
+begin
+  select * into v_case from pg_temp.analysis_case
+  where analysis_id = v_analysis and ordinal = p_ordinal;
+  insert into public.document_chunks(id, workspace_id, version_id, chunk_index, text_content, embedding)
+  values (v_chunk, v_case.workspace_id, v_case.version_id, 1, 'Synthetic sibling chunk',
+    ('[0,1,' || repeat('0,', 381) || '0]')::extensions.vector(384));
+  select evidence_id into v_evidence from pg_temp.evidence_fixture_ids where name = p_evidence_name;
+  update public.finding_evidence set chunk_id = v_chunk where id = v_evidence;
+  perform pg_temp.force_analysis_checks();
+  return v_chunk;
+end;
+$$;
+
+create function pg_temp.update_evidence_version_and_check(
+  p_evidence_name text,
+  p_analysis_name text,
+  p_target_scope_name text,
+  p_target_ordinal integer
+) returns void
+language plpgsql
+set search_path = pg_temp, public
+as $$
+declare
+  v_evidence uuid;
+  v_analysis uuid := pg_temp.analysis_fixture_id(p_analysis_name);
+  v_target_analysis uuid := pg_temp.analysis_fixture_id(p_target_scope_name);
+  v_target pg_temp.analysis_case%rowtype;
+begin
+  select * into v_target from pg_temp.analysis_case
+  where analysis_id = v_target_analysis and ordinal = p_target_ordinal;
+  select evidence_id into v_evidence from pg_temp.evidence_fixture_ids where name = p_evidence_name;
+  update public.finding_evidence set
+    document_id = v_target.document_id,
+    version_id = v_target.version_id,
+    chunk_id = v_target.chunk_id
+  where id = v_evidence and analysis_id = v_analysis;
+  perform pg_temp.force_analysis_checks();
+end;
+$$;
+
+create function pg_temp.activate_next_fixture_version_and_check(
+  p_analysis_name text,
+  p_evidence_name text
+) returns uuid
+language plpgsql
+set search_path = pg_temp, public
+as $$
+declare
+  v_analysis uuid := pg_temp.analysis_fixture_id(p_analysis_name);
+  v_case pg_temp.analysis_case%rowtype;
+  v_next_version uuid := gen_random_uuid();
+begin
+  select * into v_case from pg_temp.analysis_case where analysis_id = v_analysis and ordinal = 1;
+  update public.document_versions set version_status = 'historical' where id = v_case.version_id;
+  insert into public.document_versions(
+    id, workspace_id, document_id, version_number, storage_path, processing_status, version_status
+  ) values (
+    v_next_version, v_case.workspace_id, v_case.document_id, 2,
+    v_case.workspace_id::text || '/' || v_case.document_id::text || '/' || v_next_version::text || '/original.md',
+    'ready', 'active'
+  );
+  update public.documents set active_version_id = v_next_version where id = v_case.document_id;
+  perform pg_temp.force_analysis_checks();
+  return v_next_version;
+end;
+$$;
