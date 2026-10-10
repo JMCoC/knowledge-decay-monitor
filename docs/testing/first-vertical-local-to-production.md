@@ -2,7 +2,9 @@
 
 Verificado el 2026-10-09 sobre `fix/adjustment_vertical_slice`, candidato previo a esta guía `656a6fd`. Los comandos remotos de este documento son instrucciones para el operador: no se ejecutaron push, PRs, migraciones ni despliegues remotos durante este diagnóstico.
 
-## 1. Qué está fallando ahora
+## 1. Diagnóstico y recuperación local
+
+Actualización del 2026-10-09: el stack volvió a arrancar y publica sus puertos; DB conserva los 7 documentos anteriores y tiene 21 migraciones. El worker local responde Ready. Se reprodujo `This file cannot be uploaded.` en la web con un Markdown sintético, sin crear reserva. Añadiendo únicamente la service role local a `.env.local`, el mismo recorrido llegó a Ready/Active. También pasó un PDF textual de fixtures con chunks de 384 dimensiones. Los datos sintéticos se limpiaron; quedaron 96 usuarios y 7 documentos. No se probó el PDF privado del usuario. El diagnóstico de puertos siguiente explica la incidencia anterior y sirve si reaparece.
 
 Next responde en `http://127.0.0.1:3000/login`, pero Auth, Studio y Mailpit no eran accesibles. Los contenedores tenían puertos configurados sin publicación efectiva al host. Al intentar recrearlos conservando los volúmenes, Docker informó:
 
@@ -15,7 +17,7 @@ Windows tiene reservado el intervalo TCP **54262–54361**, tanto en IPv4 como e
 
 Se ejecutó `stop` sin `--no-backup`; los volúmenes de DB, Storage y Edge del proyecto `knowledge-decay-monitor-s1-02` siguen presentes. Supabase quedó **detenido**, pendiente de resolver el bloqueo de Windows. Antes de detenerlo había **95 usuarios, 7 documentos y 21 migraciones**; comprobar estos conteos al recuperar el stack, antes de crear datos de prueba. No se hizo reset ni seed.
 
-Además, `.env.local` tiene URL/publishable key locales, pero no `SUPABASE_SERVICE_ROLE_KEY`. Esa clave es necesaria para upload/retry y procesamiento. Es un problema adicional: recovery utiliza la clave pública y primero necesita recuperar la conectividad.
+Antes de la corrección, `.env.local` tenía URL/publishable key locales, pero no `SUPABASE_SERVICE_ROLE_KEY`. Se añadió la clave del stack local, sin imprimirla ni versionarla. Esa clave es necesaria para upload/retry y procesamiento. Recovery utiliza la clave pública; su fallo anterior requería recuperar la conectividad.
 
 ## 2. Recuperar los puertos de Windows
 
@@ -174,7 +176,7 @@ npx pnpm@12.5.1 test:auth:restart
 
 Cada comando debe terminar con exit 0 antes del siguiente. El smoke prueba la imagen final como usuario `node`, inferencia offline y un original local hasta Ready. No sustituye E2E. Si alteraste fixtures manualmente, ejecuta la certificación completa en CI o en otro Docker host/VM descartable; otro directorio con el mismo `project_id` sigue compartiendo volúmenes. No hagas reset de esta base para conseguir checks verdes.
 
-La [aceptación histórica](first-vertical-acceptance.md) registra suites locales previas; la imagen Docker quedó pendiente por timeout de npm. Este diagnóstico no volvió a ejecutar esas suites porque Windows bloquea el stack.
+La [aceptación histórica](first-vertical-acceptance.md) registra suites locales previas; la imagen Docker quedó pendiente por timeout de npm. En el diagnóstico posterior se probaron upload Markdown y PDF textual contra el Next/worker locales activos, después de corregir la configuración. No se volvieron a ejecutar las suites completas ni el build/smoke Docker.
 
 ## 8. Topología remota y hosting recomendado
 
@@ -189,7 +191,13 @@ Vercel Production ─┘                       ↑
 
 Ese worker puede procesar cualquier job de la cola, venga de Preview o Production. `INGESTION_ENVIRONMENT` solo etiqueta telemetría; no separa trabajos. No crees un worker experimental Preview conectado a esta DB. Las migraciones/Auth/Storage afectan a ambos ambientes. Prueba con workspaces sintéticos y acceso Preview restringido; no hay aislamiento real. La opción que recomiendo para evolución del producto es un segundo Supabase para Preview, aunque este corte puede coordinarse con el compartido.
 
-Como punto de partida propongo **Railway Pro con imagen privada en GHCR**: evita administrar un VPS y ejecuta el contenedor continuamente. Pro se requiere para credenciales de registry privado; su base publicada es USD 20/mes y el total depende del uso, no es una cotización de este worker. Consulta [registries privados](https://docs.railway.com/guides/private-container-registry) y [precios vigentes](https://docs.railway.com/pricing/plans). No se contrató ni creó el servicio. Si ya tienes Azure u otro hosting de contenedores, usa los mismos requisitos sin añadir Railway.
+**Restricción confirmada: no contratar servicios de pago.** La recomendación es alojar el worker en un PC/servidor que ya tengan, conectado al Supabase remoto. El proceso hace conexiones HTTPS salientes: no necesita dominio, túnel ni puertos públicos. El modelo corre en esa máquina; no se paga una API de embeddings. Mientras esté apagada, los documentos permanecen Queued y se retoman al volver. Electricidad, conexión y operación siguen siendo recursos necesarios, aunque no haya tarifa de hosting. Retiramos Railway de la propuesta.
+
+Una VM Oracle Always Free es una alternativa condicional: depende de capacidad en la región y las instancias ociosas pueden recuperarse. La variante Ampere es ARM, así que requiere construir/probar la imagen en esa arquitectura; el smoke AMD64 anterior no la certifica. No basar el cierre en que esa VM estará disponible. [Always Free](https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm).
+
+Supabase Free incluye actualmente DB de 500 MB, Storage de 1 GB y egress de 5 GB; no incluye backups automáticos y puede pausarse por inactividad. Preparar una copia recuperable propia dentro de los recursos existentes. [Límites del plan](https://supabase.com/pricing). Para el hosting web, Vercel Hobby limita el uso a proyectos personales no comerciales. Si se lanza el SaaS comercial con presupuesto cero, también debe decidirse una alternativa web permitida o autoalojar Next con HTTPS; ese despliegue no está cubierto por el workflow Vercel actual. [Vercel Hobby](https://vercel.com/docs/plans/hobby).
+
+Volver a Edge no resuelve el presupuesto de cómputo: Supabase publica 256 MB y 2 segundos de CPU por request, y ese runtime ya falló en la aceptación anterior. Usar cola + worker en hardware existente conserva el vertical sin reescribir el pipeline. [Límites de Edge](https://supabase.com/docs/guides/functions/limits).
 
 ## 9. Preparación de GitHub, Vercel y Auth
 
@@ -198,13 +206,13 @@ Como punto de partida propongo **Railway Pro con imagen privada en GHCR**: evita
 3. En GitHub environment Production, configura aprobación manual si el plan lo permite. Hoy solo tiene una restricción de ramas, sin required reviewers. Si no puedes poner esa barrera, no hagas merge a main hasta que todo el backend esté preparado y aceptado: el push dispara Production.
 4. Ya existen por nombre en los environments Preview/Production `VERCEL_TOKEN`, `SENTRY_AUTH_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`; Production también tiene `APP_ORIGIN`. No se verificaron los valores privados.
 5. En Vercel verifica por target URL/publishable key del Supabase compartido y `SUPABASE_SERVICE_ROLE_KEY` privada. Los nombres existen en ambos targets; eso no certifica valores válidos. APP_ORIGIN Production debe coincidir con el dominio HTTPS real y con la variable GitHub Production. El script asigna Preview a `https://kdm-pr-<numero>-kdm17.vercel.app` y configura su origin. Hay un APP_ORIGIN Preview limitado a `develop`: no dependas de ese valor para otros PRs.
-6. Verifica Sentry de web y worker, environment/release y sourcemaps privados. El worker requiere `SENTRY_DSN`; no asumas que una integración Vercel lo configura en Railway. No actives flags locales que deshabilitan Sentry en remoto.
+6. Verifica Sentry de web y worker, environment/release y sourcemaps privados dentro de la cuota gratuita. El worker requiere `SENTRY_DSN`; no asumas que una integración Vercel lo configura en tu PC/servidor. No actives flags locales que deshabilitan Sentry en remoto.
 7. En **Supabase remoto**, Auth URL Configuration: Site URL del dominio Production y redirect permitido exacto `<origin-production>/auth/callback`. Tras conocer el número del PR añade también el callback exacto de su alias Preview. La configuración TOML local no configura el servicio hosted.
-8. Configura SMTP propio con remitente/dominio verificados, credenciales privadas y límites adecuados; prueba recepción en un buzón controlado. El SMTP incluido de Supabase no es para producción y restringe destinatarios. [Documentación de SMTP](https://supabase.com/docs/guides/auth/auth-smtp).
+8. Configura SMTP existente o un plan gratuito con remitente/dominio que ya controlen, credenciales privadas y límites adecuados; prueba recepción en un buzón controlado. Si no hay remitente autorizado gratuito disponible, recovery remoto sigue pendiente: Mailpit solo sirve en local. El SMTP incluido de Supabase no es para producción y restringe destinatarios. [Documentación de SMTP](https://supabase.com/docs/guides/auth/auth-smtp).
 9. En plantilla Reset Password remota usa el enlace del archivo `supabase/templates/recovery.html`: `{{ .RedirectTo }}?token_hash={{ .TokenHash }}&amp;type=recovery`. No añadas otra vez `/auth/callback`. Prueba cambio de contraseña completo desde ambos dominios y rechazo de enlace reutilizado.
 10. Decide el alcance del registro: S1 usa confirmación desactivada y sesión inmediata. `register` devuelve error si Auth exige confirmar el email. Para un piloto privado conserva la configuración acordada y limita acceso. Para registro público recomiendo implementar y probar confirmación/onboarding antes de habilitarla; activar el toggle remoto por sí solo rompe el recorrido actual. Es trabajo adicional al despliegue, no una migración pendiente que lo resuelva.
 
-## 10. Primer PR y publicar el worker probado
+## 10. Primer PR y preparar el worker probado
 
 Desde la rama candidata, después de revisar el diff y terminar los checks locales posibles:
 
@@ -214,9 +222,9 @@ gh pr create --repo JMCoC/knowledge-decay-monitor --draft --base develop --head 
 gh pr checks --repo JMCoC/knowledge-decay-monitor <numero>
 ```
 
-El draft ejecuta Quality gates, pero no despliega Preview. Exige CI verde del HEAD final: hoy no hay PR abierto ni ejecución CI del último candidato. El job de CI **construye y prueba** la imagen, pero **no la publica ni despliega**. Para este primer corte, publica manualmente la imagen local que acabas de construir/probar, del mismo SHA limpio. Si cambió HEAD, repite build/smoke y CI para ese candidato.
+El draft ejecuta Quality gates, pero no despliega Preview. Exige CI verde del HEAD final: hoy no hay PR abierto ni ejecución CI del último candidato. El job de CI **construye y prueba** la imagen, pero **no la publica ni despliega**. En un único equipo existente puedes ejecutar el checkout probado mediante Node (paso 11), o la imagen Docker local que acabas de construir/probar. No necesitas registry para la modalidad Node ni para una imagen construida en el mismo host. Si cambió código, repite los checks correspondientes. Vigila los minutos gratuitos de GitHub Actions: CI no es el servicio persistente del worker.
 
-Autentica Docker en GHCR con un token `write:packages` por el prompt de contraseña; no lo pongas en el comando ni en el repo:
+Solo si necesitas trasladar la imagen a otro host y eliges GHCR dentro de su cuota disponible, autentica Docker con un token `write:packages` por el prompt de contraseña; no lo pongas en el comando ni en el repo:
 
 ```powershell
 docker login ghcr.io -u <usuario-github>
@@ -228,16 +236,24 @@ if ($LASTEXITCODE -ne 0) { throw 'No continuar: no se publicó la imagen' }
 docker image inspect $kdmRegistryImage --format '{{json .RepoDigests}}'
 ```
 
-Registra el digest `sha256:...`; confirma paquete privado y acceso del operador. No uses `latest` para liberar. GHCR/Railway requieren credenciales separadas: Railway solo necesita lectura `read:packages`, autorizada para ese paquete.
+Registra el digest `sha256:...`; confirma paquete privado y acceso del operador. No uses `latest` para liberar. El host que descarga el paquete solo necesita lectura `read:packages`; no publiques el código para evitar configurar acceso.
 
-## 11. Preparar Railway sin iniciar otro consumidor
+## 11. Preparar un equipo existente sin iniciar otro consumidor
 
-1. Crea un proyecto y **un solo servicio** `kdm-ingestion`, fuente Docker Image privada `ghcr.io/jmcoc/kdm-ingestion@sha256:<digest-probado>`. Prepara credenciales de lectura del registry; no publiques la imagen para evitar configurar acceso.
-2. Prepara variables privadas `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SENTRY_DSN`. Variables no secretas: `INGESTION_ENVIRONMENT=vercel-production`, `INGESTION_RELEASE_SHA=<sha-origen-de-la-imagen>`, `PORT=8788`, `INGESTION_WORKER_PORT=8788`, `INGESTION_WORKER_HOST=0.0.0.0`. El tag production refleja que comparte la cola operativa, incluso durante pruebas Preview.
-3. Conserva CMD del Dockerfile, una réplica, sin cron ni sleep/serverless. Modelo offline/cache vienen en la imagen; no requiere volumen de datos ni Edge Function `embed`.
-4. Configura healthcheck `/health`, puerto 8788 y política **Always**; configura recursos iniciales de 2 vCPU/2 GiB y mide RSS/latencia con archivos/lotes reales. Ese presupuesto no está certificado aún en Railway.
-5. Desactiva actualizaciones automáticas de imagen; cada release debe fijar digest después de checks. No arranques este consumidor antes de aplicar el esquema ni mientras haya otro worker incompatible. Si la UI despliega al conectar imagen, hazlo únicamente dentro de la ventana del paso 12, tras migraciones.
-6. El healthcheck de Railway valida arranque, no vigila continuamente después del deploy. Añade monitor/alerta para proceso caído, cola envejecida y errores Sentry; si publicas `/health` para monitor externo, no publiques endpoints de datos/debug. [Healthchecks](https://docs.railway.com/deployments/healthchecks), [reinicios](https://docs.railway.com/deployments/restart-policy).
+1. Elige un PC/servidor disponible, con Node 24.11.0, memoria suficiente y conexión estable. Usa un checkout del SHA probado dedicado al worker remoto, separado del desarrollo local; no ejecutes tests/seed contra ese backend. Mantén **un único consumidor remoto**.
+2. Instala dependencias congeladas y prepara el modelo con `npx pnpm@12.5.1 worker:warm` desde esa copia. Comprueba los casos largos y RSS en ese equipo. La preparación usa `.artifacts/models` por defecto; conservar esa carpeta permite inferencia offline.
+3. Crea `.env.worker`, ignorado por Git, solo para ese proceso. Variables privadas: `SUPABASE_URL=https://cdyjtoheovbvewewicaa.supabase.co`, `SUPABASE_SERVICE_ROLE_KEY` del proyecto remoto y `SENTRY_DSN`. No copies valores al comando ni a la web. Variables no secretas: `INGESTION_ENVIRONMENT=vercel-production`, `INGESTION_RELEASE_SHA=<sha-del-checkout>`, `INGESTION_MODEL_OFFLINE=1`, `INGESTION_WORKER_PORT=8788`, `INGESTION_WORKER_HOST=127.0.0.1`. Si otro worker local ocupa 8788 en la misma máquina, usa por ejemplo 8789 para este proceso remoto. El tag production refleja la cola compartida; no aísla jobs.
+4. No inicies todavía: espera las migraciones del paso 12. Después, desde la raíz de ese checkout, ejecuta:
+
+```powershell
+node --env-file=.env.worker --conditions=react-server --import tsx scripts/ingestion-worker.ts
+```
+
+Node da prioridad a variables heredadas del proceso sobre el archivo: usa una terminal sin overrides locales `SUPABASE_URL`/service role, o un supervisor con ambiente dedicado. `worker:local` siempre selecciona el stack local y **no sirve para consumir la cola remota**.
+
+5. En Windows configura el Programador de tareas para iniciar Node al iniciar sesión, directorio de trabajo del checkout, argumentos anteriores con ruta absoluta a `.env.worker` y reinicio ante fallo. Para servicio sin sesión usa un supervisor del sistema adecuado al host elegido; no se instaló ninguno en este diagnóstico. En Linux usa un servicio del sistema. Antes de aceptar, prueba reinicio de máquina/proceso, evita suspensión automática y verifica health desde ese host. La modalidad al iniciar sesión necesita que el operador efectivamente inicie sesión.
+6. Verifica `http://127.0.0.1:<puerto>/health`, cola y Sentry desde el equipo. No abras el puerto al público; el worker solo necesita HTTPS saliente hacia Supabase. Prueba pérdida de conexión y recuperación sin duplicados. El monitor debe detectar que el equipo/worker se apagó, además de fallos de jobs.
+7. Si eliges Docker en lugar de Node directo, usa el CMD de la imagen probada, variables privadas por archivo y reinicio automático. En ese caso fija digest/ID probado. Ninguna modalidad requiere Edge Function `embed` ni un servicio de embeddings de pago.
 
 ## 12. Corte remoto: un Supabase para ambos ambientes
 
@@ -273,17 +289,17 @@ npx pnpm@12.5.1 exec supabase migration list --linked
 
 No uses seed, reset ni `--include-all` en este proyecto. Las nuevas migraciones no encolan automáticamente los cuatro documentos históricos. La guarda de legacy es la penúltima; la última ajusta el presupuesto de locks.
 
-5. Arranca el worker por digest compatible. Espera `/health` Ready y DB accesible; registra SHA/digest y RSS. Mantén el acceso antiguo restringido.
+5. Arranca el worker compatible en el equipo existente. Espera `/health` Ready y DB accesible; registra SHA del checkout, digest/ID si usa Docker y RSS. Mantén el acceso antiguo restringido.
 6. Retira draft al PR (`gh pr ready --repo JMCoC/knowledge-decay-monitor <numero>`). Quality gates debe pasar y Preview desplegar el SHA correcto. Verifica alias/origin, allowlist Auth y una cuenta sintética en workspace propio.
 7. Activa uploads para aceptación controlada en Preview; prueba todo el paso 6 más lotes/500 chunks, límites de bytes/contenido y un reinicio del worker. Estas operaciones van a la DB compartida y reiniciar el worker afecta ambos ambientes. No ejecutes aquí scripts locales con fixtures/reset.
 8. Registra aceptación Preview/revisión y merge a develop. Crea PR develop → main con evidencia, SHA y digest worker; revisa posibles cambios nuevos. Un push a develop no despliega Preview en este workflow: Preview se obtiene por PR no draft.
-9. Prepara/valida la pareja final web/worker compatible. Si cambió código del worker, construye/prueba/publica su nueva imagen y reemplaza coordinadamente el único servicio. Un merge puede cambiar el SHA de la web: registra el SHA real de ambas piezas y no etiquetes una imagen antigua como si se hubiera construido con código nuevo.
+9. Prepara/valida la pareja final web/worker compatible. Si cambió código del worker, prueba el nuevo checkout/imagen y reemplaza coordinadamente el único proceso remoto. Un merge puede cambiar el SHA de la web: registra el SHA real de ambas piezas y no etiquetes una imagen antigua como si se hubiera construido con código nuevo.
 10. Merge a main solo con backend preparado. Espera Quality gates del SHA main y aprueba Production cuando corresponda. El workflow despliega/promueve la web; comprueba dominio final y release. Repite registro/login, recovery con entrega real, formatos hasta Ready, original, filtros y roles en Production. Reabre acceso a usuarios después de aceptar el entorno.
 11. Revalida los cuatro IDs históricos y usa Start Processing uno por uno como Admin/QA Lead según el runbook. Deben conservar IDs/original/hash y terminar coherentemente; el contenido inválido necesita revisión, no forzar Ready.
 
 ## 13. Cuándo darlo por terminado
 
-Registra para la liberación SHA web real, SHA/digest worker, 21 migraciones remotas aplicadas, CI verde final, health y prueba de procesamiento real, receipt de recovery/cambio de contraseña, aislamiento de roles, originales privados, métricas de recursos y evidencia del reinicio/reclamación. No guardes documentos, claves, tokens ni URLs firmadas.
+Registra para la liberación SHA web real, SHA worker (digest/ID si usa Docker), 21 migraciones remotas aplicadas, CI verde final, health y prueba de procesamiento real, receipt de recovery/cambio de contraseña, aislamiento de roles, originales privados, métricas de recursos y evidencia del reinicio/reclamación. Con presupuesto cero, registrar también host existente elegido, horario/disponibilidad aceptada, cuotas gratuitas y backup propio recuperable. No guardes documentos, claves, tokens ni URLs firmadas.
 
 Ante fallo, pausa uploads, detén el worker y conserva jobs/originales. Usa un candidato durable compatible o forward fix. La web HTTP/Edge anterior no es un rollback compatible con el RPC nuevo; no reviertas SQL destructivamente. Con un solo Supabase, recuperas un backend compartido, no un ambiente aislado.
 
