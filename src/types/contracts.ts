@@ -27,7 +27,7 @@ export interface Actor {
 /**
  * Named so per-item results in a batch can reuse it. S1-03 emits
  * UNAUTHENTICATED, FORBIDDEN, INVALID_INPUT, NOT_FOUND and INTERNAL_ERROR;
- * CONFLICT and PROCESSING_FAILED are reserved for later sprints.
+ * later capabilities add controlled domain errors without exposing internals.
  */
 export type ActionErrorCode =
   | "UNAUTHENTICATED"
@@ -36,6 +36,10 @@ export type ActionErrorCode =
   | "NOT_FOUND"
   | "CONFLICT"
   | "PROCESSING_FAILED"
+  | "INSUFFICIENT_CREDITS"
+  | "ESTIMATE_EXPIRED"
+  | "ESTIMATE_STALE"
+  | "ANALYSIS_FAILED"
   | "INTERNAL_ERROR";
 
 export type ActionError = {
@@ -121,6 +125,15 @@ export interface RepositoryQuery {
   pageSize?: number;
 }
 
+/** Filters for analysis selection; the server defines eligibility as ready/active. */
+export interface EligibleDocumentsQuery {
+  name?: string;
+  category?: DocumentCategory;
+  ownerId?: string | null;
+  page?: number;
+  pageSize?: number;
+}
+
 export interface RepositoryItem {
   id: string;
   name: string;
@@ -189,4 +202,136 @@ export interface RepositoryApi {
   listDocuments(query: RepositoryQuery): Promise<ActionResult<RepositoryPage>>;
   /** Server resolves path + bucket. Fixed 300-second expiry; never persist the URL. */
   getOriginalUrl(versionId: string): Promise<ActionResult<{ url: string; expiresAt: string }>>;
+}
+
+export type AnalysisJobStatus = "queued" | "processing" | "completed" | "failed";
+export type AnalysisScopeRole = "source" | "comparison";
+export type FindingType = "contradiction" | "obsolescence";
+export type FindingSeverity = "High" | "Medium" | "Low";
+export type FindingStatus = "pending_review";
+export type CreditEventType = "Promotional" | "Reserved" | "Consumed" | "Released";
+
+export interface AnalysisPage<T> {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface AnalysisSelectionInput {
+  sourceVersionIds: string[];
+  comparisonVersionIds: string[];
+}
+
+export interface AnalysisSelectionItem {
+  documentId: string;
+  versionId: string;
+  versionNumber: number;
+  name: string;
+  category: DocumentCategory;
+  owner: EligibleOwner | null;
+}
+
+export interface AnalysisEstimate extends AnalysisSelectionInput {
+  estimateRef: string;
+  fixedCost: number;
+  expiresAt: string;
+}
+
+export interface RunAnalysisInput {
+  estimateRef: string;
+  idempotencyKey: string;
+}
+
+export interface RunAnalysisResult {
+  analysisId: string;
+  status: AnalysisJobStatus;
+}
+
+export interface RetryAnalysisInput extends RunAnalysisInput {
+  failedAnalysisId: string;
+}
+
+export interface RetryAnalysisResult extends RunAnalysisResult {
+  retryOfAnalysisId: string;
+}
+
+export interface AnalysisSnapshot {
+  analysisId: string;
+  status: AnalysisJobStatus;
+  fixedCost: number;
+  initiator: { id: string; fullName: string };
+  sources: AnalysisSelectionItem[];
+  comparisons: AnalysisSelectionItem[];
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  retryOfAnalysisId: string | null;
+  error: ActionError | null;
+  canRetry: boolean;
+}
+
+export interface CreditSnapshot {
+  available: number;
+  reserved: number;
+}
+
+export interface CreditLedgerItem {
+  id: string;
+  type: CreditEventType;
+  amount: number;
+  analysisId: string | null;
+  createdAt: string;
+}
+
+export interface FindingSummary {
+  id: string;
+  analysisId: string;
+  type: FindingType;
+  explanation: string;
+  severityOriginal: FindingSeverity;
+  severityCurrent: FindingSeverity;
+  status: FindingStatus;
+}
+
+export interface FindingEvidence {
+  id: string;
+  documentId: string;
+  versionId: string;
+  chunkId: string;
+  pageNumber: number | null;
+  section: string | null;
+  sectionHeading: string | null;
+  snapshot: string;
+}
+
+export interface FindingDetail extends FindingSummary {
+  evidence: FindingEvidence[];
+}
+
+export interface FindingsQuery {
+  analysisId: string;
+  type?: FindingType;
+  severity?: FindingSeverity;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface AnalysisApi {
+  listEligibleDocuments(query: EligibleDocumentsQuery): Promise<ActionResult<AnalysisPage<AnalysisSelectionItem>>>;
+  estimateAnalysis(input: AnalysisSelectionInput): Promise<ActionResult<AnalysisEstimate>>;
+  runAnalysis(input: RunAnalysisInput): Promise<ActionResult<RunAnalysisResult>>;
+  retryAnalysis(input: RetryAnalysisInput): Promise<ActionResult<RetryAnalysisResult>>;
+  getAnalysis(analysisId: string): Promise<ActionResult<AnalysisSnapshot>>;
+  getActiveAnalysis(): Promise<ActionResult<AnalysisSnapshot | null>>;
+}
+
+export interface CreditsApi {
+  getCreditSnapshot(): Promise<ActionResult<CreditSnapshot>>;
+  listCreditLedger(query: { page?: number; pageSize?: number }): Promise<ActionResult<AnalysisPage<CreditLedgerItem>>>;
+}
+
+export interface AnalysisResultsApi {
+  listFindings(query: FindingsQuery): Promise<ActionResult<AnalysisPage<FindingSummary>>>;
+  getFinding(findingId: string): Promise<ActionResult<FindingDetail>>;
 }

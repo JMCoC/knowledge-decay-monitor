@@ -34,6 +34,217 @@ export type Database = {
   }
   public: {
     Tables: {
+      analyses: {
+        Row: {
+          attempt_count: number
+          created_at: string
+          error_code:
+            | Database["public"]["Enums"]["analysis_failure_code"]
+            | null
+          finished_at: string | null
+          fixed_cost: number
+          id: string
+          idempotency_key: string
+          initiator_id: string
+          lease_expires_at: string | null
+          model_used: string | null
+          operation_id: string | null
+          output_schema_version: string
+          pricing_version: string
+          prompt_version: string
+          provider_config: Json
+          provider_used: string | null
+          request_fingerprint: string
+          reserved_credits: number
+          retrieval_config: Json
+          retry_of_analysis_id: string | null
+          started_at: string | null
+          status: Database["public"]["Enums"]["analysis_job_status"]
+          updated_at: string
+          workspace_id: string
+        }
+        Insert: {
+          attempt_count?: number
+          created_at?: string
+          error_code?:
+            | Database["public"]["Enums"]["analysis_failure_code"]
+            | null
+          finished_at?: string | null
+          fixed_cost: number
+          id?: string
+          idempotency_key: string
+          initiator_id: string
+          lease_expires_at?: string | null
+          model_used?: string | null
+          operation_id?: string | null
+          output_schema_version: string
+          pricing_version: string
+          prompt_version: string
+          provider_config: Json
+          provider_used?: string | null
+          request_fingerprint: string
+          reserved_credits: number
+          retrieval_config: Json
+          retry_of_analysis_id?: string | null
+          started_at?: string | null
+          status?: Database["public"]["Enums"]["analysis_job_status"]
+          updated_at?: string
+          workspace_id: string
+        }
+        Update: {
+          attempt_count?: number
+          created_at?: string
+          error_code?:
+            | Database["public"]["Enums"]["analysis_failure_code"]
+            | null
+          finished_at?: string | null
+          fixed_cost?: number
+          id?: string
+          idempotency_key?: string
+          initiator_id?: string
+          lease_expires_at?: string | null
+          model_used?: string | null
+          operation_id?: string | null
+          output_schema_version?: string
+          pricing_version?: string
+          prompt_version?: string
+          provider_config?: Json
+          provider_used?: string | null
+          request_fingerprint?: string
+          reserved_credits?: number
+          retrieval_config?: Json
+          retry_of_analysis_id?: string | null
+          started_at?: string | null
+          status?: Database["public"]["Enums"]["analysis_job_status"]
+          updated_at?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "analyses_initiator_id_workspace_id_fkey"
+            columns: ["initiator_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "analyses_retry_of_analysis_id_workspace_id_fkey"
+            columns: ["retry_of_analysis_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "analyses"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "analyses_retry_of_analysis_id_workspace_id_fkey"
+            columns: ["retry_of_analysis_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "analysis_runs"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "analyses_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      analysis_documents: {
+        Row: {
+          analysis_id: string
+          document_id: string
+          role: Database["public"]["Enums"]["analysis_scope_role"]
+          version_id: string
+          workspace_id: string
+        }
+        Insert: {
+          analysis_id: string
+          document_id: string
+          role: Database["public"]["Enums"]["analysis_scope_role"]
+          version_id: string
+          workspace_id: string
+        }
+        Update: {
+          analysis_id?: string
+          document_id?: string
+          role?: Database["public"]["Enums"]["analysis_scope_role"]
+          version_id?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "analysis_documents_analysis_id_workspace_id_fkey"
+            columns: ["analysis_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "analyses"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "analysis_documents_analysis_id_workspace_id_fkey"
+            columns: ["analysis_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "analysis_runs"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "analysis_documents_version_id_document_id_workspace_id_fkey"
+            columns: ["version_id", "document_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "document_versions"
+            referencedColumns: ["id", "document_id", "workspace_id"]
+          },
+        ]
+      }
+      credit_ledger: {
+        Row: {
+          amount: number
+          analysis_id: string | null
+          created_at: string
+          event_type: Database["public"]["Enums"]["credit_event_type"]
+          id: string
+          workspace_id: string
+        }
+        Insert: {
+          amount: number
+          analysis_id?: string | null
+          created_at?: string
+          event_type: Database["public"]["Enums"]["credit_event_type"]
+          id?: string
+          workspace_id: string
+        }
+        Update: {
+          amount?: number
+          analysis_id?: string | null
+          created_at?: string
+          event_type?: Database["public"]["Enums"]["credit_event_type"]
+          id?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "credit_ledger_analysis_id_workspace_id_fkey"
+            columns: ["analysis_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "analyses"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "credit_ledger_analysis_id_workspace_id_fkey"
+            columns: ["analysis_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "analysis_runs"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "credit_ledger_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       document_chunks: {
         Row: {
           chunk_index: number
@@ -300,6 +511,211 @@ export type Database = {
           },
         ]
       }
+      finding_evidence: {
+        Row: {
+          analysis_id: string
+          chunk_id: string
+          document_id: string
+          finding_id: string
+          id: string
+          page_number: number | null
+          section: string | null
+          section_heading: string | null
+          snapshot: string
+          version_id: string
+          workspace_id: string
+        }
+        Insert: {
+          analysis_id: string
+          chunk_id: string
+          document_id: string
+          finding_id: string
+          id?: string
+          page_number?: number | null
+          section?: string | null
+          section_heading?: string | null
+          snapshot: string
+          version_id: string
+          workspace_id: string
+        }
+        Update: {
+          analysis_id?: string
+          chunk_id?: string
+          document_id?: string
+          finding_id?: string
+          id?: string
+          page_number?: number | null
+          section?: string | null
+          section_heading?: string | null
+          snapshot?: string
+          version_id?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "finding_evidence_chunk_id_version_id_workspace_id_fkey"
+            columns: ["chunk_id", "version_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "document_chunks"
+            referencedColumns: ["id", "version_id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "finding_evidence_finding_id_analysis_id_workspace_id_fkey"
+            columns: ["finding_id", "analysis_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "analysis_findings"
+            referencedColumns: ["id", "analysis_id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "finding_evidence_finding_id_analysis_id_workspace_id_fkey"
+            columns: ["finding_id", "analysis_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "findings"
+            referencedColumns: ["id", "analysis_id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "finding_evidence_version_id_document_id_workspace_id_fkey"
+            columns: ["version_id", "document_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "document_versions"
+            referencedColumns: ["id", "document_id", "workspace_id"]
+          },
+        ]
+      }
+      findings: {
+        Row: {
+          analysis_id: string
+          assignee_id: string | null
+          confidence: number
+          created_at: string
+          explanation: string
+          fingerprint: string
+          id: string
+          severity_current: Database["public"]["Enums"]["finding_severity"]
+          severity_original: Database["public"]["Enums"]["finding_severity"]
+          status: Database["public"]["Enums"]["finding_status"]
+          type: Database["public"]["Enums"]["finding_type"]
+          updated_at: string
+          workspace_id: string
+        }
+        Insert: {
+          analysis_id: string
+          assignee_id?: string | null
+          confidence: number
+          created_at?: string
+          explanation: string
+          fingerprint: string
+          id?: string
+          severity_current: Database["public"]["Enums"]["finding_severity"]
+          severity_original: Database["public"]["Enums"]["finding_severity"]
+          status?: Database["public"]["Enums"]["finding_status"]
+          type: Database["public"]["Enums"]["finding_type"]
+          updated_at?: string
+          workspace_id: string
+        }
+        Update: {
+          analysis_id?: string
+          assignee_id?: string | null
+          confidence?: number
+          created_at?: string
+          explanation?: string
+          fingerprint?: string
+          id?: string
+          severity_current?: Database["public"]["Enums"]["finding_severity"]
+          severity_original?: Database["public"]["Enums"]["finding_severity"]
+          status?: Database["public"]["Enums"]["finding_status"]
+          type?: Database["public"]["Enums"]["finding_type"]
+          updated_at?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "findings_analysis_id_workspace_id_fkey"
+            columns: ["analysis_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "analyses"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "findings_analysis_id_workspace_id_fkey"
+            columns: ["analysis_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "analysis_runs"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "findings_assignee_id_workspace_id_fkey"
+            columns: ["assignee_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id", "workspace_id"]
+          },
+        ]
+      }
+      notification_events: {
+        Row: {
+          analysis_id: string
+          attempt_count: number
+          created_at: string
+          error_code: string | null
+          id: string
+          next_attempt_at: string | null
+          recipient_id: string
+          sent_at: string | null
+          status: Database["public"]["Enums"]["notification_status"]
+          type: Database["public"]["Enums"]["notification_type"]
+          workspace_id: string
+        }
+        Insert: {
+          analysis_id: string
+          attempt_count?: number
+          created_at?: string
+          error_code?: string | null
+          id?: string
+          next_attempt_at?: string | null
+          recipient_id: string
+          sent_at?: string | null
+          status?: Database["public"]["Enums"]["notification_status"]
+          type: Database["public"]["Enums"]["notification_type"]
+          workspace_id: string
+        }
+        Update: {
+          analysis_id?: string
+          attempt_count?: number
+          created_at?: string
+          error_code?: string | null
+          id?: string
+          next_attempt_at?: string | null
+          recipient_id?: string
+          sent_at?: string | null
+          status?: Database["public"]["Enums"]["notification_status"]
+          type?: Database["public"]["Enums"]["notification_type"]
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "notification_events_analysis_id_workspace_id_fkey"
+            columns: ["analysis_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "analyses"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "notification_events_analysis_id_workspace_id_fkey"
+            columns: ["analysis_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "analysis_runs"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "notification_events_recipient_id_workspace_id_fkey"
+            columns: ["recipient_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id", "workspace_id"]
+          },
+        ]
+      }
       profiles: {
         Row: {
           created_at: string
@@ -361,6 +777,169 @@ export type Database = {
       }
     }
     Views: {
+      analysis_finding_evidence: {
+        Row: {
+          analysis_id: string | null
+          chunk_id: string | null
+          document_id: string | null
+          finding_id: string | null
+          id: string | null
+          page_number: number | null
+          section: string | null
+          section_heading: string | null
+          snapshot: string | null
+          version_id: string | null
+          workspace_id: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "finding_evidence_chunk_id_version_id_workspace_id_fkey"
+            columns: ["chunk_id", "version_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "document_chunks"
+            referencedColumns: ["id", "version_id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "finding_evidence_finding_id_analysis_id_workspace_id_fkey"
+            columns: ["finding_id", "analysis_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "analysis_findings"
+            referencedColumns: ["id", "analysis_id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "finding_evidence_finding_id_analysis_id_workspace_id_fkey"
+            columns: ["finding_id", "analysis_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "findings"
+            referencedColumns: ["id", "analysis_id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "finding_evidence_version_id_document_id_workspace_id_fkey"
+            columns: ["version_id", "document_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "document_versions"
+            referencedColumns: ["id", "document_id", "workspace_id"]
+          },
+        ]
+      }
+      analysis_findings: {
+        Row: {
+          analysis_id: string | null
+          created_at: string | null
+          explanation: string | null
+          id: string | null
+          severity_current:
+            | Database["public"]["Enums"]["finding_severity"]
+            | null
+          severity_original:
+            | Database["public"]["Enums"]["finding_severity"]
+            | null
+          status: Database["public"]["Enums"]["finding_status"] | null
+          type: Database["public"]["Enums"]["finding_type"] | null
+          updated_at: string | null
+          workspace_id: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "findings_analysis_id_workspace_id_fkey"
+            columns: ["analysis_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "analyses"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "findings_analysis_id_workspace_id_fkey"
+            columns: ["analysis_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "analysis_runs"
+            referencedColumns: ["id", "workspace_id"]
+          },
+        ]
+      }
+      analysis_runs: {
+        Row: {
+          created_at: string | null
+          finished_at: string | null
+          fixed_cost: number | null
+          id: string | null
+          initiator_full_name: string | null
+          initiator_id: string | null
+          public_error_code: string | null
+          retry_of_analysis_id: string | null
+          started_at: string | null
+          status: Database["public"]["Enums"]["analysis_job_status"] | null
+          workspace_id: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "analyses_initiator_id_workspace_id_fkey"
+            columns: ["initiator_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "analyses_retry_of_analysis_id_workspace_id_fkey"
+            columns: ["retry_of_analysis_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "analyses"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "analyses_retry_of_analysis_id_workspace_id_fkey"
+            columns: ["retry_of_analysis_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "analysis_runs"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "analyses_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      analysis_scope: {
+        Row: {
+          analysis_id: string | null
+          document_category:
+            | Database["public"]["Enums"]["document_category"]
+            | null
+          document_id: string | null
+          document_name: string | null
+          owner_full_name: string | null
+          owner_id: string | null
+          role: Database["public"]["Enums"]["analysis_scope_role"] | null
+          version_id: string | null
+          version_number: number | null
+          workspace_id: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "analysis_documents_analysis_id_workspace_id_fkey"
+            columns: ["analysis_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "analyses"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "analysis_documents_analysis_id_workspace_id_fkey"
+            columns: ["analysis_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "analysis_runs"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "analysis_documents_version_id_document_id_workspace_id_fkey"
+            columns: ["version_id", "document_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "document_versions"
+            referencedColumns: ["id", "document_id", "workspace_id"]
+          },
+        ]
+      }
       repository_documents: {
         Row: {
           active_version_id: string | null
@@ -627,7 +1206,19 @@ export type Database = {
       }
     }
     Enums: {
+      analysis_failure_code:
+        | "RETRIEVAL_FAILED"
+        | "ESTIMATE_STALE"
+        | "PROVIDER_UNAVAILABLE"
+        | "INVALID_PROVIDER_OUTPUT"
+        | "PERSISTENCE_FAILED"
+        | "TIMEOUT"
+        | "ATTEMPTS_EXHAUSTED"
+        | "INTERNAL_ERROR"
+      analysis_job_status: "queued" | "processing" | "completed" | "failed"
+      analysis_scope_role: "source" | "comparison"
       analysis_status: "pending_reanalysis" | "analyzed"
+      credit_event_type: "Promotional" | "Reserved" | "Consumed" | "Released"
       document_category:
         | "SOP"
         | "Policy"
@@ -636,6 +1227,11 @@ export type Database = {
         | "Security"
         | "Engineering Guideline"
         | "Other"
+      finding_severity: "High" | "Medium" | "Low"
+      finding_status: "pending_review"
+      finding_type: "contradiction" | "obsolescence"
+      notification_status: "pending" | "sent" | "failed"
+      notification_type: "analysis_completed" | "analysis_failed"
       processing_status:
         | "uploaded"
         | "processing"
@@ -782,7 +1378,20 @@ export const Constants = {
   },
   public: {
     Enums: {
+      analysis_failure_code: [
+        "RETRIEVAL_FAILED",
+        "ESTIMATE_STALE",
+        "PROVIDER_UNAVAILABLE",
+        "INVALID_PROVIDER_OUTPUT",
+        "PERSISTENCE_FAILED",
+        "TIMEOUT",
+        "ATTEMPTS_EXHAUSTED",
+        "INTERNAL_ERROR",
+      ],
+      analysis_job_status: ["queued", "processing", "completed", "failed"],
+      analysis_scope_role: ["source", "comparison"],
       analysis_status: ["pending_reanalysis", "analyzed"],
+      credit_event_type: ["Promotional", "Reserved", "Consumed", "Released"],
       document_category: [
         "SOP",
         "Policy",
@@ -792,6 +1401,11 @@ export const Constants = {
         "Engineering Guideline",
         "Other",
       ],
+      finding_severity: ["High", "Medium", "Low"],
+      finding_status: ["pending_review"],
+      finding_type: ["contradiction", "obsolescence"],
+      notification_status: ["pending", "sent", "failed"],
+      notification_type: ["analysis_completed", "analysis_failed"],
       processing_status: [
         "uploaded",
         "processing",
