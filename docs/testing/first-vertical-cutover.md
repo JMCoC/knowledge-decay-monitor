@@ -18,7 +18,9 @@ Migraciones pendientes respecto a ese inventario, en este orden:
 
 Supabase local tiene las 21 migraciones aplicadas sin reset. El runtime activo ahora es un worker Node; no desplegar `embed` ni provisionar `INGESTION_INTERNAL_TOKEN` para el nuevo candidato. La ruta HTTP anterior devuelve 410. La tabla privada de jobs no se expone a navegadores y la migración no encola los cuatro documentos anteriores.
 
-La última migración añade una guarda para deployments web anteriores que aún intenten reclamar trabajo mediante un `UPDATE` directo. La base devuelve `22023` y deja intactos la versión y el job cuando no existe un lease durable vigente. Esas solicitudes antiguas pueden mostrar un error durante el corte; el estado queda recuperable con la web y el worker compatibles.
+La migración `20261009124615` añade una guarda para deployments web anteriores que aún intenten reclamar trabajo mediante un `UPDATE` directo. La base devuelve `22023` y deja intactos la versión y el job cuando no existe un lease durable vigente. Esas solicitudes antiguas pueden mostrar un error durante el corte; el estado queda recuperable con la web y el worker compatibles. La última migración (`20261009134833`) ajusta los timeouts de enqueue.
+
+Para el arranque local, diagnóstico de puertos Windows y pasos concretos con un Supabase compartido, consultar la [guía local a producción](first-vertical-local-to-production.md). Con Preview/Production compartiendo DB, usar un único worker compatible: la etiqueta de telemetría no aísla jobs por ambiente.
 
 ## Preparación del candidato
 
