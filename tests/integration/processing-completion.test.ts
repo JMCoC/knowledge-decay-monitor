@@ -44,6 +44,7 @@ describe("local processing completion fencing", () => {
     const a = await openLocalSqlSession("kdm_finish_a");
     const b = await openLocalSqlSession("kdm_claim_b");
     try {
+      await a.query("create temporary table kdm_finish_outcome (value text not null) on commit preserve rows;");
       const replacement = randomUUID();
       await b.query("begin;");
       await b.query(`update private.ingestion_jobs
@@ -55,14 +56,34 @@ describe("local processing completion fencing", () => {
             processing_lease_expires_at=j.lease_expires_at
         from private.ingestion_jobs j
         where d.id=j.version_id and j.version_id='${fixture.versionId}' and j.status='running';`);
-      const finishing = a.query(`select public.finish_processing(
-        '${fixture.versionId}', '${fixture.operationId}',
-        '${JSON.stringify(fixture.chunks)}'::jsonb);`);
+      const finishing = a.query(`
+        truncate pg_temp.kdm_finish_outcome;
+        do $finish$
+        declare result text;
+        begin
+          begin
+            perform public.finish_processing(
+              '${fixture.versionId}', '${fixture.operationId}',
+              '${JSON.stringify(fixture.chunks)}'::jsonb);
+            result := 'resolved';
+          exception when others then
+            get stacked diagnostics result = returned_sqlstate;
+          end;
+          insert into pg_temp.kdm_finish_outcome values (result);
+        end
+        $finish$;
+        select value from pg_temp.kdm_finish_outcome limit 1;
+      `);
       const outcome = finishing.then(
-        () => ({ kind: "resolved" as const }),
+        (result) => {
+          const sqlState = result.split(/\r?\n/).at(-1)?.trim() ?? "";
+          return sqlState === "resolved"
+            ? ({ kind: "resolved" as const })
+            : ({ kind: "rejected" as const, error: { sqlState } });
+        },
         (error: unknown) => ({ kind: "rejected" as const, error }),
       );
-      await waitForSqlLock(b, a.pid);
+      await waitForSqlLock(b, a.pid, b.pid);
       await b.query("commit;");
       expect(await outcome).toMatchObject({ kind: "rejected", error: { sqlState: "22023" } });
 

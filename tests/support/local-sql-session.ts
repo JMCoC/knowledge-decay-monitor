@@ -170,8 +170,10 @@ export async function openLocalSqlSession(applicationName: string): Promise<Loca
   }
 }
 
-export async function waitForSqlLock(observer: LocalSqlSession, pid: number, timeoutMs = 2000) {
-  if (!Number.isInteger(pid) || pid < 1) throw new Error("A valid local PostgreSQL PID is required.");
+export async function waitForSqlLock(observer: LocalSqlSession, pid: number, blockerPid: number, timeoutMs = 2000) {
+  if (!Number.isInteger(pid) || pid < 1 || !Number.isInteger(blockerPid) || blockerPid < 1) {
+    throw new Error("Valid local PostgreSQL session PIDs are required.");
+  }
   const boundedMs = Math.max(1, Math.min(timeoutMs, 800));
   const observed = await observer.query(`
     do $wait_for_lock$
@@ -182,7 +184,7 @@ export async function waitForSqlLock(observer: LocalSqlSession, pid: number, tim
       loop
         select exists (
           select 1 from pg_stat_activity
-          where pid = ${pid} and wait_event_type = 'Lock'
+          where pid = ${pid} and ${blockerPid} = any(pg_catalog.pg_blocking_pids(pid))
         ) into lock_seen;
         exit when lock_seen or clock_timestamp() >= deadline;
         perform pg_sleep(0.005);
@@ -193,6 +195,6 @@ export async function waitForSqlLock(observer: LocalSqlSession, pid: number, tim
     select current_setting('kdm_test.lock_observed', true);
   `);
   if (observed.split(/\r?\n/).at(-1)?.trim() !== "true") {
-    throw new Error("The local SQL session did not observe the expected row-lock wait.");
+    throw new Error("The expected local SQL session did not block the processing call.");
   }
 }
