@@ -68,3 +68,15 @@ export async function requireActor(): Promise<Actor> {
 
   return context.actor;
 }
+
+/** Authorizes the S1 document capability from the verified persisted Profile. */
+export function assertDocumentActor(actor: Actor): Actor {
+  if (actor.role !== "Admin" && actor.role !== "QA Lead") {
+    throw new IdentityError("FORBIDDEN");
+  }
+  return actor;
+}
+
+export async function requireDocumentActor(): Promise<Actor> {
+  return assertDocumentActor(await requireActor());
+}

@@ -23,6 +23,25 @@ async function run() {
   const apiKey = status.PUBLISHABLE_KEY ?? status.ANON_KEY;
   assert.ok(apiKey, "Local publishable/anon key is required");
 
+  // Seed originals start as legacy rows with no invented hash. Reconcile one
+  // workspace at a time using a persisted Admin fixture before signed reads.
+  for (const actorUserId of [
+    "10000000-0000-4000-8000-000000000001",
+    "10000000-0000-4000-8000-000000000004",
+  ]) {
+    let summary;
+    try {
+      const output = execFileSync(process.execPath, [
+        resolve("scripts/reconcile-legacy-uploads.mjs"),
+        "--target", "local", "--mode", "apply", "--actor-user-id", actorUserId,
+      ], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+      summary = JSON.parse(output);
+    } catch {
+      throw new Error("Local legacy fixture reconciliation failed.");
+    }
+    assert.equal(summary.failed, 0, "Legacy fixture inspection must complete without technical failures");
+  }
+
   async function request(path, token, options = {}) {
     return fetch(`${base}${path}`, {
       ...options,
@@ -83,7 +102,23 @@ async function run() {
     signal: AbortSignal.timeout(15000),
   });
   assert.ok(!publicFile.ok, "Private bucket must not expose public originals");
-  console.log("PASS: 4 Auth logins, REST isolation, 3 signed downloads, 3 signing denials, private bucket.");
+
+  // The old browser-callable reservation RPC must stay closed after cutover.
+  const legacyReserve = await request("/rest/v1/rpc/reserve_document", tokens[1], {
+    method: "POST",
+    body: JSON.stringify({
+      p_document_id: "20000000-0000-4000-8000-0000000000f1",
+      p_version_id: "30000000-0000-4000-8000-0000000000f1",
+      p_name: "Legacy RPC denial",
+      p_category: "SOP",
+      p_owner_id: "10000000-0000-4000-8000-000000000002",
+      p_extension: "md",
+      p_size_bytes: 1,
+    }),
+  });
+  assert.ok(legacyReserve.status >= 400 && legacyReserve.status < 500, "Legacy browser-callable reserve must be denied");
+
+  console.log("PASS: legacy reconciliation, 4 Auth logins, REST isolation, 3 signed downloads, 3 signing denials, private bucket, legacy reserve denied.");
 }
 
 run().catch((error) => {

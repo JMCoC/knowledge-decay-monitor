@@ -11,8 +11,19 @@ const invalidInputMessage = "Please check the workspace details and try again.";
 function failure<T>(
   code: "UNAUTHENTICATED" | "INVALID_INPUT" | "CONFLICT" | "INTERNAL_ERROR",
   message: string,
+  correlationId?: string,
 ): ActionResult<T> {
-  return { ok: false, error: { code, message } };
+  return { ok: false, error: { code, message, ...(correlationId ? { correlationId } : {}) } };
+}
+
+function reportBootstrapFailure<T>(code: string, message: string): ActionResult<T> {
+  const correlationId = crypto.randomUUID();
+  try {
+    reportAuthFailure({ operation: "bootstrap", code, correlationId });
+  } catch {
+    // Telemetry must not change the controlled product result.
+  }
+  return failure("INTERNAL_ERROR", message, correlationId);
 }
 
 async function reconcileUncertainBootstrap(
@@ -23,12 +34,16 @@ async function reconcileUncertainBootstrap(
     if (context.state === "ready") {
       return { ok: true, data: { workspaceId: context.actor.workspaceId } };
     }
-    reportAuthFailure({ operation: "bootstrap", code: "PROVIDER_ERROR", correlationId: crypto.randomUUID() });
+    return reportBootstrapFailure(
+      "PROVIDER_ERROR",
+      "We couldn't create your workspace. Try again.",
+    );
   } catch {
-    reportAuthFailure({ operation: "bootstrap", code: "PROFILE_LOOKUP_FAILED", correlationId: crypto.randomUUID() });
+    return reportBootstrapFailure(
+      "PROFILE_LOOKUP_FAILED",
+      "We couldn't create your workspace. Try again.",
+    );
   }
-
-  return failure("INTERNAL_ERROR", "We couldn't create your workspace. Try again.");
 }
 
 export async function createWorkspace(
@@ -69,18 +84,17 @@ export async function createWorkspace(
         }
       }
 
-      reportAuthFailure({ operation: "bootstrap", code: "PROVIDER_ERROR", correlationId: crypto.randomUUID() });
-      return failure("INTERNAL_ERROR", "We couldn't create your workspace. Try again.");
+      return reportBootstrapFailure("PROVIDER_ERROR", "We couldn't create your workspace. Try again.");
     }
 
-    if (!data) return reconcileUncertainBootstrap(client);
-    return { ok: true, data: { workspaceId: data } };
+    const workspaceId = data as string | null;
+    if (!workspaceId) return reconcileUncertainBootstrap(client);
+    return { ok: true, data: { workspaceId } };
   } catch (error) {
     if (error instanceof IdentityError && error.code === "UNAUTHENTICATED") {
       return failure("UNAUTHENTICATED", "Please sign in to continue.");
     }
-    reportAuthFailure({ operation: "bootstrap", code: "INTERNAL_ERROR", correlationId: crypto.randomUUID() });
-    return failure("INTERNAL_ERROR", "We couldn't create your workspace. Try again.");
+    return reportBootstrapFailure("INTERNAL_ERROR", "We couldn't create your workspace. Try again.");
   }
 }
 
@@ -101,7 +115,9 @@ export async function reconcileWorkspaceBootstrap(): Promise<
     if (error instanceof IdentityError && error.code === "UNAUTHENTICATED") {
       return failure("UNAUTHENTICATED", "Please sign in to continue.");
     }
-    reportAuthFailure({ operation: "bootstrap", code: "PROFILE_LOOKUP_FAILED", correlationId: crypto.randomUUID() });
-    return failure("INTERNAL_ERROR", "We couldn't confirm your workspace setup. Refresh and try again.");
+    return reportBootstrapFailure(
+      "PROFILE_LOOKUP_FAILED",
+      "We couldn't confirm your workspace setup. Refresh and try again.",
+    );
   }
 }

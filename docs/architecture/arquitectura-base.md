@@ -307,10 +307,10 @@ La base común fija el comportamiento, pero el Día Cero no eligió el runtime d
 
 | Decisión | Evidencia para resolverla | Momento límite |
 |---|---|---|
-| Runtime de parsing y embeddings | Compatibilidad real con PDF/DOCX/Markdown y `gte-small`; límites de tiempo/memoria para archivos permitidos | Antes del primer pipeline real |
-| Disparo y recuperación del trabajo | Cómo se inicia, se evita doble ejecución y se recupera una interrupción sin depender de que el navegador siga abierto | Antes de integrar procesamiento/retry |
-| Finalización transaccional | Operación que persiste chunks y estados/puntero de manera consistente; prueba de fallo | Antes de declarar v1 `ready` |
-| Compensación de upload | Qué sucede si Storage falla después de reservar filas, o si falla la persistencia tras cargar el archivo | Antes del E2E de upload |
+| Runtime de parsing y embeddings | **Cerrada en S1-04**: parsing y chunking corren en el Route Handler `src/app/api/ingestion/process/route.ts` (Next.js 16, node runtime). Embeddings se delegan a la Edge Function `supabase/functions/embed` (`supabase.ai.Session('gte-small')`, 384 dims). El worker `runProcessing` orquesta: descarga canonical → parse (unpdf/mammoth/parser MD propio) → chunk determinista 450/50 → embedBatch con batch 8 → RPC `finish_processing`. Límites medidos en Task 0: cold 7.8s, warm 8-inputs 140ms; cap 500 chunks. | Cerrada |
+| Disparo y recuperación del trabajo | **Cerrada en S1-04**: `finalizeUpload` agenda `after(() => fetch('/api/ingestion/process'))` solo si `upload_state='confirmed'` y `processing_status='uploaded'`. El handler hace CAS (`uploaded + confirmed → processing + operation_id + started_at`); el lease de 180s no se barre en S1-04. Sin cola explícita, sin cron, sin Edge Function adicional. Recuperación de crash duro documentada como límite conocido (spec S1-04 §10); S1-07 rescata vía retry manual. | Cerrada |
+| Finalización transaccional | **Cerrada en S1-04**: la RPC `finish_processing(p_version_id, p_operation_id, p_chunks)` ejecuta en una sola transacción: INSERT `document_chunks` vía `jsonb_to_recordset` con workspace_id heredado + UPDATE `document_versions` (`ready` + `active` + cleanup) + UPDATE `documents.active_version_id`. El trigger diferido `check_active_version` valida coherencia al commit. `security definer`, `grant execute to service_role` only. Rechaza con `22023` si `processing_status != 'processing'`, `upload_state != 'confirmed'`, `operation_id` stale, `version_number != 1`, `version_status IS NOT NULL` o chunk set vacío. | Cerrada |
+| Compensación de upload | S1-02 añade intentos inmutables, estados persistidos, recuperación idempotente y limpieza de temporales retirados por ruta exacta. No borra el documento, la versión ni un original canónico; una carga pendiente sigue visible como `uploaded` y no inicia procesamiento. Storage y Postgres continúan sin transacción distribuida; todo resultado ambiguo se reconcilia antes de retry/limpieza. | Implementación y aceptación local de Storage aprobadas; aceptación cloud pendiente |
 
 No se promete una cola durable, un scheduler, Realtime o un worker desplegado que aún no existen. La elección debe documentarse con su evidencia y, si altera límites o despliegue, mediante otro ADR. Replace File conserva la ambigüedad identificada en S1-07; no se implementa una semántica por suposición.
 
@@ -321,8 +321,19 @@ No se promete una cola durable, un scheduler, Realtime o un worker desplegado qu
 | Esquema, RLS, seed, Storage local y contratos de tipos | Archivos existentes del Día Cero |
 | Validación del Día Cero | Evidencia registrada el 2026-09-25: 78 pruebas SQL, comprobaciones HTTP, TypeScript y lint; no se reejecutaron para esta documentación |
 | Módulos y dependencias descritos aquí | Base de diseño para implementar tickets; sin mecanismos automáticos nuevos de enforcement |
-| Auth/Workspace desde navegador | Walking Skeleton pendiente |
-| Upload/procesamiento/Repository desde navegador | Slice pendiente |
+| Auth/Workspace desde navegador | S1-01 local implementado; aceptación hosted pendiente |
+| Upload/Repository desde navegador | S1-02 local implementado, incluida recuperación cross-session y bytes directos a Storage; validación cloud pendiente |
 | GitHub Actions y controles obligatorios de integración | S1-08 pendiente; acordar personas reales para los roles Dev 1/2/3 |
 
 Consultar la [evidencia del Día Cero](day-zero-verification.md) y su [guía operativa](day-zero-protocol.md#4-guía-de-arranque-día-cero--cinco-pasos) para preparar el entorno. Esta actividad es documental: no requiere crear servicios externos ni modificar la base existente.
+
+## 9. Actualización S1-02 — 2026-10-03
+
+Esta sección actualiza las decisiones del diseño base que S1-02 implementa. Las tablas anteriores describen el diseño inicial y su evidencia histórica; para el ciclo de carga/Repository prevalece la [spec S1-02](../superpowers/specs/2026-10-02-s1-02-tenant-isolation-integration-design.md) y la aceptación vigente de [S1-02](../testing/s1-02-acceptance.md).
+
+- **Autorización:** `getUser()` verifica Auth y el rol/tenant se deriva del Profile persistido. Admin y QA Lead operan documentos de su Workspace; Member no lista, abre ni sube documentos aunque sea Owner. Owner es metadata, nunca capacidad.
+- **Reserva y upload:** el servidor usa RPC acotadas con `service_role` y revalida Profile; la clave service no sale del servidor. El navegador envía bytes directamente al bucket privado `documents`, evitando enviar archivos de 10 MiB al límite de body de 4.5 MB de Vercel. La ruta temporal incluye un `attempt_id`; el servidor verifica tamaño/hash reales antes de publicar sin sobrescritura la ruta canónica. Otra sesión Admin/QA puede recuperar la fila; el backend valida hash/tamaño persistidos antes de emitir un target temporal.
+- **Estados:** `upload_state` es independiente de `processing_status` y `version_status`. El fin de upload deja la versión `uploaded`, `version_status = NULL` y `active_version_id = NULL`. Parsing, chunks, embeddings, activación y Retry Processing siguen en S1-04/S1-07.
+- **Compensación:** recuperar puede retirar solo el intento temporal exacto y crear un intento nuevo bajo CAS. Cleanup nunca borra un canónico ni elimina la fila negocio. Datos legacy permanecen bloqueados hasta reconciliarse.
+- **Repository:** consulta la vista `security_invoker` con sesión/RLS y latest version antes de filtrar; abre solo una versión confirmada mediante URL firmada de 300 segundos.
+- **Límite de aceptación:** el `42P10` local se resolvió conservando el volumen anterior y usando un project id local separado, donde la migración administrada vigente de Storage creó el índice esperado; no se editó `storage.objects`. Las suites de integración pasan con Storage real, incluida carga de 10 MiB y descarga canónica. Esto no valida Vercel ni Supabase cloud: el ticket global queda abierto hasta migrar/reconciliar cloud y repetir allí la ruta completa.

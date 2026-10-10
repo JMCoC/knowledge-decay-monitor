@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { expect, test } from "@playwright/test";
+import { expect, test } from "../fixtures";
 import { insertMemberProfile, newLocalUser } from "../../support/local-supabase";
 import { loginThroughUi } from "../../support/auth-ui";
 
@@ -16,6 +16,56 @@ test("private routes reject an anonymous visitor and ignore an external callback
   await page.goto("/auth/callback?token_hash=synthetic-invalid&type=signup&next=https%3A%2F%2Fexample.org");
   await expect(page).toHaveURL(/\/forgot-password\?error=invalid-link$/);
   expect(new URL(page.url()).origin).toBe("http://127.0.0.1:3000");
+});
+
+test("shows a controlled support reference when the login action response is lost", async ({ page }) => {
+  const user = await newLocalUser();
+  await page.route("**/*", async (route) => {
+    const request = route.request();
+    if (request.method() === "POST" && request.headers()["next-action"]) {
+      await route.abort();
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.goto("/login");
+  await page.getByLabel("Email address").fill(user.email);
+  await page.getByLabel("Password", { exact: true }).fill(user.password);
+  await page.getByRole("button", { name: "Sign in" }).click();
+
+  const alert = page.getByRole("alert").filter({
+    hasText: "We couldn't confirm the operation. Refresh and try again.",
+  });
+  await expect(alert).toContainText("We couldn't confirm the operation. Refresh and try again.");
+  await expect(alert).toContainText(/Reference: [0-9a-f-]{36}/i);
+  await expect(page).toHaveURL(/\/login$/);
+});
+
+test("keeps onboarding pending when the workspace action response is lost", async ({ page }) => {
+  const user = await newLocalUser();
+  await loginThroughUi(page, user.email, user.password);
+  await expect(page).toHaveURL(/\/onboarding$/);
+  await page.route("**/*", async (route) => {
+    const request = route.request();
+    if (request.method() === "POST" && request.headers()["next-action"]) {
+      await route.abort();
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.getByLabel("Your name").fill("KDM Pending Admin");
+  await page.getByLabel("Workspace name").fill(`KDM Pending ${randomUUID()}`);
+  await page.getByRole("button", { name: "Create workspace" }).click();
+
+  const alert = page.getByRole("alert").filter({
+    hasText: "We couldn't confirm the operation. Refresh and try again.",
+  });
+  await expect(alert).toContainText("We couldn't confirm the operation. Refresh and try again.");
+  await expect(alert).toContainText(/Reference: [0-9a-f-]{36}/i);
+  await expect(page).toHaveURL(/\/onboarding$/);
+  await expect(page.getByRole("button", { name: "Check workspace status" })).toBeVisible();
 });
 
 test("a Member sees the workspace home without a Repository navigation entry", async ({ page }) => {

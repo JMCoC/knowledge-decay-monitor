@@ -1,6 +1,6 @@
 # S1-01 — entrega y preparación de Preview en Vercel
 
-Revisión del 2026-09-28. Destino acordado: Vercel Preview de `develop`. Esta guía describe pendientes externos; no acredita que se hayan aplicado en Supabase, GitHub o Vercel.
+Revisión del 2026-09-29. Destino: Vercel Preview de `develop` y Production en Vercel. La [guía paso a paso del backend compartido](despliegue-supabase-compartido.md) registra el estado comprobado y las tareas pendientes.
 
 ## Estado y aceptación
 
@@ -19,33 +19,31 @@ La implementación cubre la entrega local aprobada. La validación histórica es
 
 Los clientes SSR separan lectura en Server Components y escritura en Actions/Handlers. Proxy propaga cookies al request y response. Los orígenes locales y la plantilla se mantienen como se aprobaron. Las pruebas locales incluyen persistencia de la plantilla después de stop/start.
 
-## Bloqueo de código antes del primer Preview funcional
+## Orígenes y callbacks
 
-`src/lib/app-origin.ts` todavía fija `http://127.0.0.1:3000`. Lo consumen la solicitud de recuperación y el callback. **No desplegar esperando que la recuperación funcione solo con variables de Supabase.**
+`src/lib/app-origin.ts` resuelve el origen local o lee y valida `APP_ORIGIN` en tiempo de solicitud. En Vercel requiere HTTPS y rechaza orígenes con credenciales, ruta, query o fragmento. La acción de recuperación y el callback comparten este origen.
 
-Antes de integrar para Preview, adaptar ese origen a configuración de servidor por entorno, validando una URL HTTPS canónica y manteniendo el origen local para desarrollo y tests. `APP_ORIGIN` sería una variable nueva: el código actual todavía no lee ninguna variable con ese nombre. No derivar destinos arbitrarios del header Host ni de un parámetro `next` del navegador. Añadir pruebas del origen remoto y conservar las de recuperación local.
+`APP_ORIGIN` quedó configurada en Vercel con el dominio de develop para Preview y el dominio de Production para Production. Si falta en Vercel, Auth falla cerrado. No derivar destinos del header Host ni de un parámetro `next` del navegador. Las pruebas cubren orígenes locales y alojados.
 
-Elegir la URL estable de la rama `develop` que muestra Vercel (o un dominio asignado a esa rama), no una URL de commit. Mantener iguales el origen de la app y el Site URL de Supabase. La plantilla usa `.SiteURL`, por lo que añadir muchas URLs a la allowlist no convierte el flujo en recuperación independiente por cada Preview.
+Elegir la URL estable de la rama `develop` que muestra Vercel, no una URL de commit. Supabase puede conservar Production como Site URL; la plantilla usa `.RedirectTo`, que recibe el callback del entorno solicitante.
 
-## Supabase alojado de Preview
+## Supabase alojado compartido
 
-1. Usar un proyecto destinado a desarrollo/Preview, separado de producción. Confirmar su referencia antes de cualquier operación remota.
-2. Verificar que la migración inicial está **aplicada**, no solamente creada en el repo: tablas, RLS, GRANT y RPC `bootstrap_workspace`. Coordinar cualquier migración pendiente con Dev 1; no ejecutar seed, fixtures ni reset sobre el proyecto compartido. S1-01 no requiere una migración adicional.
-3. Habilitar Email y registro de usuarios; mantener **Confirm email desactivado** para el comportamiento aprobado. El registro actual requiere sesión inmediata. Activar confirmación exige implementar y probar otro flujo; el callback actual solo admite `recovery`.
-4. Auth URL Configuration: Site URL = origen HTTPS estable de `develop`; Redirect URLs incluye exactamente `<origen>/auth/callback`. Estos ajustes se hacen en el proyecto alojado; `supabase/config.toml` configura el stack local.
-5. Copiar el contenido de `supabase/templates/recovery.html` a la plantilla Reset Password alojada. Conservar `{{ .SiteURL }}/auth/callback?token_hash={{ .TokenHash }}&amp;type=recovery`. Subir el archivo a Git no actualiza la plantilla remota.
-6. Configurar SMTP para entregar recuperación a los destinatarios de prueba. El servicio de correo predeterminado tiene restricciones y no sustituye SMTP para usuarios externos. Verificar remitente, dominio y límites del proveedor elegido. Mailpit solo existe localmente.
+Preview y Production usan el mismo proyecto Supabase gratuito, por lo que comparten cuentas, contraseñas, workspaces y datos. La migración inicial ya está aplicada y S1-01 no requiere otra. No ejecutar seed, fixtures ni reset sobre este proyecto.
+
+Seguir la [guía del backend compartido](despliegue-supabase-compartido.md) para la configuración canónica de Auth: Site URL de Production, callbacks de ambos dominios, plantilla con `{{ .RedirectTo }}`, estado de confirmación de Email y SMTP. La configuración hospedada de Auth/SMTP sigue pendiente de comprobación manual; no se sincroniza desde `supabase/config.toml` ni desde Git.
 
 ## Vercel
 
 - Confirmar conexión al repo, framework Next.js, raíz del proyecto y que `develop` genere **Preview**, manteniendo la rama de producción separada.
-- Configurar las variables para **Preview / rama develop**. No copiar `.env.local` al repo ni reutilizar valores de localhost.
+- Configurar variables para **Preview / rama develop y Production**. No copiar `.env.local` al repo ni reutilizar valores de localhost.
 
 | Variable | Valor / alcance |
 |---|---|
-| `NEXT_PUBLIC_SUPABASE_URL` | URL HTTPS del proyecto Supabase de Preview |
-| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Clave publicable del mismo proyecto; nunca service_role/secret key |
-| `APP_ORIGIN` | Pendiente de implementar su lectura; luego, origen HTTPS estable de develop |
+| `NEXT_PUBLIC_SUPABASE_URL` | Presente para Preview/develop y Production; confirmar que ambos valores apunten al proyecto compartido |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Presente en ambos scopes; confirmar igualdad sin exponerla, nunca usar una secret key aquí |
+| `SUPABASE_SERVICE_ROLE_KEY` | Production presente; **Preview falta**. Añadir sensible, solo servidor, para S1-02 |
+| `APP_ORIGIN` | Presente en ambos scopes; confirmar el origen HTTPS de Preview y el de Production |
 | `SENTRY_AUTH_TOKEN` | Secreto de build, solo si se habilita subida de source maps; nunca `NEXT_PUBLIC_*` |
 
 - Usar Node 24.x compatible con la configuración probada y pnpm 12.5.1 fijado en `packageManager`. Instalación: `pnpm install --frozen-lockfile`; build: `pnpm build`. El runner `scripts/with-local-supabase.mjs` es exclusivo de pruebas locales/CI; no usarlo en Vercel.
@@ -55,7 +53,7 @@ Elegir la URL estable de la rama `develop` que muestra Vercel (o un dominio asig
 
 ## GitHub y subida
 
-1. Revisar el staged y confirmar que no incluye variables, secretos, salidas de runtime ni archivos ajenos. `AGENTS.md` ya estaba staged antes de esta revisión y se preserva por separado del alcance del ticket.
+1. Revisar el staged y confirmar que no incluye variables, secretos, salidas de runtime ni archivos ajenos.
 2. Hacer commit en la rama del ticket y push cuando se decida publicar. No hace falta introducir credenciales remotas para el workflow S1-01: usa Supabase local efímero en el runner.
 3. Abrir PR hacia `develop`. El workflow se dispara en PRs hacia `develop`/`main` y pushes a esas ramas; un push aislado a la rama feature no basta.
 4. Esperar el primer resultado real de `S1-01 Auth and Workspace` / job `auth-workspace`. Corregir cualquier diferencia del runner Ubuntu antes de integrar.

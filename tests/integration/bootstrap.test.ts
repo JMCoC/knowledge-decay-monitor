@@ -3,6 +3,7 @@ import { getIdentityContext } from "../../src/modules/identity/session";
 import {
   assertLocalSupabaseReady,
   bootstrapCounts,
+  cleanupLocalUser,
   newLocalUser,
   ownWorkspaceId,
 } from "../support/local-supabase";
@@ -14,45 +15,53 @@ beforeAll(async () => assertLocalSupabaseReady());
 describe("local Auth and atomic Workspace bootstrap", () => {
   it("serializes concurrent bootstrap calls and persists one Admin Profile", async () => {
     const { client, userId } = await newLocalUser();
-    const marker = `kdm-${crypto.randomUUID()}`;
+    try {
+      const marker = `kdm-${crypto.randomUUID()}`;
 
-    const results = await Promise.all([
-      client.rpc("bootstrap_workspace", { workspace_name: marker, full_name: "Admin One" }),
-      client.rpc("bootstrap_workspace", { workspace_name: marker, full_name: "Admin One" }),
-    ]);
+      const results = await Promise.all([
+        client.rpc("bootstrap_workspace", { workspace_name: marker, full_name: "Admin One" }),
+        client.rpc("bootstrap_workspace", { workspace_name: marker, full_name: "Admin One" }),
+      ]);
 
-    expect(results.filter((result) => !result.error)).toHaveLength(1);
-    const rejected = results.find((result) => result.error)?.error;
-    expect(rejected?.code).toBe("23505");
-    const workspaceId = await ownWorkspaceId(client, userId);
-    expect(workspaceId).toBe(results.find((result) => !result.error)?.data);
-    expect(bootstrapCounts(marker)).toEqual({ workspaceCount: 1, profileCount: 1, adminCount: 1 });
+      expect(results.filter((result) => !result.error)).toHaveLength(1);
+      const rejected = results.find((result) => result.error)?.error;
+      expect(rejected?.code, rejected?.message ?? "Concurrent bootstrap returned no database error").toBe("23505");
+      const workspaceId = await ownWorkspaceId(client, userId);
+      expect(workspaceId).toBe(results.find((result) => !result.error)?.data);
+      expect(bootstrapCounts(marker)).toEqual({ workspaceCount: 1, profileCount: 1, adminCount: 1 });
 
-    const context = await getIdentityContext(client);
-    expect(context).toMatchObject({
-      state: "ready",
-      actor: { userId, workspaceId, role: "Admin" },
-      fullName: "Admin One",
-    });
+      const context = await getIdentityContext(client);
+      expect(context).toMatchObject({
+        state: "ready",
+        actor: { userId, workspaceId, role: "Admin" },
+        fullName: "Admin One",
+      });
+    } finally {
+      await cleanupLocalUser(userId);
+    }
   });
 
   it("reconciles a discarded successful RPC response from the persisted Profile", async () => {
     const { client, userId } = await newLocalUser();
-    const marker = `kdm-${crypto.randomUUID()}`;
+    try {
+      const marker = `kdm-${crypto.randomUUID()}`;
 
-    const committed = await client.rpc("bootstrap_workspace", {
-      workspace_name: marker,
-      full_name: "Recovery Admin",
-    });
-    expect(committed.error).toBeNull();
-    // Simulate a lost response by intentionally resolving from persisted state only.
-    const context = await getIdentityContext(client);
+      const committed = await client.rpc("bootstrap_workspace", {
+        workspace_name: marker,
+        full_name: "Recovery Admin",
+      });
+      expect(committed.error).toBeNull();
+      // Simulate a lost response by intentionally resolving from persisted state only.
+      const context = await getIdentityContext(client);
 
-    expect(context).toMatchObject({
-      state: "ready",
-      actor: { userId, workspaceId: committed.data, role: "Admin" },
-      fullName: "Recovery Admin",
-    });
-    expect(bootstrapCounts(marker)).toEqual({ workspaceCount: 1, profileCount: 1, adminCount: 1 });
+      expect(context).toMatchObject({
+        state: "ready",
+        actor: { userId, workspaceId: committed.data, role: "Admin" },
+        fullName: "Recovery Admin",
+      });
+      expect(bootstrapCounts(marker)).toEqual({ workspaceCount: 1, profileCount: 1, adminCount: 1 });
+    } finally {
+      await cleanupLocalUser(userId);
+    }
   });
 });

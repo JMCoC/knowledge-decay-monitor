@@ -2,6 +2,9 @@
 
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
+import type { ActionError } from "../../types/contracts";
+import { OperationError } from "../../components/operation-error";
+import { captureClientTransportFailure } from "../../lib/observability/client-failure";
 import { createWorkspace, reconcileWorkspaceBootstrap } from "./actions";
 import { createWorkspaceSchema } from "./schemas";
 
@@ -12,7 +15,7 @@ export function OnboardingForm() {
   const router = useRouter();
   const [name, setName] = useState("");
   const [fullName, setFullName] = useState("");
-  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<ActionError | null>(null);
   const [pending, setPending] = useState(false);
   const [retryAllowed, setRetryAllowed] = useState(true);
 
@@ -29,7 +32,10 @@ export function OnboardingForm() {
         router.refresh();
       } else {
         setRetryAllowed(false);
-        setMessage("We couldn't confirm your workspace setup. Check the status before trying again.");
+        setError({
+          ...result.error,
+          message: "We couldn't confirm your workspace setup. Check the status before trying again.",
+        });
       }
       return;
     }
@@ -44,11 +50,14 @@ export function OnboardingForm() {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setMessage(null);
+    setError(null);
 
     const parsed = createWorkspaceSchema.safeParse({ name, fullName });
     if (!parsed.success) {
-      setMessage(parsed.error.issues[0]?.message ?? "Please check the information and try again.");
+      setError({
+        code: "INVALID_INPUT",
+        message: parsed.error.issues[0]?.message ?? "Please check the information and try again.",
+      });
       return;
     }
 
@@ -66,13 +75,13 @@ export function OnboardingForm() {
         return;
       }
 
-      setMessage(result.error.message);
+      setError(result.error);
       if (result.error.code === "CONFLICT" || result.error.code === "INTERNAL_ERROR") {
         await checkPersistedState();
       }
     } catch {
       setRetryAllowed(false);
-      setMessage("We couldn't confirm your workspace setup. Check the status before trying again.");
+      setError(captureClientTransportFailure());
     } finally {
       setPending(false);
     }
@@ -84,7 +93,7 @@ export function OnboardingForm() {
       await checkPersistedState();
     } catch {
       setRetryAllowed(false);
-      setMessage("We couldn't confirm your workspace setup. Check the status before trying again.");
+      setError(captureClientTransportFailure());
     } finally {
       setPending(false);
     }
@@ -141,10 +150,10 @@ export function OnboardingForm() {
           />
         </div>
 
-        {message ? (
-          <p id="workspace-message" role="alert" className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-800">
-            {message}
-          </p>
+        {error ? (
+          <div id="workspace-message" className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-800">
+            <OperationError error={error} />
+          </div>
         ) : null}
 
         <button

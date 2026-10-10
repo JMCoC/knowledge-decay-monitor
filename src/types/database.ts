@@ -7,6 +7,31 @@ export type Json =
   | Json[]
 
 export type Database = {
+  graphql_public: {
+    Tables: {
+      [_ in never]: never
+    }
+    Views: {
+      [_ in never]: never
+    }
+    Functions: {
+      graphql: {
+        Args: {
+          extensions?: Json
+          operationName?: string
+          query?: string
+          variables?: Json
+        }
+        Returns: Json
+      }
+    }
+    Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
+      [_ in never]: never
+    }
+  }
   public: {
     Tables: {
       document_chunks: {
@@ -53,15 +78,73 @@ export type Database = {
           },
         ]
       }
+      document_upload_attempts: {
+        Row: {
+          cleanup_checked_at: string | null
+          cleanup_status: Database["public"]["Enums"]["upload_cleanup_status"]
+          created_at: string
+          id: string
+          retired_at: string | null
+          storage_path: string
+          version_id: string
+          workspace_id: string
+        }
+        Insert: {
+          cleanup_checked_at?: string | null
+          cleanup_status?: Database["public"]["Enums"]["upload_cleanup_status"]
+          created_at?: string
+          id: string
+          retired_at?: string | null
+          storage_path: string
+          version_id: string
+          workspace_id: string
+        }
+        Update: {
+          cleanup_checked_at?: string | null
+          cleanup_status?: Database["public"]["Enums"]["upload_cleanup_status"]
+          created_at?: string
+          id?: string
+          retired_at?: string | null
+          storage_path?: string
+          version_id?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "document_upload_attempts_version_id_workspace_id_fkey"
+            columns: ["version_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "document_versions"
+            referencedColumns: ["id", "workspace_id"]
+          },
+        ]
+      }
       document_versions: {
         Row: {
           analysis_status: Database["public"]["Enums"]["analysis_status"]
           created_at: string
+          current_upload_attempt_id: string | null
           document_id: string
+          expected_sha256: string | null
+          hash_source: Database["public"]["Enums"]["upload_hash_source"] | null
           id: string
+          idempotency_key: string | null
+          processing_lease_expires_at: string | null
+          processing_operation_id: string | null
+          processing_queued: boolean
+          processing_started_at: string | null
           processing_status: Database["public"]["Enums"]["processing_status"]
+          reference_set_at: string | null
+          reference_set_by: string | null
+          request_fingerprint: string | null
+          size_bytes: number | null
           storage_path: string
           updated_at: string
+          upload_confirmed_at: string | null
+          upload_initiator_id: string | null
+          upload_lease_expires_at: string | null
+          upload_operation_id: string | null
+          upload_state: Database["public"]["Enums"]["upload_state"] | null
           version_number: number
           version_status: Database["public"]["Enums"]["version_status"] | null
           workspace_id: string
@@ -69,11 +152,28 @@ export type Database = {
         Insert: {
           analysis_status?: Database["public"]["Enums"]["analysis_status"]
           created_at?: string
+          current_upload_attempt_id?: string | null
           document_id: string
+          expected_sha256?: string | null
+          hash_source?: Database["public"]["Enums"]["upload_hash_source"] | null
           id?: string
+          idempotency_key?: string | null
+          processing_lease_expires_at?: string | null
+          processing_operation_id?: string | null
+          processing_queued?: boolean
+          processing_started_at?: string | null
           processing_status?: Database["public"]["Enums"]["processing_status"]
+          reference_set_at?: string | null
+          reference_set_by?: string | null
+          request_fingerprint?: string | null
+          size_bytes?: number | null
           storage_path: string
           updated_at?: string
+          upload_confirmed_at?: string | null
+          upload_initiator_id?: string | null
+          upload_lease_expires_at?: string | null
+          upload_operation_id?: string | null
+          upload_state?: Database["public"]["Enums"]["upload_state"] | null
           version_number: number
           version_status?: Database["public"]["Enums"]["version_status"] | null
           workspace_id?: string
@@ -81,21 +181,66 @@ export type Database = {
         Update: {
           analysis_status?: Database["public"]["Enums"]["analysis_status"]
           created_at?: string
+          current_upload_attempt_id?: string | null
           document_id?: string
+          expected_sha256?: string | null
+          hash_source?: Database["public"]["Enums"]["upload_hash_source"] | null
           id?: string
+          idempotency_key?: string | null
+          processing_lease_expires_at?: string | null
+          processing_operation_id?: string | null
+          processing_queued?: boolean
+          processing_started_at?: string | null
           processing_status?: Database["public"]["Enums"]["processing_status"]
+          reference_set_at?: string | null
+          reference_set_by?: string | null
+          request_fingerprint?: string | null
+          size_bytes?: number | null
           storage_path?: string
           updated_at?: string
+          upload_confirmed_at?: string | null
+          upload_initiator_id?: string | null
+          upload_lease_expires_at?: string | null
+          upload_operation_id?: string | null
+          upload_state?: Database["public"]["Enums"]["upload_state"] | null
           version_number?: number
           version_status?: Database["public"]["Enums"]["version_status"] | null
           workspace_id?: string
         }
         Relationships: [
           {
+            foreignKeyName: "document_versions_current_upload_attempt_fk"
+            columns: ["current_upload_attempt_id", "id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "document_upload_attempts"
+            referencedColumns: ["id", "version_id", "workspace_id"]
+          },
+          {
             foreignKeyName: "document_versions_document_id_workspace_id_fkey"
             columns: ["document_id", "workspace_id"]
             isOneToOne: false
             referencedRelation: "documents"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "document_versions_document_id_workspace_id_fkey"
+            columns: ["document_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "repository_documents"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "document_versions_reference_set_by_workspace_fk"
+            columns: ["reference_set_by", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "document_versions_upload_initiator_workspace_fk"
+            columns: ["upload_initiator_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
             referencedColumns: ["id", "workspace_id"]
           },
         ]
@@ -216,12 +361,269 @@ export type Database = {
       }
     }
     Views: {
-      [_ in never]: never
+      repository_documents: {
+        Row: {
+          active_version_id: string | null
+          category: Database["public"]["Enums"]["document_category"] | null
+          created_at: string | null
+          id: string | null
+          latest_analysis_status:
+            | Database["public"]["Enums"]["analysis_status"]
+            | null
+          latest_processing_lease_expires_at: string | null
+          latest_processing_queued: boolean | null
+          latest_processing_started_at: string | null
+          latest_processing_status:
+            | Database["public"]["Enums"]["processing_status"]
+            | null
+          latest_upload_state:
+            | Database["public"]["Enums"]["upload_state"]
+            | null
+          latest_version_id: string | null
+          latest_version_number: number | null
+          latest_version_status:
+            | Database["public"]["Enums"]["version_status"]
+            | null
+          name: string | null
+          owner_full_name: string | null
+          owner_id: string | null
+          owner_profile_id: string | null
+          workspace_id: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "documents_active_version_fk"
+            columns: ["active_version_id", "id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "document_versions"
+            referencedColumns: ["id", "document_id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "documents_owner_id_workspace_id_fkey"
+            columns: ["owner_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "documents_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Functions: {
+      authorize_upload_resume_reference: {
+        Args: {
+          p_expected_sha256: string
+          p_size_bytes: number
+          p_user_id: string
+          p_version_id: string
+        }
+        Returns: {
+          authorized: boolean
+        }[]
+      }
+      bind_legacy_upload_reference: {
+        Args: {
+          p_expected_sha256: string
+          p_size_bytes: number
+          p_user_id: string
+          p_version_id: string
+        }
+        Returns: {
+          attempt_id: string
+          can_open: boolean
+          can_recover: boolean
+          can_resume: boolean
+          upload_state: Database["public"]["Enums"]["upload_state"]
+          version_id: string
+        }[]
+      }
       bootstrap_workspace: {
         Args: { full_name: string; workspace_name: string }
         Returns: string
+      }
+      claim_ingestion_job: {
+        Args: never
+        Returns: {
+          operation_id: string
+          started_at: string
+          version_id: string
+          workspace_id: string
+        }[]
+      }
+      claim_upload_recovery: {
+        Args: { p_user_id: string; p_version_id: string }
+        Returns: {
+          attempt_id: string
+          canonical_mime_type: string
+          canonical_path: string
+          expected_sha256: string
+          expected_size_bytes: number
+          operation_id: string
+          temporary_path: string
+          upload_state: Database["public"]["Enums"]["upload_state"]
+          version_id: string
+          workspace_id: string
+        }[]
+      }
+      claim_upload_verification: {
+        Args: { p_attempt_id: string; p_user_id: string; p_version_id: string }
+        Returns: {
+          attempt_id: string
+          canonical_mime_type: string
+          canonical_path: string
+          expected_sha256: string
+          expected_size_bytes: number
+          operation_id: string
+          temporary_path: string
+          upload_state: Database["public"]["Enums"]["upload_state"]
+          version_id: string
+          workspace_id: string
+        }[]
+      }
+      enqueue_ingestion_job: {
+        Args: {
+          p_retry?: boolean
+          p_version_id: string
+          p_workspace_id: string
+        }
+        Returns: string
+      }
+      fail_ingestion_job: {
+        Args: {
+          p_operation_id: string
+          p_retryable: boolean
+          p_version_id: string
+        }
+        Returns: string
+      }
+      finish_processing: {
+        Args: { p_chunks: Json; p_operation_id: string; p_version_id: string }
+        Returns: undefined
+      }
+      finish_upload_recovery: {
+        Args: {
+          p_attempt_id: string
+          p_object_absent: boolean
+          p_operation_id: string
+          p_user_id: string
+          p_version_id: string
+        }
+        Returns: {
+          attempt_id: string
+          can_open: boolean
+          can_recover: boolean
+          can_resume: boolean
+          upload_state: Database["public"]["Enums"]["upload_state"]
+          version_id: string
+        }[]
+      }
+      finish_upload_verification: {
+        Args: {
+          p_attempt_id: string
+          p_operation_id: string
+          p_result: Database["public"]["Enums"]["upload_state"]
+          p_user_id: string
+          p_version_id: string
+        }
+        Returns: {
+          attempt_id: string
+          can_open: boolean
+          can_recover: boolean
+          can_resume: boolean
+          upload_state: Database["public"]["Enums"]["upload_state"]
+          version_id: string
+        }[]
+      }
+      get_confirmed_document_path: {
+        Args: { p_user_id: string; p_version_id: string }
+        Returns: string
+      }
+      get_document_upload_state: {
+        Args: { p_user_id: string; p_version_id: string }
+        Returns: {
+          attempt_id: string
+          can_open: boolean
+          can_recover: boolean
+          can_resume: boolean
+          upload_state: Database["public"]["Enums"]["upload_state"]
+          version_id: string
+        }[]
+      }
+      get_upload_resume_target: {
+        Args: { p_user_id: string; p_version_id: string }
+        Returns: {
+          attempt_id: string
+          canonical_mime_type: string
+          storage_path: string
+          upload_state: Database["public"]["Enums"]["upload_state"]
+          version_id: string
+        }[]
+      }
+      heartbeat_ingestion_job: {
+        Args: { p_operation_id: string; p_version_id: string }
+        Returns: boolean
+      }
+      mark_upload_attempt_cleanup: {
+        Args: {
+          p_attempt_id: string
+          p_object_absent: boolean
+          p_version_id: string
+        }
+        Returns: boolean
+      }
+      reconcile_legacy_upload: {
+        Args: {
+          p_observation: string
+          p_observed_sha256: string
+          p_observed_size_bytes: number
+          p_user_id: string
+          p_version_id: string
+        }
+        Returns: {
+          attempt_id: string
+          outcome: string
+          upload_state: Database["public"]["Enums"]["upload_state"]
+          version_id: string
+        }[]
+      }
+      reserve_document: {
+        Args: {
+          p_category: Database["public"]["Enums"]["document_category"]
+          p_document_id: string
+          p_extension: string
+          p_name: string
+          p_owner_id: string
+          p_size_bytes: number
+          p_version_id: string
+        }
+        Returns: string
+      }
+      reserve_document_upload: {
+        Args: {
+          p_category: Database["public"]["Enums"]["document_category"]
+          p_expected_sha256: string
+          p_extension: string
+          p_idempotency_key: string
+          p_name: string
+          p_owner_id: string
+          p_request_fingerprint: string
+          p_size_bytes: number
+          p_user_id: string
+        }
+        Returns: {
+          attempt_id: string
+          canonical_mime_type: string
+          document_id: string
+          storage_path: string
+          upload_state: Database["public"]["Enums"]["upload_state"]
+          version_id: string
+        }[]
       }
     }
     Enums: {
@@ -239,6 +641,15 @@ export type Database = {
         | "processing"
         | "ready"
         | "processing_failed"
+      upload_cleanup_status: "pending" | "absent" | "failed"
+      upload_control_mode: "paused" | "active"
+      upload_hash_source: "client_declared" | "legacy_reconciled"
+      upload_state:
+        | "pending"
+        | "verifying"
+        | "rejected"
+        | "recovering"
+        | "confirmed"
       version_status: "active" | "historical" | "pending_approval" | "rejected"
       workspace_role: "Admin" | "QA Lead" | "Member"
     }
@@ -366,6 +777,9 @@ export type CompositeTypes<
     : never
 
 export const Constants = {
+  graphql_public: {
+    Enums: {},
+  },
   public: {
     Enums: {
       analysis_status: ["pending_reanalysis", "analyzed"],
@@ -383,6 +797,16 @@ export const Constants = {
         "processing",
         "ready",
         "processing_failed",
+      ],
+      upload_cleanup_status: ["pending", "absent", "failed"],
+      upload_control_mode: ["paused", "active"],
+      upload_hash_source: ["client_declared", "legacy_reconciled"],
+      upload_state: [
+        "pending",
+        "verifying",
+        "rejected",
+        "recovering",
+        "confirmed",
       ],
       version_status: ["active", "historical", "pending_approval", "rejected"],
       workspace_role: ["Admin", "QA Lead", "Member"],

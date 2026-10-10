@@ -8,7 +8,7 @@ export default function AppPage() {
         Your knowledge, in one place.
       </h1>
       <p className="mt-3 max-w-2xl text-base leading-7 text-slate-600">
-        Your private workspace is ready. Add your organization’s knowledge as the Repository becomes available.
+        Your private workspace is ready. Access and explore your organization’s documentation in the Repository.
       </p>
     </div>
   );

@@ -14,6 +14,9 @@ export type ProcessingStatus = Enums["processing_status"];
 export type VersionStatus = Enums["version_status"];
 export type AnalysisStatus = Enums["analysis_status"];
 
+/** A processing attempt can be reclaimed after this persisted lease expires. */
+export const INGESTION_PROCESSING_LEASE_MS = 180_000;
+
 /** Constructed on the server from a verified session and persisted Profile. */
 export interface Actor {
   userId: string;
@@ -21,23 +24,30 @@ export interface Actor {
   role: WorkspaceRole;
 }
 
+/**
+ * Named so per-item results in a batch can reuse it. S1-03 emits
+ * UNAUTHENTICATED, FORBIDDEN, INVALID_INPUT, NOT_FOUND and INTERNAL_ERROR;
+ * CONFLICT and PROCESSING_FAILED are reserved for later sprints.
+ */
+export type ActionErrorCode =
+  | "UNAUTHENTICATED"
+  | "FORBIDDEN"
+  | "INVALID_INPUT"
+  | "NOT_FOUND"
+  | "CONFLICT"
+  | "PROCESSING_FAILED"
+  | "INTERNAL_ERROR";
+
+export type ActionError = {
+  code: ActionErrorCode;
+  /** Controlled user-facing text, never an exception or provider payload. */
+  message: string;
+  correlationId?: string;
+};
+
 export type ActionResult<T> =
   | { ok: true; data: T }
-  | {
-      ok: false;
-      error: {
-        code:
-          | "UNAUTHENTICATED"
-          | "FORBIDDEN"
-          | "INVALID_INPUT"
-          | "NOT_FOUND"
-          | "CONFLICT"
-          | "PROCESSING_FAILED"
-          | "INTERNAL_ERROR";
-        /** Controlled user-facing text, never an exception or provider payload. */
-        message: string;
-      };
-    };
+  | { ok: false; error: ActionError };
 
 export interface CreateWorkspaceInput {
   name: string;
@@ -50,10 +60,55 @@ export interface UploadMetadata {
   ownerId: string;
 }
 
-export interface UploadedVersion {
-  documentId: string;
+/** Browser declaration; the server independently verifies every byte before promotion. */
+export interface UploadItemInput {
+  metadata: UploadMetadata;
+  fileName: string;
+  declaredMimeType: string;
+  sizeBytes: number;
+  /** First min(8, sizeBytes) bytes, base64 encoded and checked in memory. */
+  signature: string;
+  /** Generated before a reservation and reused after a lost response. */
+  idempotencyKey: string;
+  /** SHA-256 of the selected bytes; server recomputes it before confirmation. */
+  sha256: string;
+}
+
+export type UploadState = "pending" | "verifying" | "rejected" | "recovering" | "confirmed";
+
+export interface UploadReference {
+  sizeBytes: number;
+  sha256: string;
+  signature: string;
+}
+
+/** Safe public state. It does not contain hashes, paths, leases, or operation ids. */
+export interface UploadSnapshot {
   versionId: string;
-  processingStatus: "uploaded";
+  uploadState: UploadState | null;
+  attemptId: string | null;
+  canOpen: boolean;
+  canResume: boolean;
+  canRecover: boolean;
+}
+
+/** A short-lived transfer target created by a server-authorized reservation. */
+export interface UploadTarget {
+  versionId: string;
+  attemptId: string;
+  storagePath: string;
+  canonicalMimeType: string;
+}
+
+export interface UploadItemResult {
+  index: number;
+  outcome:
+    | {
+        ok: true;
+        documentId: string;
+        target: UploadTarget;
+      }
+    | { ok: false; error: ActionError };
 }
 
 /** Undefined means no filter; null explicitly means Unassigned/no version status. */
@@ -73,10 +128,20 @@ export interface RepositoryItem {
   owner: Pick<Profile, "id" | "full_name"> | null;
   activeVersionId: string | null;
   /** Latest version, not an inner join through active_version_id. */
-  latestVersion: Pick<
-    DocumentVersion,
-    "id" | "version_number" | "processing_status" | "version_status" | "analysis_status"
-  > | null;
+  latestVersion:
+    | {
+        id: string;
+        version_number: number;
+        processing_status: ProcessingStatus | null;
+        version_status: VersionStatus | null;
+        analysis_status: AnalysisStatus | null;
+        uploadState: UploadState | null;
+        processingStartedAt: string | null;
+        processingQueued: boolean;
+        processingLeaseExpiresAt: string | null;
+        canOpen: boolean;
+      }
+    | null;
   createdAt: string;
 }
 
@@ -85,26 +150,37 @@ export interface RepositoryPage {
   total: number;
   page: number;
   pageSize: number;
+  /** Server time used to classify processing leases in this projection. */
+  asOfMs: number;
 }
 
 /** Type contracts only. Implementations live in the owning business module. */
 export interface IdentityApi {
   requireActor(): Promise<Actor>;
+  requireDocumentActor(): Promise<Actor>;
+}
+
+export interface EligibleOwner {
+  id: string;
+  fullName: string;
 }
 
 export interface WorkspaceApi {
   createWorkspace(input: CreateWorkspaceInput): Promise<ActionResult<{ workspaceId: string }>>;
+  listEligibleOwners(): Promise<ActionResult<EligibleOwner[]>>;
 }
 
 export interface IngestionApi {
-  /** `files`: repeated File fields; `metadata`: JSON UploadMetadata[] in file order.
-   * Validate 1..10 files, <=10 MiB each, with Zod + server-side file validation.
-   * Per-file outcomes make partial batch success explicit; no false batch atomicity.
-   */
-  uploadDocuments(formData: FormData): Promise<ActionResult<ActionResult<UploadedVersion>[]>>;
-  /** Reauthorize server-side; enqueue once without changing document/version IDs. */
+  /** 1..10 items. The batch is not atomic: each item has its own result. */
+  reserveUpload(items: UploadItemInput[]): Promise<ActionResult<UploadItemResult[]>>;
+  getUploadState(versionId: string): Promise<ActionResult<UploadSnapshot>>;
+  /** Reauthorizes the exact current version/attempt pair. */
+  finalizeUpload(input: { versionId: string; attemptId: string }): Promise<ActionResult<UploadSnapshot>>;
+  resumeUpload(versionId: string, reference?: UploadReference): Promise<ActionResult<UploadTarget | UploadSnapshot>>;
+  recoverUpload(versionId: string): Promise<ActionResult<UploadSnapshot>>;
+  /** Reauthorizes and atomically queues a confirmed pending/failed v1 or expired processing lease. */
   retryProcessing(versionId: string): Promise<
-    ActionResult<{ versionId: string; processingStatus: "uploaded" | "processing" }>
+    ActionResult<{ versionId: string; processingStatus: "queued" }>
   >;
 }
 

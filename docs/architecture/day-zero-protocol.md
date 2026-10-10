@@ -38,7 +38,7 @@ Se conceden permisos explícitos; no se depende de los GRANT por defecto de Supa
 
 ### Storage
 
-Bucket privado `documents`, máximo 10 MiB por archivo (10 × 1024 × 1024 bytes). Formatos: PDF, DOCX y Markdown. El límite de 10 archivos por lote y la validación de contenido se implementan en S1-03; el MIME del bucket no demuestra que el archivo sea válido.
+Bucket privado `documents, máximo 10 MiB por archivo (10 × 1024 × 1024 bytes). Formatos: PDF, DOCX y Markdown. S1-03 valida hechos declarados (extensión, tamaño, MIME coherente, firma de 8 bytes en memoria); S1-04 valida el contenido real al parsear. El MIME del bucket no demuestra que el archivo sea válido, y una firma de prefijo no distingue un DOCX de un ZIP genérico ni dice nada de un Markdown.
 
 Ruta: `<workspace_id>/<document_id>/<version_id>/original.<ext>`. La política exige una versión registrada cuyo `storage_path` coincida exactamente, además del tenant y rol. Conocer un prefijo no permite abrir o escribir archivos sin registro. Primero se reserva documento/versión `uploaded`; luego se carga el objeto sin sobrescritura; después se inicia el pipeline. Dev 2 debe compensar una carga fallida y limpiar reservas/objetos huérfanos.
 
@@ -115,6 +115,13 @@ tests/e2e/
 | Cada nueva migración | Autor registrado antes de crearla | Dev 1 revisa orden y tipos |
 | `supabase/tests/database/001_day_zero.test.sql`, `002_rls.test.sql`, `004_bootstrap.test.sql` | Dev 1 | Otros añaden archivos propios |
 | `supabase/tests/database/003_integrity.test.sql` | Dev 2 | Dev 1 revisa cambios de restricciones |
+| `supabase/tests/database/005_ingestion.test.sql` | Dev 2 | Cubre RPC `reserve_document`, `size_bytes` y policies del bucket |
+| `supabase/tests/database/010_processing.test.sql` | Dev 2 | Cubre RPC `finish_processing`, CAS claim, aislamiento tenant |
+| `supabase/migrations/<ts>_finish_processing.sql` | Dev 2 redacta; Dev 1 revisa orden y regenera tipos | Cerrada en S1-04 |
+| `supabase/functions/embed/**` | Dev 2 | Edge Function `supabase.ai.Session('gte-small')`, 384 dims; consumida por `embeddings.ts` |
+| `src/modules/ingestion/worker/**`, `scripts/ingestion-worker.ts`, `Dockerfile.ingestion` | Dev 2 | Worker durable independiente; la ruta HTTP de procesamiento queda retirada (410), según ADR-002 |
+| `scripts/check-processing-fixtures.mjs` | Dev 2 | Escenario end-to-end S1-04; requiere Next.js dev + Edge Function |
+| `tests/fixtures/processing/**` | Dev 2 | Fixtures DOCX real y PDF vacío (fuera de `supabase/fixtures/storage/` para no romper `seed buckets`) |
 | `scripts/check-local-fixtures.mjs` | Dev 1 | Dev 2/3 solicitan nuevos escenarios |
 | `tests/e2e/auth/**` | Dev 1 | S1-01 |
 | `tests/e2e/repository/**` | Dev 3 | Dev 2 entrega fixtures y readiness del worker |
@@ -208,3 +215,14 @@ Ejecutar desde PowerShell en `C:\KDM\knowledge-decay-monitor`. Usar Node.js comp
 - [Next.js typegen](https://nextjs.org/docs/app/api-reference/cli/next#next-typegen-options), contrastado también con `node_modules/next/dist/docs/01-app/03-api-reference/06-cli/next.md` de la versión 16.3.5 instalada.
 
 La evidencia de ejecución y las limitaciones de esta entrega se registran en `docs/architecture/day-zero-verification.md`.
+
+## 5. Actualización de contratos para S1-02 — 2026-10-03
+
+La base de este protocolo describe el diseño previo a los tickets. Para roles, carga y Repository, la implementación aprobada de S1-02 es la fuente posterior y más específica: [spec](../superpowers/specs/2026-10-02-s1-02-tenant-isolation-integration-design.md), [aceptación local y límites](../testing/s1-02-acceptance.md) y [runbook de corte](../testing/s1-02-cutover.md).
+
+- Identidad y Profile persistido determinan rol y tenant; Owner no concede permiso. Admin/QA pueden usar Repository y upload de su tenant; Member no accede a documentos ni originales.
+- El ciclo S1-02 usa reserva idempotente service-only, intento temporal por transferencia, verificación de bytes/hash y publicación inmutable del original canónico. Las rutas y hashes no se exponen a la UI ni a consultas públicas.
+- Upload y procesamiento no son equivalentes: S1-02 deja `processing_status = uploaded`, sin estado funcional ni puntero activo. Parser, embeddings, chunks y activación transaccional permanecen en S1-04; Retry Processing sigue en S1-07.
+- La recuperación y limpieza trabajan sobre el intento temporal exacto; nunca eliminan documentos/versiones o un canónico. Otro Admin/QA del mismo tenant puede reanudar tras comprobar hash/tamaño persistidos con RPC service-only. La reconciliación legacy precede cualquier apertura.
+- El bucket local `documents` limita a 10 MiB y las cargas del navegador van directo a Storage para no cruzar el límite de body de 4.5 MB de Vercel. El `42P10` del volumen local anterior se resolvió con un proyecto local aislado que aplicó la migración administrada de Storage; la aceptación actual prueba Storage real y carga de 10 MiB. Consulta el acta vigente; no debilitar RLS ni modificar índices internos administrados por Storage.
+- La instalación local actual contiene migraciones S1-02 hasta `20261003214934`. Se validaron instalación limpia y upgrade desde Dev 2. Esto no implica aplicación cloud. No usar `--linked`, `db push` remoto, seed o reset cloud como verificación local.
