@@ -52,6 +52,9 @@ jobs:
       - name: Unit tests
         run: pnpm test:unit
 
+      - name: Verify S1 to S2 foundation upgrade
+        run: node scripts/check-analysis-upgrade.mjs
+
       - name: Start disposable local Supabase
         run: node scripts/local-supabase-lifecycle.mjs start
 
