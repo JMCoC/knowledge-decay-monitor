@@ -6,13 +6,14 @@ export const MODEL_ID = "Supabase/gte-small";
 export const MODEL_REVISION = "93b36ff09519291b77d6000d2e86bd8565378086";
 
 export async function loadEmbeddingModel(): Promise<{ infer: Infer; dispose(): Promise<void> }> {
+  const offline = process.env.INGESTION_MODEL_OFFLINE === "1";
   env.cacheDir = resolve(process.env.INGESTION_MODEL_CACHE ?? ".artifacts/models");
-  env.allowLocalModels = false;
+  env.allowLocalModels = offline;
   const extractor = await pipeline("feature-extraction", MODEL_ID, {
     revision: MODEL_REVISION,
     dtype: "q8",
     device: "cpu",
-    local_files_only: process.env.INGESTION_MODEL_OFFLINE === "1",
+    local_files_only: offline,
     session_options: { intraOpNumThreads: 1, interOpNumThreads: 1 },
   });
   const infer: Infer = async (text) => {
