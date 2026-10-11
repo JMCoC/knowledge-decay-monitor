@@ -503,9 +503,9 @@ function main() {
     runSupabase(["start", "--workdir", conflictRoot], "Conflicting S2-01 stack start");
     const conflictContainer = databaseContainer(projectId, conflictRoot);
     runSupabase(["db", "reset", "--local", "--workdir", conflictRoot], "Conflicting S2-01 reset");
-    const conflictBaseline = assertS1Baseline(conflictContainer);
+    assertS1Unchanged(conflictContainer, baseline);
     runSupabase(["migration", "up", "--local", "--workdir", conflictRoot], "Conflicting S2-01 migration upgrade");
-    assertS1Unchanged(conflictContainer, conflictBaseline);
+    assertS1Unchanged(conflictContainer, baseline);
     assertS201Security(conflictContainer);
     queryDatabase(conflictContainer, `
       insert into public.credit_ledger(workspace_id,event_type,amount)
@@ -518,7 +518,7 @@ function main() {
     `, "Conflicting historical promotion snapshot");
 
     runExpectedPromotionConflict(projectRoot);
-    assertS1Unchanged(conflictContainer, conflictBaseline);
+    assertS1Unchanged(conflictContainer, baseline);
     const conflictState = queryDatabase(conflictContainer, `
       select
         (select count(*)::text from public.credit_ledger
