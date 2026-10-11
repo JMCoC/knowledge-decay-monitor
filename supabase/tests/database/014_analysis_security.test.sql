@@ -96,6 +96,7 @@ left join public.credit_ledger l on l.workspace_id = w.id
 where w.id in ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb')
 group by w.id;
 grant select on pg_temp.credit_ledger_baseline to authenticated, service_role;
+grant select on pg_temp.analysis_fixture_ids to authenticated;
 create temporary table pg_temp.credit_ledger_total_baseline (
   row_count integer not null
 ) on commit drop;
@@ -212,7 +213,11 @@ set local role authenticated;
 select set_config('request.jwt.claims',
   '{"sub":"10000000-0000-4000-8000-000000000004","role":"authenticated"}', true);
 select lives_ok(format('select pg_temp.expect_count(%L, 1)',
-  'select count(*)::integer from public.analysis_runs'), 'Admin B sees only its own workspace');
+  format('select count(*)::integer from public.analysis_runs where id = %L::uuid',
+    pg_temp.analysis_fixture_id('completed_b'))), 'Admin B reads its analysis fixture');
+select lives_ok(format('select pg_temp.expect_count(%L, 0)',
+  'select count(*)::integer from public.analysis_runs where workspace_id = ''aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa''::uuid'),
+  'Admin B cannot read a known Workspace A analysis');
 select lives_ok(format('select pg_temp.expect_count(%L, 1)',
   'select count(*)::integer from public.analysis_findings'), 'Admin B sees its completed finding');
 select lives_ok(format('select pg_temp.expect_count(%L, 1)',
