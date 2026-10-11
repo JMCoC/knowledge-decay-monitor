@@ -107,8 +107,18 @@ function analysisDataSql(input: {
   const publicStatus = sqlLiteral(input.status);
   const errorCode = input.status === "failed" ? "'PROVIDER_UNAVAILABLE'::public.analysis_failure_code" : "null";
   const finishedAt = input.status === "completed" || input.status === "failed" ? "now()" : "null";
+  const initialStatus = input.withLedger ? "'queued'::public.analysis_job_status" : `${publicStatus}::public.analysis_job_status`;
+  const attemptCount = input.status === "queued" || input.withLedger ? 0 : 1;
+  const operationId = input.status === "processing" && !input.withLedger ? sqlUuid(randomUUID()) : "null";
+  const leaseExpiresAt = input.status === "processing" && !input.withLedger ? "now() + interval '1 minute'" : "null";
+  const startedAt = input.status === "queued" || input.withLedger ? "null" : "now()";
+  const initialFinishedAt = input.withLedger ? "null" : finishedAt;
+  const initialErrorCode = input.withLedger ? "null" : errorCode;
+  if (input.withLedger) {
+    statements.push(`select w.id from public.workspaces w where w.id = ${workspaceId} for update;`);
+  }
   statements.push(
-    `insert into public.analyses(id,workspace_id,initiator_id,status,fixed_cost,reserved_credits,idempotency_key,request_fingerprint,retry_of_analysis_id,retrieval_config,pricing_version,prompt_version,output_schema_version,provider_config,provider_used,model_used,attempt_count,operation_id,lease_expires_at,started_at,finished_at,error_code) values (${analysisId},${workspaceId},${adminId},${publicStatus}::public.analysis_job_status,3,3,${sqlLiteral(randomUUID())},${sqlLiteral(randomUUID())},null,'{"topK":5}'::jsonb,'fixture-pricing-v1','fixture-prompt-v1','fixture-output-v1','{"primary":{"provider":"synthetic"}}'::jsonb,null,null,1,${sqlUuid(randomUUID())},now() + interval '1 minute',now(),${finishedAt},${errorCode});`,
+    `insert into public.analyses(id,workspace_id,initiator_id,status,fixed_cost,reserved_credits,idempotency_key,request_fingerprint,retry_of_analysis_id,retrieval_config,pricing_version,prompt_version,output_schema_version,provider_config,provider_used,model_used,attempt_count,operation_id,lease_expires_at,started_at,finished_at,error_code) values (${analysisId},${workspaceId},${adminId},${initialStatus},3,3,${sqlLiteral(randomUUID())},${sqlLiteral(randomUUID())},null,'{"topK":5}'::jsonb,'fixture-pricing-v1','fixture-prompt-v1','fixture-output-v1','{"primary":{"provider":"synthetic"}}'::jsonb,null,null,${attemptCount},${operationId},${leaseExpiresAt},${startedAt},${initialFinishedAt},${initialErrorCode});`,
   );
 
   for (const [index, version] of input.versions.entries()) {
@@ -143,10 +153,19 @@ function analysisDataSql(input: {
     );
   }
   if (input.withLedger) {
+    statements.push(`select private.reserve_analysis_credits(${analysisId}, 3);`);
     statements.push(
-      `insert into public.credit_ledger(workspace_id,event_type,amount) values (${workspaceId},'Promotional',50);`,
-      `insert into public.credit_ledger(workspace_id,event_type,amount,analysis_id) values (${workspaceId},'Reserved',3,${analysisId});`,
+      `update public.analyses set status=${publicStatus}::public.analysis_job_status, attempt_count=${attemptCount},`
+      + `operation_id=${input.status === "processing" ? sqlUuid(randomUUID()) : "null"},`
+      + `lease_expires_at=${input.status === "processing" ? "now() + interval '1 minute'" : "null"},`
+      + `started_at=${input.status === "queued" ? "null" : "now()"},`
+      + `finished_at=${input.status === "completed" || input.status === "failed" ? "now()" : "null"},`
+      + `error_code=${errorCode} where id=${analysisId};`,
     );
+    if (input.status === "completed" || input.status === "failed") {
+      const settlement = input.status === "completed" ? "Consumed" : "Released";
+      statements.push(`select private.settle_analysis_credits(${analysisId}, 3, '${settlement}'::public.credit_event_type);`);
+    }
   }
   statements.push("commit;");
   return statements.join("\n");
@@ -205,7 +224,7 @@ async function createAnalysisFixtureInternal(
           ["notification outbox", `delete from public.notification_events where workspace_id = ${sqlUuid(workspaceId)};`],
           ["finding evidence", `delete from public.finding_evidence where workspace_id = ${sqlUuid(workspaceId)};`],
           ["findings", `delete from public.findings where workspace_id = ${sqlUuid(workspaceId)};`],
-          ["credit ledger", `delete from public.credit_ledger where workspace_id = ${sqlUuid(workspaceId)};`],
+          ["non-promotional credit movements", `delete from public.credit_ledger where workspace_id = ${sqlUuid(workspaceId)} and event_type <> 'Promotional';`],
           ["analysis scope", `delete from public.analysis_documents where workspace_id = ${sqlUuid(workspaceId)};`],
           ["analysis runs", `delete from public.analyses where workspace_id = ${sqlUuid(workspaceId)};`],
         ] as const;

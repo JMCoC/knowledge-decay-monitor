@@ -126,7 +126,7 @@ function localDatabaseContainer() {
 }
 
 function runLocalSql(sql: string, variables: Record<string, string>) {
-  const args = ["exec", "-i", localDatabaseContainer(), "psql", "-XAt", "-F", "|", "-U", "postgres", "-d", "postgres"];
+  const args = ["exec", "-i", localDatabaseContainer(), "psql", "-XAt", "-F", "|", "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "postgres"];
   for (const [name, value] of Object.entries(variables)) args.push("-v", `${name}=${value}`);
   try {
     return execFileSync("docker", args, {
@@ -230,19 +230,60 @@ export async function cleanupLocalUser(userId: string) {
     throw new Error("Refusing to clean up outside the synthetic local Auth fixture.");
   }
   const cleanupWorkspaceSql = [
-    "WITH candidates AS MATERIALIZED (",
-    "SELECT w.id workspace_id FROM public.workspaces w JOIN public.profiles p ON p.workspace_id=w.id",
-    "WHERE p.id=:'user_id'::uuid AND p.email LIKE 'kdm-%@example.test'",
-    "AND w.name ~ '^kdm-[0-9a-f-]{36}$'),",
-    "deleted_documents AS (DELETE FROM public.documents d USING candidates c",
-    "WHERE d.workspace_id=c.workspace_id RETURNING d.id),",
-    "deleted_workspaces AS (DELETE FROM public.workspaces w USING candidates c,",
+    "WITH fixture_auth AS MATERIALIZED (",
+    "SELECT u.id,u.email FROM auth.users u WHERE u.id=:'user_id'::uuid",
+    "AND u.email ~ '^kdm-[0-9a-f-]{36}@example[.]test$'),",
+    "admin_profiles AS MATERIALIZED (",
+    "SELECT p.id,p.workspace_id,p.email profile_email,w.name workspace_name,u.email auth_email",
+    "FROM fixture_auth u JOIN public.profiles p ON p.id=u.id",
+    "JOIN public.workspaces w ON w.id=p.workspace_id WHERE p.role='Admin'),",
+    "candidates AS MATERIALIZED (",
+    "SELECT p.id,p.workspace_id FROM fixture_auth u",
+    "JOIN public.profiles p ON p.id=u.id JOIN public.workspaces w ON w.id=p.workspace_id",
+    "WHERE p.role='Admin' AND p.email=u.email AND w.name ~ '^kdm-[0-9a-f-]{36}$'",
+    "FOR UPDATE OF p,w),",
+    "blocked AS MATERIALIZED (",
+    "SELECT c.workspace_id FROM candidates c WHERE",
+    "EXISTS (SELECT 1 FROM public.analyses a WHERE a.workspace_id=c.workspace_id)",
+    "OR EXISTS (SELECT 1 FROM public.credit_ledger l WHERE l.workspace_id=c.workspace_id AND l.event_type<>'Promotional')",
+    "OR (SELECT count(*) FROM public.credit_ledger l WHERE l.workspace_id=c.workspace_id AND l.event_type='Promotional')<>1",
+    "OR EXISTS (SELECT 1 FROM public.credit_ledger l WHERE l.workspace_id=c.workspace_id",
+    "AND l.event_type='Promotional' AND (l.amount<>50 OR l.analysis_id IS NOT NULL))),",
+    "deleted_promotion AS (",
+    "DELETE FROM public.credit_ledger l USING candidates c",
+    "WHERE l.workspace_id=c.workspace_id AND l.event_type='Promotional'",
+    "AND (SELECT count(*) FROM candidates)=1 AND NOT EXISTS (SELECT 1 FROM blocked)",
+    "RETURNING l.workspace_id),",
+    "deleted_documents AS (",
+    "DELETE FROM public.documents d USING deleted_promotion p",
+    "WHERE d.workspace_id=p.workspace_id RETURNING d.id),",
+    "deleted_workspaces AS (",
+    "DELETE FROM public.workspaces w USING deleted_promotion p,",
     "(SELECT count(*) FROM deleted_documents) cleanup_dependency",
-    "WHERE w.id=c.workspace_id RETURNING w.id)",
-    "SELECT count(*)::text FROM deleted_workspaces;",
+    "WHERE w.id=p.workspace_id RETURNING w.id)",
+    "SELECT",
+    "(SELECT count(*) FROM fixture_auth)::text || '|' ||",
+    "(SELECT count(*) FROM admin_profiles WHERE profile_email<>auth_email",
+    "OR workspace_name !~ '^kdm-[0-9a-f-]{36}$')::text || '|' ||",
+    "(SELECT count(*) FROM candidates)::text || '|' ||",
+    "(SELECT count(*) FROM blocked)::text || '|' ||",
+    "(SELECT count(*) FROM deleted_workspaces)::text;",
   ].join(" ");
-  const deletedWorkspaces = Number(runLocalSql(cleanupWorkspaceSql, { user_id: userId }));
-  if (deletedWorkspaces > 1) throw new Error("Synthetic local user matched multiple test workspaces.");
+  const state = runLocalSql(cleanupWorkspaceSql, { user_id: userId }).split("|");
+  if (state.length !== 5 || state.some((value) => !/^\d+$/.test(value))) {
+    throw new Error("Synthetic local workspace cleanup could not verify its database result.");
+  }
+  const [authCount, ownerMismatchCount, candidateCount, blockedCount, deletedWorkspaceCount] = state.map(Number);
+  if (authCount !== 1) throw new Error("Refusing to clean up outside the synthetic local Auth fixture.");
+  if (ownerMismatchCount > 0) {
+    throw new Error("Refusing to remove an Admin workspace without its exact synthetic owner marker.");
+  }
+  if (blockedCount > 0) {
+    throw new Error("Refusing to remove a synthetic workspace with analysis or non-promotional credit history.");
+  }
+  if (candidateCount > 1 || deletedWorkspaceCount !== candidateCount) {
+    throw new Error("Synthetic local workspace cleanup did not match its exact owner candidate.");
+  }
 
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!key) throw new Error("Local Auth cleanup requires the local-only service role.");

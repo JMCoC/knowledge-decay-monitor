@@ -1123,6 +1123,7 @@ export type Database = {
         Args: { p_user_id: string; p_version_id: string }
         Returns: string
       }
+      get_credit_snapshot: { Args: never; Returns: Json }
       get_document_upload_state: {
         Args: { p_user_id: string; p_version_id: string }
         Returns: {
@@ -1147,6 +1148,10 @@ export type Database = {
       heartbeat_ingestion_job: {
         Args: { p_operation_id: string; p_version_id: string }
         Returns: boolean
+      }
+      list_credit_ledger: {
+        Args: { p_page?: number; p_page_size?: number }
+        Returns: Json
       }
       mark_upload_attempt_cleanup: {
         Args: {

@@ -12,6 +12,16 @@ vi.mock("server-only", () => ({}));
 
 beforeAll(async () => assertLocalSupabaseReady());
 
+async function expectPromotion(client: Awaited<ReturnType<typeof newLocalUser>>["client"]) {
+  const snapshot = await client.rpc("get_credit_snapshot");
+  expect(snapshot).toMatchObject({ data: { available: 50, reserved: 0 }, error: null });
+
+  const promotion = await client.from("credit_ledger").select("id, event_type, amount");
+  expect(promotion.error).toBeNull();
+  expect(promotion.data).toHaveLength(1);
+  expect(promotion.data?.[0]).toMatchObject({ event_type: "Promotional", amount: 50 });
+}
+
 describe("local Auth and atomic Workspace bootstrap", () => {
   it("serializes concurrent bootstrap calls and persists one Admin Profile", async () => {
     const { client, userId } = await newLocalUser();
@@ -29,6 +39,7 @@ describe("local Auth and atomic Workspace bootstrap", () => {
       const workspaceId = await ownWorkspaceId(client, userId);
       expect(workspaceId).toBe(results.find((result) => !result.error)?.data);
       expect(bootstrapCounts(marker)).toEqual({ workspaceCount: 1, profileCount: 1, adminCount: 1 });
+      await expectPromotion(client);
 
       const context = await getIdentityContext(client);
       expect(context).toMatchObject({
@@ -60,6 +71,7 @@ describe("local Auth and atomic Workspace bootstrap", () => {
         fullName: "Recovery Admin",
       });
       expect(bootstrapCounts(marker)).toEqual({ workspaceCount: 1, profileCount: 1, adminCount: 1 });
+      await expectPromotion(client);
     } finally {
       await cleanupLocalUser(userId);
     }

@@ -36,6 +36,9 @@ insert into public.profiles(id,workspace_id,role,full_name,email) values
   ('10000000-0000-4000-8000-000000000003','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','Member','Member A','member.a@example.test'),
   ('10000000-0000-4000-8000-000000000004','bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb','Admin','Admin B','admin.b@example.test');
 
+select private.grant_promotional_credits('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+select private.grant_promotional_credits('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb');
+
 -- Member is Owner of a document to demonstrate that ownership is NOT assignment.
 insert into public.documents(id,workspace_id,name,category,owner_id) values
   ('20000000-0000-4000-8000-000000000001','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','Incident response','SOP','10000000-0000-4000-8000-000000000003'),

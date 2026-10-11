@@ -83,9 +83,25 @@ select pg_temp.record_fixture_evidence_and_check(
 select pg_temp.record_fixture_evidence_and_check(
   'completed_b_evidence', 'completed_b', 'completed_b_finding', 'completed_b', 1, 'Tenant B snapshot');
 
-insert into public.credit_ledger(workspace_id, event_type, amount)
-values ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'Promotional', 50),
-       ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'Promotional', 50);
+select private.grant_promotional_credits('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+select private.grant_promotional_credits('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb');
+create temporary table pg_temp.credit_ledger_baseline (
+  workspace_id uuid primary key,
+  row_count integer not null
+) on commit drop;
+insert into pg_temp.credit_ledger_baseline(workspace_id, row_count)
+select w.id, count(l.id)::integer
+from public.workspaces w
+left join public.credit_ledger l on l.workspace_id = w.id
+where w.id in ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb')
+group by w.id;
+grant select on pg_temp.credit_ledger_baseline to authenticated, service_role;
+create temporary table pg_temp.credit_ledger_total_baseline (
+  row_count integer not null
+) on commit drop;
+insert into pg_temp.credit_ledger_total_baseline(row_count)
+select count(*)::integer from public.credit_ledger;
+grant select on pg_temp.credit_ledger_total_baseline to service_role;
 insert into public.credit_ledger(workspace_id, event_type, amount, analysis_id)
 values ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'Reserved', 3,
           pg_temp.analysis_fixture_id('completed_a'));
@@ -117,8 +133,11 @@ select lives_ok(format('select pg_temp.expect_count(%L, 1)',
   'select count(*)::integer from public.analysis_findings'), 'Findings view publishes only completed analyses');
 select lives_ok(format('select pg_temp.expect_count(%L, 1)',
   'select count(*)::integer from public.analysis_finding_evidence'), 'Evidence view publishes only completed analyses');
-select lives_ok(format('select pg_temp.expect_count(%L, 2)',
-  'select count(*)::integer from public.credit_ledger'), 'Admin A reads detailed ledger rows for its workspace');
+select lives_ok(format('select pg_temp.expect_count(%L, %s)',
+  'select count(*)::integer from public.credit_ledger',
+  (select row_count + 1 from pg_temp.credit_ledger_baseline
+    where workspace_id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')),
+  'Admin A reads detailed ledger rows for its workspace');
 select lives_ok(format('select pg_temp.expect_count(%L, 0)',
   'select count(*)::integer from public.analyses where workspace_id = ''bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb''::uuid'),
   'Admin A cannot read a known Workspace B analysis');
@@ -198,8 +217,11 @@ select lives_ok(format('select pg_temp.expect_count(%L, 1)',
   'select count(*)::integer from public.analysis_findings'), 'Admin B sees its completed finding');
 select lives_ok(format('select pg_temp.expect_count(%L, 1)',
   'select count(*)::integer from public.analysis_finding_evidence'), 'Admin B sees its completed evidence');
-select lives_ok(format('select pg_temp.expect_count(%L, 1)',
-  'select count(*)::integer from public.credit_ledger'), 'Admin B sees only its ledger rows');
+select lives_ok(format('select pg_temp.expect_count(%L, %s)',
+  'select count(*)::integer from public.credit_ledger',
+  (select row_count from pg_temp.credit_ledger_baseline
+    where workspace_id = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb')),
+  'Admin B sees only its ledger rows');
 reset role;
 
 set local role anon;
@@ -209,14 +231,16 @@ select throws_ok($$select status from public.analyses$$,
   '42501', null, 'Anonymous callers cannot read analysis tables');
 reset role;
 
-grant select on pg_temp.analysis_fixture_ids to service_role;
+grant select on pg_temp.analysis_fixture_ids, pg_temp.credit_ledger_baseline to service_role;
 set local role service_role;
-select lives_ok(format('select pg_temp.expect_count(%L, 3)',
-  'select count(*)::integer from public.credit_ledger'), 'Server role can read ledger rows');
-select lives_ok(format(
+select lives_ok(format('select pg_temp.expect_count(%L, %s)',
+  'select count(*)::integer from public.credit_ledger',
+  (select row_count + 1 from pg_temp.credit_ledger_total_baseline)),
+  'Server role can read ledger rows');
+select throws_ok(format(
   'insert into public.credit_ledger(workspace_id,event_type,amount,analysis_id) values (%L::uuid,''Released'',3,%L::uuid)',
   'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', pg_temp.analysis_fixture_id('completed_a')),
-  'Server role can append a ledger movement');
+  '42501', null, 'Server role cannot append ledger movements directly');
 select throws_ok($$update public.credit_ledger set amount = amount + 1$$,
   '42501', null, 'Server role cannot update an existing ledger movement');
 select throws_ok($$delete from public.credit_ledger$$,

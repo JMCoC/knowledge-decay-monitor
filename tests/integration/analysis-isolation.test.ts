@@ -135,7 +135,7 @@ describe("analysis authorization through local Supabase Data API", () => {
 
       const adminLedger = await tenantA.admin.from("credit_ledger").select("*");
       expect(adminLedger.error).toBeNull();
-      expect(adminLedger.data).toHaveLength(2);
+      expect(adminLedger.data).toHaveLength(3);
 
       const crossTenantRows = await tenantA.admin.from("analyses").select("id")
         .eq("id", tenantB.analysisId);
