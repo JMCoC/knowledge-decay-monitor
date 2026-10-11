@@ -13,6 +13,12 @@ select lives_ok($$select bootstrap_workspace('New workspace','New Admin')$$,'Aut
 select is((select count(*) from workspaces),1::bigint,'Creator sees exactly one workspace');
 select is((select role::text from profiles where id = auth.uid()),'Admin','Creator becomes Admin');
 select is((select email from profiles where id = auth.uid()),'new@example.test','Email comes from Auth');
+select is((select count(*)::integer from credit_ledger
+  where workspace_id = (select workspace_id from profiles where id = auth.uid())
+    and event_type = 'Promotional'), 1, 'Bootstrap records exactly one promotion');
+select is((select amount from credit_ledger
+  where workspace_id = (select workspace_id from profiles where id = auth.uid())
+    and event_type = 'Promotional'), 50, 'Bootstrap promotion is fifty credits');
 select throws_ok($$select bootstrap_workspace('Second workspace','New Admin')$$,'23505',null,'Second workspace rejected');
 select is((select count(*) from workspaces),1::bigint,'Failed repeat does not create orphan workspace');
 select throws_ok($$insert into workspaces(name) values ('Bypass')$$,'42501',null,'Direct workspace insert denied');

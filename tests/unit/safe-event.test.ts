@@ -128,4 +128,32 @@ describe("safe Sentry events", () => {
       }),
     ).toEqual({ correlationId });
   });
+
+  it.each(["snapshot", "ledger"] as const)("accepts the closed credits/%s operation", (operation) => {
+    const receipt = captureSafeFailure({
+      module: "credits",
+      operation,
+      code: "INTERNAL_ERROR",
+      correlationId,
+    });
+
+    expect(receipt).toEqual({ correlationId, eventId: "0123456789abcdef0123456789abcdef" });
+    expect(filterSafeEvent(safeCandidate({
+      tags: {
+        ...safeCandidate().tags as object,
+        module: "credits",
+        operation,
+      },
+    }), context)?.tags).toMatchObject({ module: "credits", operation });
+  });
+
+  it("rejects credit operations outside the closed catalog", () => {
+    expect(filterSafeEvent(safeCandidate({
+      tags: {
+        ...safeCandidate().tags as object,
+        module: "credits",
+        operation: "write",
+      },
+    }), context)).toBeNull();
+  });
 });

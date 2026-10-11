@@ -3,6 +3,7 @@ export const operationCatalog = {
   workspace: ["bootstrap", "reconcile", "owners"],
   ingestion: ["reserve", "verify", "resume", "recover", "cleanup", "reconcile", "process", "retry"],
   repository: ["list", "open"],
+  credits: ["snapshot", "ledger"],
   application: ["request", "render", "unhandled", "transport", "diagnostic"],
 } as const;
 

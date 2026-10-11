@@ -2,6 +2,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set search_path = public, extensions;
 \ir analysis-fixtures.psql
+\ir credit-fixtures.psql
 select no_plan();
 
 select has_table('public', 'analyses', 'Analysis table exists');
@@ -168,21 +169,30 @@ select throws_ok(format(
   pg_temp.analysis_fixture_id('analysis_b')),
   '23503', null, 'Scope document and version must belong to the same tenant');
 
-select lives_ok($$insert into public.credit_ledger(workspace_id, event_type, amount)
-  values ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'Promotional', 50)$$,
+create temporary table pg_temp.promotion_test_fixture (
+  workspace_id uuid not null,
+  analysis_id uuid not null
+) on commit drop;
+insert into pg_temp.promotion_test_fixture
+select workspace_id, pg_temp.create_credit_analysis(workspace_id, 3, 'completed')
+from (select pg_temp.create_credit_workspace() as workspace_id) fixture;
+
+select lives_ok(format('insert into public.credit_ledger(workspace_id, event_type, amount) values (%L::uuid, ''Promotional'', 50)',
+  (select workspace_id from pg_temp.promotion_test_fixture)),
   'One synthetic promotional grant can be recorded');
-select throws_ok($$insert into public.credit_ledger(workspace_id, event_type, amount)
-  values ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'Promotional', 50)$$,
+select throws_ok(format('insert into public.credit_ledger(workspace_id, event_type, amount) values (%L::uuid, ''Promotional'', 50)',
+  (select workspace_id from pg_temp.promotion_test_fixture)),
   '23505', null, 'A workspace cannot receive duplicate promotional grants');
 select throws_ok(format(
   'insert into public.credit_ledger(workspace_id, event_type, amount, analysis_id) values (%L::uuid, ''Promotional'', 50, %L::uuid)',
-  'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', pg_temp.analysis_fixture_id('analysis_a')),
+  (select workspace_id from pg_temp.promotion_test_fixture),
+  (select analysis_id from pg_temp.promotion_test_fixture)),
   '23514', null, 'Promotional events do not reference analyses');
 select throws_ok($$insert into public.credit_ledger(workspace_id, event_type, amount)
   values ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'Reserved', 3)$$,
   '23514', null, 'Analysis credit events require an analysis reference');
-select throws_ok($$insert into public.credit_ledger(workspace_id, event_type, amount)
-  values ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'Promotional', 0)$$,
+select throws_ok(format('insert into public.credit_ledger(workspace_id, event_type, amount) values (%L::uuid, ''Promotional'', 0)',
+  (select workspace_id from pg_temp.promotion_test_fixture)),
   '23514', null, 'Credit movement amount must be positive');
 select lives_ok(format(
   'insert into public.credit_ledger(workspace_id, event_type, amount, analysis_id) values (%L::uuid, ''Reserved'', 3, %L::uuid)',
