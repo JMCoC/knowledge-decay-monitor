@@ -499,13 +499,14 @@ function main() {
 
     assertNoExistingStack(projectId);
     conflictRoot = mkdtempSync(join(tmpdir(), "kdm-s2-02-conflict-"));
-    copyS1Workspace(conflictRoot, "s2_01");
-    runSupabase(["start", "--workdir", conflictRoot], "Conflicting S2-01 stack start");
+    copyS1Workspace(conflictRoot, "s1");
+    runSupabase(["start", "--workdir", conflictRoot], "Promotional conflict stack start");
     const conflictContainer = databaseContainer(projectId, conflictRoot);
-    runSupabase(["db", "reset", "--local", "--workdir", conflictRoot], "Conflicting S2-01 reset");
-    assertS1Unchanged(conflictContainer, baseline);
+    runSupabase(["db", "reset", "--local", "--workdir", conflictRoot], "Promotional conflict S1 reset");
+    const conflictBaseline = assertS1Baseline(conflictContainer);
+    copyS1Workspace(conflictRoot, "s2_01");
     runSupabase(["migration", "up", "--local", "--workdir", conflictRoot], "Conflicting S2-01 migration upgrade");
-    assertS1Unchanged(conflictContainer, baseline);
+    assertS1Unchanged(conflictContainer, conflictBaseline);
     assertS201Security(conflictContainer);
     queryDatabase(conflictContainer, `
       insert into public.credit_ledger(workspace_id,event_type,amount)
@@ -518,7 +519,7 @@ function main() {
     `, "Conflicting historical promotion snapshot");
 
     runExpectedPromotionConflict(projectRoot);
-    assertS1Unchanged(conflictContainer, baseline);
+    assertS1Unchanged(conflictContainer, conflictBaseline);
     const conflictState = queryDatabase(conflictContainer, `
       select
         (select count(*)::text from public.credit_ledger
