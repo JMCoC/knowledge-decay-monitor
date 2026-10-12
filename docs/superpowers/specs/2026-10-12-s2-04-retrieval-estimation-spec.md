@@ -175,6 +175,15 @@ Archivo nuevo `supabase/migrations/<timestamp>_s2_04_retrieval_estimation.sql` (
 
 Derivado explícito (no está en el contrato, requerido para operar): `grant execute on function public.retrieve_candidate_pairs(uuid,uuid[],uuid[],integer,double precision) to authenticated;` — con `security invoker` y llamada desde el cliente de sesión, sin este grant la Action recibe `42501`. Se incluye en la migración y se aserta en pgTAP (positivo para `authenticated`, negativo para `anon`); el equipo lo confirma en revisión.
 
+## Enmienda al contrato §4.1 (2026-10-12)
+
+El CHECK de source_version_ids no vacío del contrato original
+usaba array_length(source_version_ids, 1) >= 1 sin coalesce.
+array_length('{}', 1) devuelve NULL, y NULL >= 1 no es falso,
+así que '{}' pasaba el CHECK. Fix: coalesce(array_length(...), 0) >= 1.
+Detectado por el pgTAP 019 test #21. Solo aplica a source;
+comparison sigue admitiendo '{}' (0..20).
+
 Sin `service_role` en este ticket: lecturas, RPC e insert van con sesión + RLS/policies. Las estimaciones son inmutables; expiran por TTL, sin purga en este ticket.
 
 ---

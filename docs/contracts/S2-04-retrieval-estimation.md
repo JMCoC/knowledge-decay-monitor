@@ -71,7 +71,9 @@ Firma TypeScript:
       id uuid primary key default gen_random_uuid(),
       workspace_id uuid not null references public.workspaces(id) on delete cascade,
       initiator_id uuid not null,
-      source_version_ids uuid[] not null check (array_length(source_version_ids, 1) >= 1),
+      -- coalesce porque array_length('{}', 1) devuelve NULL y NULL >= 1
+      -- no es falso: sin coalesce, '{}' pasaría el CHECK.
+      source_version_ids uuid[] not null check (coalesce(array_length(source_version_ids, 1), 0) >= 1),
       comparison_version_ids uuid[] not null,
       request_fingerprint text not null check (char_length(btrim(request_fingerprint)) > 0),
       retrieval_config jsonb not null check (jsonb_typeof(retrieval_config) = 'object'),
