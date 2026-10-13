@@ -105,6 +105,28 @@ insert into public.document_chunks(id,workspace_id,version_id,chunk_index,text_c
   ('40000000-0000-4000-8000-0000000000e2','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     '30000000-0000-4000-8000-0000000000d4',1,'self two',
     ('[1' || repeat(',0', 383) || ']')::extensions.vector(384));
+-- Task 2 edges: single-chunk source version (V5) + tight-boundary
+-- comparison version (V6: 0.7501 in, 0.7499 out vs e1).
+insert into public.documents(id,workspace_id,name,category,owner_id) values
+  ('20000000-0000-4000-8000-0000000000d4','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','Retrieval single','SOP','10000000-0000-4000-8000-000000000001'),
+  ('20000000-0000-4000-8000-0000000000d5','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa','Retrieval boundary','SOP','10000000-0000-4000-8000-000000000001');
+insert into public.document_versions(id,workspace_id,document_id,version_number,storage_path) values
+  ('30000000-0000-4000-8000-0000000000d5','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    '20000000-0000-4000-8000-0000000000d4',1,
+    'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/20000000-0000-4000-8000-0000000000d4/30000000-0000-4000-8000-0000000000d5/original.md'),
+  ('30000000-0000-4000-8000-0000000000d6','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    '20000000-0000-4000-8000-0000000000d5',1,
+    'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/20000000-0000-4000-8000-0000000000d5/30000000-0000-4000-8000-0000000000d6/original.md');
+insert into public.document_chunks(id,workspace_id,version_id,chunk_index,text_content,embedding) values
+  ('40000000-0000-4000-8000-0000000000f1','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    '30000000-0000-4000-8000-0000000000d5',0,'single anchor',
+    ('[1' || repeat(',0', 383) || ']')::extensions.vector(384)),
+  ('40000000-0000-4000-8000-0000000000f2','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    '30000000-0000-4000-8000-0000000000d6',0,'boundary just above',
+    ('[1,0.881640' || repeat(',0', 382) || ']')::extensions.vector(384)),
+  ('40000000-0000-4000-8000-0000000000f3','aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    '30000000-0000-4000-8000-0000000000d6',1,'boundary just below',
+    ('[1,0.882184' || repeat(',0', 382) || ']')::extensions.vector(384));
 
 -- 4. RPC behaviour: S1 qualifies 8 externals -> Top 5; S2 qualifies 1.
 -- Expected total: 5 (S1: d3,d7,d8,d9,da) + 1 (S2: d4) = 6.
@@ -207,6 +229,136 @@ select is(
       5, 0.75) t),
   'repeated retrieval calls are byte-identical');
 
+-- Task 2 edges. V5 holds a single chunk (no internos possible);
+-- V6 holds the tight-boundary pair (0.7501 in, 0.7499 out).
+select is((select count(*)
+  from public.retrieve_candidate_pairs(
+    'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    array['30000000-0000-4000-8000-0000000000d5']::uuid[],
+    array['30000000-0000-4000-8000-0000000000d6']::uuid[],
+    5, 0.75)),
+  1::bigint, 'single-chunk source pairs through externals only');
+select is((select count(*)
+  from public.retrieve_candidate_pairs(
+    'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    array['30000000-0000-4000-8000-0000000000d5']::uuid[],
+    array['30000000-0000-4000-8000-0000000000d6']::uuid[],
+    5, 0.75)
+  where comparison_chunk_id = '40000000-0000-4000-8000-0000000000f2'),
+  1::bigint, 'similarity 0.7501 clears the threshold');
+select is((select count(*)
+  from public.retrieve_candidate_pairs(
+    'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    array['30000000-0000-4000-8000-0000000000d5']::uuid[],
+    array['30000000-0000-4000-8000-0000000000d6']::uuid[],
+    5, 0.75)
+  where comparison_chunk_id = '40000000-0000-4000-8000-0000000000f3'),
+  0::bigint, 'similarity 0.7499 stays below the threshold');
+select is((select count(*)
+  from public.retrieve_candidate_pairs(
+    'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    array['30000000-0000-4000-8000-0000000000d5']::uuid[],
+    array['30000000-0000-4000-8000-0000000000d6']::uuid[],
+    5, 0.75)
+  where source_chunk_id = comparison_chunk_id),
+  0::bigint, 'single-chunk source never self-pairs');
+select is((select count(*)
+  from public.retrieve_candidate_pairs(
+    'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    array['30000000-0000-4000-8000-0000000000d5']::uuid[],
+    array['30000000-0000-4000-8000-0000000000d6']::uuid[],
+    10, 0.75)),
+  1::bigint, 'Top-K above the candidate count returns all qualifiers');
+select is((select count(*)
+  from public.retrieve_candidate_pairs(
+    'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    array['30000000-0000-4000-8000-0000000000d4']::uuid[],
+    array['30000000-0000-4000-8000-0000000000d4']::uuid[],
+    5, 0.75)
+  where source_version_id = '30000000-0000-4000-8000-0000000000d4'
+    and comparison_version_id = '30000000-0000-4000-8000-0000000000d4'
+    and source_chunk_id <> comparison_chunk_id),
+  1::bigint, 'overlap lists pair cross-role, never self');
+select is((select count(*)
+  from public.retrieve_candidate_pairs(
+    'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    array['30000000-0000-4000-8000-0000000000d4']::uuid[],
+    array[]::uuid[],
+    5, 0.75)),
+  1::bigint, 'empty comparison list still evaluates internos');
+
+-- Threshold equality, both sides, with exact measured similarities.
+select is((select count(*)
+  from public.retrieve_candidate_pairs(
+    'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    array['30000000-0000-4000-8000-0000000000d1']::uuid[],
+    array['30000000-0000-4000-8000-0000000000d2']::uuid[],
+    100,
+    (select 1 - (x.embedding operator(extensions.<=>) y.embedding)
+      from public.document_chunks x, public.document_chunks y
+      where x.id = '40000000-0000-4000-8000-0000000000d1'
+        and y.id = '40000000-0000-4000-8000-0000000000d3'))),
+  8::bigint, 'similarity equal to the threshold enters');
+select is((select count(*)
+  from public.retrieve_candidate_pairs(
+    'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    array['30000000-0000-4000-8000-0000000000d1']::uuid[],
+    array['30000000-0000-4000-8000-0000000000d2']::uuid[],
+    100,
+    (select 1 - (x.embedding operator(extensions.<=>) y.embedding)
+      from public.document_chunks x, public.document_chunks y
+      where x.id = '40000000-0000-4000-8000-0000000000d1'
+        and y.id = '40000000-0000-4000-8000-0000000000d3')
+      + 0.0001)),
+  0::bigint, 'similarity epsilon above the top score filters it out');
+
+-- Explicit tie-break: five similarity-1.0 pairs order by chunk id.
+-- Overlaps the Top-5 set assertion; this one pins sim-first ordering.
+select is((select array_agg(comparison_chunk_id
+    order by similarity desc, comparison_chunk_id asc)
+  from public.retrieve_candidate_pairs(
+    'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    array['30000000-0000-4000-8000-0000000000d1']::uuid[],
+    array['30000000-0000-4000-8000-0000000000d2']::uuid[],
+    5, 0.75)
+  where source_chunk_id = '40000000-0000-4000-8000-0000000000d1'),
+  array['40000000-0000-4000-8000-0000000000d3','40000000-0000-4000-8000-0000000000d7',
+    '40000000-0000-4000-8000-0000000000d8','40000000-0000-4000-8000-0000000000d9',
+    '40000000-0000-4000-8000-0000000000da']::uuid[],
+  'identical similarities break ties by chunk id ascending');
+
+-- NULL inputs: pinned behaviour (contract is silent; Zod forbids null).
+select is((select count(*)
+  from public.retrieve_candidate_pairs(
+    'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    null::uuid[],
+    array['30000000-0000-4000-8000-0000000000d2']::uuid[],
+    5, 0.75)),
+  0::bigint, 'null source list yields zero pairs without error');
+select is((select count(*)
+  from public.retrieve_candidate_pairs(
+    'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    array['30000000-0000-4000-8000-0000000000d4']::uuid[],
+    null::uuid[],
+    5, 0.75)),
+  1::bigint, 'null comparison list falls back to internos');
+select is((select count(*)
+  from public.retrieve_candidate_pairs(
+    null::uuid,
+    array['30000000-0000-4000-8000-0000000000d1']::uuid[],
+    array['30000000-0000-4000-8000-0000000000d2']::uuid[],
+    5, 0.75)),
+  0::bigint, 'null workspace yields zero pairs without error');
+
+-- Foreign workspace scoping at the SQL level.
+select is((select count(*)
+  from public.retrieve_candidate_pairs(
+    'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    array['30000000-0000-4000-8000-0000000000d1']::uuid[],
+    array['30000000-0000-4000-8000-0000000000d2']::uuid[],
+    5, 0.75)),
+  0::bigint, 'another workspace scope sees no Workspace A chunks');
+
 -- 8. dims != 384 rejects with 22000 (Task 0 verdict).
 select throws_ok($$insert into public.document_chunks
   (workspace_id,version_id,chunk_index,text_content,embedding) values
@@ -272,6 +424,14 @@ select set_config('request.jwt.claims',
   '{"sub":"10000000-0000-4000-8000-000000000004","role":"authenticated"}', true);
 select is((select count(*) from public.analysis_estimates), 0::bigint,
   'Admin B reads no Workspace A estimates');
+select is((select count(*)
+  from public.retrieve_candidate_pairs(
+    'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    array['30000000-0000-4000-8000-0000000000d1']::uuid[],
+    array['30000000-0000-4000-8000-0000000000d2']::uuid[],
+    5, 0.75)),
+  0::bigint,
+  'Admin B retrieval over Workspace A sees no chunks through chunk_read RLS');
 select throws_ok($$insert into public.analysis_estimates
   (workspace_id,initiator_id,source_version_ids,comparison_version_ids,
    request_fingerprint,retrieval_config,chunk_count,candidate_pair_count,
