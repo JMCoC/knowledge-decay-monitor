@@ -76,6 +76,8 @@ type EstimatesTable = EstimatesQuery &
 function estimatesTable(client: SupabaseClient<Database>): (
   table: "analysis_estimates",
 ) => EstimatesTable {
+  // NOTE(Task 5): call the typed .from("analysis_estimates") once Dev 1
+  // regenerates database.ts. The cast changes no runtime behaviour.
   // .bind preserves the client receiver (detaching from loses `this.rest`).
   return client.from.bind(client) as unknown as (
     table: "analysis_estimates",

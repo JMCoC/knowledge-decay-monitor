@@ -344,13 +344,25 @@ Reserva → subida → `finalize` → procesamiento (fixtures S1-04) → `estima
 
 **Handoff a S2-05 (contrato §12):** lee `analysis_estimates` por `estimateRef`, verifica TTL y fingerprint, crea `analyses` con `request_fingerprint`, reserva créditos. **Handoff a S2-06 (contrato §12):** corre el retrieval de nuevo y compara fingerprints (`pairHashes` + `chunksRevision` permiten detectar re-embebidos de S1-04 → `ESTIMATE_STALE`).
 
-**Pendientes del equipo en revisión:** (a) limpiar residuo líneas 257–263 del contrato (§2.9); (b) confirmar `grant execute … to authenticated` derivado (§6); (c) congelar `<valor>` de `outputSchemaVersion`/`promptVersion`/`pricingVersion` (§8); (d) Dev 1 reserva timestamp de migración y regenera `database.ts`.
+**Pendientes del equipo en revisión:** (a) limpiar residuo líneas 257–263 del contrato — hecho 2026-10-12, el contrato termina en el handoff (§2.9); (b) confirmar `grant execute … to authenticated` derivado (§6); (c) congelar `<valor>` de `outputSchemaVersion`/`promptVersion`/`pricingVersion` — Task 3 congeló `pricingVersion "s2-04-v1"`, `promptVersion "none"`, `outputSchemaVersion "none"`, `embeddingRevision "gte-small-384-v1"` (§8); (d) Dev 1 reserva timestamp de migración — hecho (`20261012233545_s2_04_retrieval_estimation.sql`) — y regenera `database.ts` (pendiente, ver abajo).
+
+### Pendientes para el PR (post-merge o durante review, no bloqueantes)
+
+1. Regenerar src/types/database.ts con supabase gen types tras
+   aplicar la migración. Hoy los 3 casts NOTE(Task 5) cubren el
+   hueco de tipos.
+2. Agregar el módulo 'analysis' al catálogo SafeOperationEvent en
+   src/lib/observability/safe-event.ts. Hoy captureOperationFailure
+   descarta silenciosamente los eventos de analysis (no rompe, pero
+   no llegan a Sentry).
+3. Quitar los 3 casts NOTE(Task 5) en queries.ts y el helper de
+   integración cuando los tipos regenerados lleguen.
 
 ---
 
 ## Fuentes
 
-- Contrato operacional `docs/contracts/S2-04-retrieval-estimation.md` §§1–12 (265 líneas; prevalece).
+- Contrato operacional `docs/contracts/S2-04-retrieval-estimation.md` §§1–12 (prevalece; residuo editorial removido 2026-10-12).
 - `src/types/contracts.ts:221-244,322` (input, estimate, firma); `src/types/analysis-internal.ts:13-28,50-57` (config + retrieval interno); `src/types/analysis-contracts.typecheck.ts:60-74` (límites del cliente); `src/types/database.ts` (sin `analysis_estimates`).
 - `supabase/migrations/20261010192119_s2_01_analysis_tables.sql:21-103` (tablas + checks); `..._integrity.sql:50-58` (1 source / ≤ 20 versiones); `..._security.sql:3-7,47-72` (RLS + GRANTs); `00001_initial_schema.sql:3,94-108` (vector 384, sin HNSW); `20261006172303_finish_processing.sql:7-15,85-88` (estilo RPC + grants S1).
 - `src/modules/credits/queries.ts:1-12,33-40,68-116` + `src/modules/credits/index.ts` (patrón de módulo); `src/modules/ingestion/actions.ts:3,89-97` + `src/modules/identity/session.ts:16-82` (scope por Actor); `src/modules/ingestion/worker/embeddings.ts:1-10` (384 dims).
