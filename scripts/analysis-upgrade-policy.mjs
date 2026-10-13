@@ -29,7 +29,11 @@ const s201Names = new Set([
   "20261010195500_s2_01_finding_initial_state.sql",
 ]);
 
-const stageOrder = Object.freeze({ s1: 0, s2_01: 1, s2_02: 2 });
+const s204Names = new Set([
+  "20261012233545_s2_04_retrieval_estimation.sql",
+]);
+
+const stageOrder = Object.freeze({ s1: 0, s2_01: 1, s2_02: 2, s2_04: 3 });
 
 /** @param {string} path */
 export function migrationStage(path) {
@@ -44,12 +48,13 @@ export function migrationStage(path) {
   if (/^\d{14}_s2_02_(credit_operations|credit_reads|workspace_promotion)\.sql$/.test(name)) {
     return "s2_02";
   }
+  if (s204Names.has(name)) return "s2_04";
   throw new Error("Unreviewed migration in upgrade inventory.");
 }
 
 /**
  * @param {string} path
- * @param {"s1" | "s2_01" | "s2_02"} stage
+ * @param {"s1" | "s2_01" | "s2_02" | "s2_04"} stage
  */
 export function includeMigration(path, stage) {
   if (!Object.hasOwn(stageOrder, stage)) throw new Error("Unknown upgrade stage.");
