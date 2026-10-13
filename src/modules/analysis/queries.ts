@@ -1,8 +1,10 @@
 import "server-only";
 
-import type { PostgrestError } from "@supabase/supabase-js";
 import { createReadOnlyClient } from "@/lib/supabase/server";
-import type { Json } from "@/types/database";
+import type { Database, Json } from "@/types/database";
+
+type EstimatesInsert =
+  Database["public"]["Tables"]["analysis_estimates"]["Insert"];
 
 /** Row shape of public.retrieve_candidate_pairs (contract §5.1). */
 export interface CandidatePairRow {
@@ -15,26 +17,6 @@ export interface CandidatePairRow {
   comparison_document_id: string;
   comparison_text: string;
   similarity: number;
-}
-
-/**
- * Insert shape mirroring contract §4.1.
- * NOTE(Task 5): replace with the regenerated
- * Database["public"]["Tables"]["analysis_estimates"]["Insert"] once Dev 1
- * regenerates database.ts. Never hand-edit the generated file itself.
- */
-interface EstimateInsertRow {
-  workspace_id: string;
-  initiator_id: string;
-  source_version_ids: string[];
-  comparison_version_ids: string[];
-  request_fingerprint: string;
-  retrieval_config: Json;
-  chunk_count: number;
-  candidate_pair_count: number;
-  fixed_cost: number;
-  pricing_version: string;
-  expires_at: string;
 }
 
 export interface EstimateInsertInput {
@@ -78,19 +60,9 @@ export async function getEligibleVersions(
   return new Set((data ?? []).map((row) => row.id));
 }
 
-type RetrievePairsRpc = (
-  fn: string,
-  args: Record<string, unknown>,
-) => Promise<{
-  data: CandidatePairRow[] | null;
-  error: PostgrestError | null;
-}>;
-
 /**
  * Bounded semantic retrieval through the session-scoped invoker RPC
  * (contract §5). Frozen retrieval params mirror AnalysisConfiguration.
- * NOTE: `client.rpc` is cast until Dev 1 regenerates database.ts with
- * retrieve_candidate_pairs (Task 5); the cast changes no behaviour.
  */
 export async function callRetrieveCandidatePairs(
   workspaceId: string,
@@ -98,9 +70,7 @@ export async function callRetrieveCandidatePairs(
   comparisonIds: string[],
 ): Promise<CandidatePairRow[]> {
   const client = await createReadOnlyClient();
-  const rpc = client.rpc as unknown as RetrievePairsRpc;
-  // .call preserves the client receiver (detaching rpc loses `this.rest`).
-  const { data, error } = await rpc.call(client, "retrieve_candidate_pairs", {
+  const { data, error } = await client.rpc("retrieve_candidate_pairs", {
     p_workspace_id: workspaceId,
     p_source_version_ids: sourceIds,
     p_comparison_version_ids: comparisonIds,
@@ -119,7 +89,7 @@ export async function insertEstimate(
   input: EstimateInsertInput,
 ): Promise<{ id: string }> {
   const client = await createReadOnlyClient();
-  const row: EstimateInsertRow = {
+  const row: EstimatesInsert = {
     workspace_id: input.workspaceId,
     initiator_id: input.initiatorId,
     source_version_ids: input.sourceVersionIds,
@@ -132,22 +102,8 @@ export async function insertEstimate(
     pricing_version: input.pricingVersion,
     expires_at: input.expiresAt,
   };
-  // NOTE(Task 5): call .from("analysis_estimates") directly once Dev 1
-  // regenerates database.ts. The cast changes no runtime behaviour.
-  // .bind preserves the client receiver (detaching from loses `this.rest`).
-  const table = client.from.bind(client) as unknown as (
-    table: string,
-  ) => {
-    insert: (row: EstimateInsertRow) => {
-      select: (columns: string) => {
-        single: () => Promise<{
-          data: { id: string } | null;
-          error: PostgrestError | null;
-        }>;
-      };
-    };
-  };
-  const { data, error } = await table("analysis_estimates")
+  const { data, error } = await client
+    .from("analysis_estimates")
     .insert(row)
     .select("id")
     .single();

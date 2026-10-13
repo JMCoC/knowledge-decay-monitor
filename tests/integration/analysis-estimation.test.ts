@@ -1,6 +1,4 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import type { SupabaseClient } from "@supabase/supabase-js";
-import type { Database, Json } from "../../src/types/database";
 import { computeFixedCost } from "../../src/modules/analysis/pricing";
 import {
   buildChunksRevision,
@@ -12,88 +10,6 @@ import { createAnalysisFixture } from "../support/analysis-fixtures";
 import { assertLocalSupabaseReady } from "../support/local-supabase";
 
 beforeAll(assertLocalSupabaseReady);
-
-interface PairRow {
-  source_chunk_id: string;
-  source_version_id: string;
-  source_document_id: string;
-  source_text: string;
-  comparison_chunk_id: string;
-  comparison_version_id: string;
-  comparison_document_id: string;
-  comparison_text: string;
-  similarity: number;
-}
-
-interface RpcArgs {
-  p_workspace_id: string;
-  p_source_version_ids: string[];
-  p_comparison_version_ids: string[];
-  p_top_k: number;
-  p_threshold: number;
-}
-
-// NOTE(Task 5): call the typed .from("analysis_estimates") once Dev 1
-// regenerates database.ts. The cast changes no runtime behaviour.
-interface EstimateRow {
-  id: string;
-  workspace_id: string;
-  request_fingerprint: string;
-  fixed_cost: number;
-  expires_at: string;
-}
-
-interface EstimateInsert {
-  workspace_id: string;
-  initiator_id: string;
-  source_version_ids: string[];
-  comparison_version_ids: string[];
-  request_fingerprint: string;
-  retrieval_config: Json;
-  chunk_count: number;
-  candidate_pair_count: number;
-  fixed_cost: number;
-  pricing_version: string;
-  expires_at: string;
-}
-
-interface EstimatesQuery {
-  select: (columns: string) => EstimatesTable;
-  eq: (column: string, value: string) => EstimatesTable;
-  insert: (row: EstimateInsert) => EstimatesTable;
-  single: () => Promise<{
-    data: EstimateRow | null;
-    error: { message: string } | null;
-  }>;
-}
-
-type EstimatesTable = EstimatesQuery &
-  PromiseLike<{
-    data: EstimateRow[] | null;
-    error: { message: string } | null;
-  }>;
-
-function estimatesTable(client: SupabaseClient<Database>): (
-  table: "analysis_estimates",
-) => EstimatesTable {
-  // NOTE(Task 5): call the typed .from("analysis_estimates") once Dev 1
-  // regenerates database.ts. The cast changes no runtime behaviour.
-  // .bind preserves the client receiver (detaching from loses `this.rest`).
-  return client.from.bind(client) as unknown as (
-    table: "analysis_estimates",
-  ) => EstimatesTable;
-}
-async function retrievePairs(
-  client: SupabaseClient<Database>,
-  args: RpcArgs,
-): Promise<{ data: PairRow[] | null; error: { message: string } | null }> {
-  const rpc = client.rpc as unknown as (
-    fn: string,
-    fnArgs: RpcArgs,
-  ) => Promise<{ data: PairRow[] | null; error: { message: string } | null }>;
-  // .call preserves the client receiver (detaching rpc loses `this.rest`).
-  return rpc.call(client, "retrieve_candidate_pairs", args);
-}
 
 /**
  * End-to-end estimate path against local Supabase with the exact params
@@ -119,7 +35,7 @@ describe("analysis estimation through local Supabase", () => {
         [source.versionId, comparison.versionId].sort(),
       );
 
-      const pairs = await retrievePairs(fixture.admin, {
+      const pairs = await fixture.admin.rpc("retrieve_candidate_pairs", {
         p_workspace_id: fixture.workspaceId,
         p_source_version_ids: [source.versionId],
         p_comparison_version_ids: [comparison.versionId],
@@ -159,7 +75,8 @@ describe("analysis estimation through local Supabase", () => {
       expect(buildChunksRevision(chunkIds)).toMatch(/^[0-9a-f]{64}$/);
 
       const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
-      const inserted = await estimatesTable(fixture.admin)("analysis_estimates")
+      const inserted = await fixture.admin
+        .from("analysis_estimates")
         .insert({
           workspace_id: fixture.workspaceId,
           initiator_id: fixture.adminId,
@@ -186,7 +103,8 @@ describe("analysis estimation through local Supabase", () => {
         /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
       );
 
-      const reread = await estimatesTable(fixture.admin)("analysis_estimates")
+      const reread = await fixture.admin
+        .from("analysis_estimates")
         .select("request_fingerprint,fixed_cost,expires_at")
         .eq("id", inserted.data!.id)
         .single();
@@ -205,13 +123,14 @@ describe("analysis estimation through local Supabase", () => {
     const tenantA = await createAnalysisFixture({ versionCount: 1 });
     const tenantB = await createAnalysisFixture({ versionCount: 1 });
     try {
-      const read = await estimatesTable(tenantB.admin)("analysis_estimates")
+      const read = await tenantB.admin
+        .from("analysis_estimates")
         .select("id")
         .eq("workspace_id", tenantA.workspaceId);
       expect(read.error).toBeNull();
       expect(read.data).toHaveLength(0);
 
-      const rpc = await retrievePairs(tenantB.admin, {
+      const rpc = await tenantB.admin.rpc("retrieve_candidate_pairs", {
         p_workspace_id: tenantA.workspaceId,
         p_source_version_ids: [tenantA.versions[0]!.versionId],
         p_comparison_version_ids: [],
@@ -231,7 +150,7 @@ describe("analysis estimation through local Supabase", () => {
     try {
       const [only] = fixture.versions;
       if (!only) throw new Error("Fixture version missing.");
-      const memberRpc = await retrievePairs(fixture.member, {
+      const memberRpc = await fixture.member.rpc("retrieve_candidate_pairs", {
         p_workspace_id: fixture.workspaceId,
         p_source_version_ids: [only.versionId],
         p_comparison_version_ids: [],
@@ -241,7 +160,7 @@ describe("analysis estimation through local Supabase", () => {
       expect(memberRpc.error).toBeNull();
       expect(memberRpc.data).toHaveLength(0);
 
-      const empty = await retrievePairs(fixture.admin, {
+      const empty = await fixture.admin.rpc("retrieve_candidate_pairs", {
         p_workspace_id: fixture.workspaceId,
         p_source_version_ids: [only.versionId],
         p_comparison_version_ids: [],

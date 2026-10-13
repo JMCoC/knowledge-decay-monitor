@@ -349,14 +349,17 @@ Reserva → subida → `finalize` → procesamiento (fixtures S1-04) → `estima
 ### Pendientes para el PR (post-merge o durante review, no bloqueantes)
 
 1. Regenerar src/types/database.ts con supabase gen types tras
-   aplicar la migración. Hoy los 3 casts NOTE(Task 5) cubren el
-   hueco de tipos.
+   aplicar la migración — hecho por Dev 1 durante la review del PR.
+   Los casts NOTE(Task 5) fueron removidos (queries.ts usa los tipos
+   generados de analysis_estimates y retrieve_candidate_pairs).
 2. Agregar el módulo 'analysis' al catálogo SafeOperationEvent en
    src/lib/observability/safe-event.ts. Hoy captureOperationFailure
    descarta silenciosamente los eventos de analysis (no rompe, pero
    no llegan a Sentry).
 3. Quitar los 3 casts NOTE(Task 5) en queries.ts y el helper de
-   integración cuando los tipos regenerados lleguen.
+   integración cuando los tipos regenerados lleguen — resuelto:
+   `grep -rn "NOTE(Task 5)" src/ tests/` da 0 matches; typecheck,
+   unit (482), db (570) e integración (41) verdes.
 
 ---
 
