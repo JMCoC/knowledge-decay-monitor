@@ -500,6 +500,13 @@ export type Database = {
             foreignKeyName: "document_versions_document_id_workspace_id_fkey"
             columns: ["document_id", "workspace_id"]
             isOneToOne: false
+            referencedRelation: "eligible_analysis_documents"
+            referencedColumns: ["document_id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "document_versions_document_id_workspace_id_fkey"
+            columns: ["document_id", "workspace_id"]
+            isOneToOne: false
             referencedRelation: "repository_documents"
             referencedColumns: ["id", "workspace_id"]
           },
@@ -1000,6 +1007,37 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "document_versions"
             referencedColumns: ["id", "document_id", "workspace_id"]
+          },
+        ]
+      }
+      eligible_analysis_documents: {
+        Row: {
+          analysis_status: Database["public"]["Enums"]["analysis_status"] | null
+          category: Database["public"]["Enums"]["document_category"] | null
+          created_at: string | null
+          document_id: string | null
+          name: string | null
+          owner_full_name: string | null
+          owner_id: string | null
+          owner_profile_id: string | null
+          version_id: string | null
+          version_number: number | null
+          workspace_id: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "documents_owner_id_workspace_id_fkey"
+            columns: ["owner_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "documents_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
           },
         ]
       }

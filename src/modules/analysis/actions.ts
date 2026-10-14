@@ -9,7 +9,6 @@ import type {
   AnalysisEstimate,
   AnalysisSelectionInput,
 } from "@/types/contracts";
-import type { SafeOperationEvent } from "@/lib/observability/operation-events";
 import {
   buildChunksRevision,
   computeRequestFingerprint,
@@ -30,13 +29,7 @@ function failure(code: ActionErrorCode, message: string, correlationId?: string)
   return { ok: false, error: { code, message, ...(correlationId ? { correlationId } : {}) } };
 }
 
-/**
- * Reports an internal estimate failure. The observability catalog gains
- * the analysis module in a Dev 1 follow-up; until then the runtime drops
- * the event safely (captureSafeFailure returns undefined for unknown
- * pairs) and the cast below keeps the call site honest without touching
- * shared telemetry code.
- */
+/** Reports an internal estimate failure using the closed telemetry catalog. */
 function reportEstimateFailure(): { correlationId: string } {
   const correlationId = crypto.randomUUID();
   try {
@@ -45,7 +38,7 @@ function reportEstimateFailure(): { correlationId: string } {
       operation: "estimate",
       code: "INTERNAL_ERROR",
       correlationId,
-    } as unknown as SafeOperationEvent);
+    });
   } catch {
     // Telemetry must not change the controlled product result.
   }
@@ -104,6 +97,13 @@ export async function estimateAnalysis(
 
   const sources = [...parsed.data.sourceVersionIds].sort();
   const comparisons = [...parsed.data.comparisonVersionIds].sort();
+  const distinctScopeSize = new Set([...sources, ...comparisons]).size;
+  if (distinctScopeSize > 20) {
+    return failure(
+      "INVALID_INPUT",
+      "Analysis scope cannot exceed 20 distinct versions.",
+    );
+  }
 
   let eligible: Set<string>;
   try {
