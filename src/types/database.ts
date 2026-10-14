@@ -196,6 +196,69 @@ export type Database = {
           },
         ]
       }
+      analysis_estimates: {
+        Row: {
+          candidate_pair_count: number
+          chunk_count: number
+          comparison_version_ids: string[]
+          created_at: string
+          expires_at: string
+          fixed_cost: number
+          id: string
+          initiator_id: string
+          pricing_version: string
+          request_fingerprint: string
+          retrieval_config: Json
+          source_version_ids: string[]
+          workspace_id: string
+        }
+        Insert: {
+          candidate_pair_count: number
+          chunk_count: number
+          comparison_version_ids: string[]
+          created_at?: string
+          expires_at: string
+          fixed_cost: number
+          id?: string
+          initiator_id: string
+          pricing_version: string
+          request_fingerprint: string
+          retrieval_config: Json
+          source_version_ids: string[]
+          workspace_id: string
+        }
+        Update: {
+          candidate_pair_count?: number
+          chunk_count?: number
+          comparison_version_ids?: string[]
+          created_at?: string
+          expires_at?: string
+          fixed_cost?: number
+          id?: string
+          initiator_id?: string
+          pricing_version?: string
+          request_fingerprint?: string
+          retrieval_config?: Json
+          source_version_ids?: string[]
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "analysis_estimates_initiator_id_workspace_id_fkey"
+            columns: ["initiator_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "analysis_estimates_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       credit_ledger: {
         Row: {
           amount: number
@@ -1207,6 +1270,26 @@ export type Database = {
           storage_path: string
           upload_state: Database["public"]["Enums"]["upload_state"]
           version_id: string
+        }[]
+      }
+      retrieve_candidate_pairs: {
+        Args: {
+          p_comparison_version_ids: string[]
+          p_source_version_ids: string[]
+          p_threshold: number
+          p_top_k: number
+          p_workspace_id: string
+        }
+        Returns: {
+          comparison_chunk_id: string
+          comparison_document_id: string
+          comparison_text: string
+          comparison_version_id: string
+          similarity: number
+          source_chunk_id: string
+          source_document_id: string
+          source_text: string
+          source_version_id: string
         }[]
       }
     }
