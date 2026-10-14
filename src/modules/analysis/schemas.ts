@@ -1,6 +1,38 @@
 import { z } from "zod";
+import type { DocumentCategory } from "@/types/contracts";
 
 const versionId = z.string().uuid();
+const documentCategories = [
+  "SOP",
+  "Policy",
+  "Manual",
+  "QA Process",
+  "Security",
+  "Engineering Guideline",
+  "Other",
+] as const satisfies readonly [DocumentCategory, ...DocumentCategory[]];
+
+export const eligibleDocumentsQuerySchema = z.object({
+  name: z.string().max(200).trim().optional(),
+  category: z.enum(documentCategories).optional(),
+  ownerId: z.union([z.string().uuid(), z.null()]).optional(),
+  page: z.coerce.number().int().min(1, "Page must be at least 1.").default(1),
+  pageSize: z.coerce.number().int().min(1).max(100, "Page size cannot exceed 100.").default(25),
+});
+
+export const analysisSelectionInputSchema = z.object({
+  sourceVersionIds: z.array(versionId)
+    .min(1, "At least one source document is required.")
+    .max(20, "No more than 20 source documents can be selected."),
+  comparisonVersionIds: z.array(versionId).max(20, "No more than 20 comparison documents can be selected.").default([]),
+});
+
+export const resolveFilteredScopeSchema = z.object({
+  query: eligibleDocumentsQuerySchema.default({ page: 1, pageSize: 25 }),
+  targetRole: z.enum(["source", "comparison"]),
+  currentSourceVersionIds: z.array(versionId).max(20).default([]),
+  currentComparisonVersionIds: z.array(versionId).max(20).default([]),
+});
 
 const noIntraListDuplicates = (list: string[]) =>
   new Set(list).size === list.length;
@@ -14,7 +46,7 @@ export const selectionSchema = z
   .object({
     sourceVersionIds: z
       .array(versionId)
-      .min(1, "Select between 1 and 20 source documents.")
+      .min(1, "At least one source document is required.")
       .max(20, "Select between 1 and 20 source documents.")
       .refine(noIntraListDuplicates, {
         message: "Duplicates within the same list are not allowed.",

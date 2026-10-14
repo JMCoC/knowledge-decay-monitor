@@ -142,6 +142,23 @@ describe("estimateAnalysis input validation", () => {
     if (!result.ok) expect(result.error.code).toBe("INVALID_INPUT");
   });
 
+  it("rejects a source/comparison union over 20 even when each list is within its cap", async () => {
+    requireDocumentActor.mockResolvedValue(admin);
+    const result = await estimateAnalysis({
+      sourceVersionIds: Array.from({ length: 11 }, (_, i) => vid(i + 1)),
+      comparisonVersionIds: Array.from({ length: 10 }, (_, i) => vid(i + 20)),
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "INVALID_INPUT",
+        message: "Analysis scope cannot exceed 20 distinct versions.",
+      },
+    });
+    expect(getEligibleVersions).not.toHaveBeenCalled();
+  });
+
   it("rejects duplicates inside the source list (D4a)", async () => {
     requireDocumentActor.mockResolvedValue(admin);
     const result = await estimateAnalysis({
