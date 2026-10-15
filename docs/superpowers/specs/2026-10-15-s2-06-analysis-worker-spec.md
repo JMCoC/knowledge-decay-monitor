@@ -100,22 +100,22 @@ begin
   update public.analyses
      set status = 'failed', error_code = 'ATTEMPTS_EXHAUSTED',
          finished_at = ts, updated_at = ts
-   where status = 'processing' and lease_expires_at < ts and attempt_count >= 3;
+   where status = 'processing' and analyses.lease_expires_at < ts and analyses.attempt_count >= 3;
   -- Claim dirigido (B1/B2): frescos (NULL) o vencidos, siempre con margen de intento.
   if p_analysis_id is not null then
     select * into v from public.analyses
-     where analyses.id = p_analysis_id and attempt_count < 3
-       and ((status = 'queued' and (next_attempt_at is null or next_attempt_at <= ts))
-         or (status = 'processing' and lease_expires_at < ts))
+     where analyses.id = p_analysis_id and analyses.attempt_count < 3
+       and ((status = 'queued' and (analyses.next_attempt_at is null or analyses.next_attempt_at <= ts))
+         or (status = 'processing' and analyses.lease_expires_at < ts))
      for update;
     claimed := found;
   end if;
   -- Sweep FIFO (B2): NULL primero por created_at, sin bloquearse en filas tomadas.
   if not claimed then
     select * into v from public.analyses
-     where attempt_count < 3
-       and ((status = 'queued' and (next_attempt_at is null or next_attempt_at <= ts))
-         or (status = 'processing' and lease_expires_at < ts))
+     where analyses.attempt_count < 3
+       and ((status = 'queued' and (analyses.next_attempt_at is null or analyses.next_attempt_at <= ts))
+         or (status = 'processing' and analyses.lease_expires_at < ts))
      order by created_at, analyses.id for update skip locked limit 1;
     claimed := found;
   end if;
@@ -158,7 +158,7 @@ begin
          checkpoint = p_checkpoint, updated_at = clock_timestamp()
    where id = p_analysis_id and status = 'processing'
      and operation_id = p_operation_id
-     and lease_expires_at > clock_timestamp()
+     and analyses.lease_expires_at > clock_timestamp()
      and started_at + interval '30 minutes' > clock_timestamp()
   returning analyses.lease_expires_at into expires;
   if not found then
