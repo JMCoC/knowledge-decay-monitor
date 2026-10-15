@@ -126,12 +126,13 @@ No other files. In particular: no `contracts.ts` edits, no ingestion/credits tou
 **Dependencias:** Task 0 con veredicto `B-cabe` escrito. Si `B-no-cabe`, esta task no existe: se redacta ADR-003.
 
 **Files:**
-- Create: `supabase/migrations/<timestamp>_s2_06_analysis_leases.sql` (solo columnas + `claim_analysis` + sus grants en esta task; `renew/complete/fail` llegan en Task 2, mismo archivo aún sin commitear)
+- Create: `supabase/migrations/<timestamp>_s2_06_analysis_leases.sql` (solo columnas + `claim_analysis` + sus grants en esta task; `renew/complete/fail` llegan en Task 2, mismo archivo aún sin commitear) (+ GRANT sobre retrieve_candidate_pairs para service_role, decisión Task 0 Opción A)
 - Create: `supabase/tests/database/020_s2_06_analysis_leases.test.sql`
 
 **Interfaces:**
 - Consumes: `public.analyses` + `analysis_failure_code` (`20261010192119_s2_01_analysis_tables.sql:10-56`).
 - Produces: `checkpoint jsonb`, `next_attempt_at timestamptz` (server-only: fuera del `GRANT SELECT` por lista de `20261010194238_s2_01_analysis_security.sql:47-50`) + `claim_analysis(uuid)` verbatim spec §5.1 + grants `service_role`.
+- También en la migración (decisión Task 0 Opción A): `GRANT EXECUTE ON FUNCTION public.retrieve_candidate_pairs(uuid, uuid[], uuid[], integer, double precision) TO service_role;` — la función es `security invoker` y filtra por `p_workspace_id`, `service_role` tiene BYPASSRLS.
 
 - [ ] **Step 1: Reservar el timestamp con Dev 1 (sin crear archivos aún)**
 
@@ -424,6 +425,28 @@ If Task 0 returns B-no-cabe, the whole plan stops after Task 0 regardless of mod
 
 ---
 
-## Apéndice Task 0 — reporte de medición (lo escribe Task 0, no ahora)
+## Apéndice Task 0 — reporte de medición (escrito 2026-10-15)
 
-`limit_wall:` · `limit_cpu:` · `L_p99_par (Cerebras):` · `L_p99_par (Groq):` · `T_overhead:` · `cpu_por_par:` · `(a) imports:` PASS|FAIL · `(b) N=10:` PASS|FAIL · `N calibrada:` · `Veredicto: B-cabe | B-no-cabe` · fecha. Sin esta línea de veredicto, Task 1 no arranca.
+Valores medidos: `limit_wall_s = 150` (free tier, https://supabase.com/docs/guides/functions/limits; paid 400s) · `limit_cpu_ms = 2000` (2s CPU real por request, I/O async excluido) · `L_p99_par = 5092ms` (Cerebras `qwen-3.8-27b` p99 5092ms / Groq `openai/gpt-oss-20b` p99 1183ms, N=20 cada uno, 0 fallas en la corrida válida) · `T_overhead_median_ms = 22` (p95 33ms, proxy ingesta n=10) · `cpu_por_par = no medido (amenaza documentada)`.
+
+(a) imports: PASS — `supabase functions serve analyze` levanta (edge-runtime-1.74.3 / Deno 2.1.4) importando `src/modules/analysis/retrieval.ts` con `node:crypto`; `curl /health` → `{"ok":true,"import":"function"}`.
+
+(b) N=10: PASS — Método A (Edge real, 10×sleep 5092ms): `elapsed_ms = 50936.76` < `150×1000×0.7 = 105000`. Método B (aritmético): `10×5092 + 22 = 50942` < 105000. Ambos con ~2× de margen.
+
+Veredicto: B-cabe (Edge Function con checkpoints viable).
+
+N calibrada: N=10 validado, no recalibrar.
+
+Diferidas resueltas: #1 (3-way) NO paralelizar en v1 — 10 secuenciales en ~51s bajo 105s, paralelizar agrega complejidad sin ganancia; #2 (Sentry Deno) no medida, se difiere a Task 5 (si ningún SDK corre, stdout-only como deuda spec §12.1 fila 3); #3 (scheduler) sweep oportunista v1 confirmado — ~54s libres post-batches, sin pg_cron en v1.
+
+Discrepancia plan §4.3: el cap de 60s/batch implicaba wall ~85.7s; la doc dice 150s — el cap sigue conservador (150×0.7 = 105s), no recalibrar.
+
+Modelos (para S2-07): `llama3.1-8b` y `llama-3.1-8b-instant` devolvieron 404 `model_not_found`; sustituidos por `qwen-3.8-27b` (Cerebras) y `openai/gpt-oss-20b` (Groq). GAP del medidor 12000ms por TPM 8000 de Groq free (artefacto de medición, no diseño del worker).
+
+Caveats T_overhead: renew/fail midieron la rama negativa (`false`/`'superseded'`, cota inferior); retrieval midió un `document_chunks` select directo; re-medir con RPCs reales si un veredicto futuro queda en el borde.
+
+Amenaza cpu_por_par: no medido (el runtime local no lo expone); el worker es I/O-bound (10×~5s de espera LLM son async, fuera de la cuota de 2s CPU) — no bloquea este gate, verificar en deploy real.
+
+Hallazgo lateral para Task 1: `retrieve_candidate_pairs` deniega a `service_role` (`permission denied for function`, diseño S2-04 session-only). Resolución: agregar GRANT EXECUTE ON FUNCTION public.retrieve_candidate_pairs(uuid, uuid[], uuid[], integer, double precision) TO service_role; en la migración S2-06 (Task 1). La función es security invoker y filtra por p_workspace_id (parámetro), y service_role tiene BYPASSRLS → no requiere wrapper. Decisión: Opción A. Desviación menor del spec §5, que solo enumera grants de las 4 RPCs nuevas.
+
+Validado por Diego el 2026-10-15 tras revisión de los 3 pasos; autoriza Task 1.
