@@ -56,6 +56,8 @@ next-env.d.ts
 # Local debug & notes
 supabase-debug.txt
 tickets.txt
+tickets-sprint#2.txt
+nombre_RAMAS.txt
 knowledge-decay-monitor-prd-final.md
 PR_DESCRIPTION.md
 migracionPasos.txt

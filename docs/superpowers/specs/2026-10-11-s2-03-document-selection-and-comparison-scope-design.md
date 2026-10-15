@@ -173,6 +173,10 @@ export const resolveFilteredScopeSchema = z.object({
 * `estimateAnalysisMockAction(input)`:
   * Provides simulated `AnalysisEstimate` contract implementation for S2-03 independent testing (to be wired to S2-04 in full integration):
   * `fixedCost = Math.ceil(1 + distinctCount * 0.05 + 5 * 0.20)`.
+
+### 4.4 Implementation Review Correction (2026-10-11)
+
+The initial `currentOtherListVersionIds` example above is insufficient: it does not count already-selected versions in the list being bulk-updated, and it trusts client-supplied IDs. The implemented action instead receives `targetRole`, `currentSourceVersionIds`, and `currentComparisonVersionIds`; it revalidates the union of current IDs against the caller's tenant-scoped eligible projection, adds the resolved filtered IDs to the target role, and checks the complete resulting union before returning. The bounded repository query reads at most 21 matching IDs, which is enough to reject any scope overflow without silently accepting a PostgREST-truncated result.
   * Returns opaque `estimateRef` and `expiresAt` (5 minutes).
 
 ---

@@ -50,11 +50,21 @@ export default async function RepositoryPage({ searchParams }: PageProps) {
 
     return (
         <div className="mx-auto w-full max-w-6xl">
-            <div>
-                <h1 className="text-3xl font-semibold text-slate-900">Repository</h1>
-                <p className="mt-2 text-sm text-zinc-600">
-                    Documents available in your workspace
-                </p>
+            <div className="flex items-center justify-between">
+                <div>
+                    <h1 className="text-3xl font-semibold text-slate-900">Repository</h1>
+                    <p className="mt-2 text-sm text-zinc-600">
+                        Documents available in your workspace
+                    </p>
+                </div>
+                {actor && (
+                    <a
+                        href="/analysis/run"
+                        className="rounded-lg bg-cyan-700 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-800 focus:outline-none focus:ring-2 focus:ring-cyan-600 focus:ring-offset-2"
+                    >
+                        Run Analysis
+                    </a>
+                )}
             </div>
 
             {actor && (

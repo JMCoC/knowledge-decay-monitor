@@ -40,8 +40,12 @@ const s204Names = [
   "20261012233545_s2_04_retrieval_estimation.sql",
 ];
 
+const s203Names = [
+  "20261011030000_s2_03_eligible_documents_projection.sql",
+];
+
 describe("analysis migration upgrade stages", () => {
-  it("classifies every reviewed S1 and S2-01 migration by its exact name", () => {
+  it("classifies every reviewed S1 and S2 migration by its exact name", () => {
     for (const name of s1Names) {
       expect(migrationStage(`supabase/migrations/${name}`)).toBe("s1");
     }
@@ -50,6 +54,9 @@ describe("analysis migration upgrade stages", () => {
     }
     for (const name of s204Names) {
       expect(migrationStage(`supabase/migrations/${name}`)).toBe("s2_04");
+    }
+    for (const name of s203Names) {
+      expect(migrationStage(`supabase/migrations/${name}`)).toBe("s2_03");
     }
     for (const name of [
       "20261011013954_s2_02_credit_operations.sql",
@@ -65,6 +72,7 @@ describe("analysis migration upgrade stages", () => {
     const s1 = "supabase/migrations/00001_initial_schema.sql";
     const s201 = "supabase/migrations/20261010192119_s2_01_analysis_tables.sql";
     const s202 = "supabase/migrations/20990101000000_s2_02_credit_operations.sql";
+    const s203 = "supabase/migrations/20261011030000_s2_03_eligible_documents_projection.sql";
     const s204 = "supabase/migrations/20261012233545_s2_04_retrieval_estimation.sql";
     expect(includeMigration(s1, "s1")).toBe(true);
     expect(includeMigration(s201, "s1")).toBe(false);
@@ -72,6 +80,9 @@ describe("analysis migration upgrade stages", () => {
     expect(includeMigration(s201, "s2_01")).toBe(true);
     expect(includeMigration(s202, "s2_01")).toBe(false);
     expect(includeMigration(s202, "s2_02")).toBe(true);
+    expect(includeMigration(s203, "s2_02")).toBe(false);
+    expect(includeMigration(s203, "s2_03")).toBe(true);
+    expect(includeMigration(s204, "s2_03")).toBe(false);
     expect(includeMigration(s204, "s2_02")).toBe(false);
     expect(includeMigration(s204, "s2_04")).toBe(true);
   });

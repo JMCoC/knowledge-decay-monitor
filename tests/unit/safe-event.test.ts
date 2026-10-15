@@ -147,6 +147,17 @@ describe("safe Sentry events", () => {
     }), context)?.tags).toMatchObject({ module: "credits", operation });
   });
 
+  it("accepts the closed analysis/estimate operation", () => {
+    const receipt = captureSafeFailure({
+      module: "analysis",
+      operation: "estimate",
+      code: "INTERNAL_ERROR",
+      correlationId,
+    });
+
+    expect(receipt).toEqual({ correlationId, eventId: "0123456789abcdef0123456789abcdef" });
+  });
+
   it("rejects credit operations outside the closed catalog", () => {
     expect(filterSafeEvent(safeCandidate({
       tags: {
