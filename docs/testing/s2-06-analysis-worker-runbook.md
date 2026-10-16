@@ -161,3 +161,21 @@ background scheduler in v1 (spec Nota PRD-2).
 - El flag `allowImportingTsExtensions` en `tsconfig.json` habilita lo
   segundo sin afectar lo primero (verificado: `typecheck` + `build`
   verdes con ambas convenciones conviviendo).
+
+## 10. Checklist de cierre S2-06 (estado: completo pendiente de integración)
+
+| # | Ítem | Dueño | Condición de cierre | Estado |
+|---|------|-------|---------------------|--------|
+| 1 | createProvider() real (S2-07) | S2-07 | Test de integración con proveedor real | Pendiente S2-07 |
+| 2 | createFinalization() real (S2-08) | S2-08 | Test integración findings + ledger + eventos | Pendiente S2-08 |
+| 3 | Texto F3 con liberación ("Analysis failed. Your credits were released. Retry creates a new run.") | S2-08 | S2-08 merge | Pendiente S2-08 |
+| 4 | TODO(S2-08) en claim/complete/fail (liberación + evento) | S2-08 | S2-08 merge | Pendiente S2-08 |
+| 5 | canRetry con analyses_one_active | S2-05 | S2-05 merge | Pendiente S2-05 |
+| 6 | Slot único retiene workspace ≤90min | S2-06 | Documentado (fila 1 §12.1) | Documentado |
+| 7 | Sentry remoto del worker | S2-08 | Fila 3 §12.1 | Documentado (stdout-only v1) |
+| 8 | Bundle deployable incluye _test_doubles | Task 7 | Fila 10 §12.1 | Documentado (opción A) |
+| 9 | Flake test:integration | S2-06 / CI | Fila 11 §12.1 | Bajo observación |
+
+Estado del ticket: completo pendiente de integración (G2=A). Cerrar
+sólo cuando S2-07 y S2-08 estén mergeados y sus tests de integración
+verdes.

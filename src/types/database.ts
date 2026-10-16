@@ -7,36 +7,12 @@ export type Json =
   | Json[]
 
 export type Database = {
-  graphql_public: {
-    Tables: {
-      [_ in never]: never
-    }
-    Views: {
-      [_ in never]: never
-    }
-    Functions: {
-      graphql: {
-        Args: {
-          extensions?: Json
-          operationName?: string
-          query?: string
-          variables?: Json
-        }
-        Returns: Json
-      }
-    }
-    Enums: {
-      [_ in never]: never
-    }
-    CompositeTypes: {
-      [_ in never]: never
-    }
-  }
   public: {
     Tables: {
       analyses: {
         Row: {
           attempt_count: number
+          checkpoint: Json | null
           created_at: string
           error_code:
             | Database["public"]["Enums"]["analysis_failure_code"]
@@ -48,6 +24,7 @@ export type Database = {
           initiator_id: string
           lease_expires_at: string | null
           model_used: string | null
+          next_attempt_at: string | null
           operation_id: string | null
           output_schema_version: string
           pricing_version: string
@@ -65,6 +42,7 @@ export type Database = {
         }
         Insert: {
           attempt_count?: number
+          checkpoint?: Json | null
           created_at?: string
           error_code?:
             | Database["public"]["Enums"]["analysis_failure_code"]
@@ -76,6 +54,7 @@ export type Database = {
           initiator_id: string
           lease_expires_at?: string | null
           model_used?: string | null
+          next_attempt_at?: string | null
           operation_id?: string | null
           output_schema_version: string
           pricing_version: string
@@ -93,6 +72,7 @@ export type Database = {
         }
         Update: {
           attempt_count?: number
+          checkpoint?: Json | null
           created_at?: string
           error_code?:
             | Database["public"]["Enums"]["analysis_failure_code"]
@@ -104,6 +84,7 @@ export type Database = {
           initiator_id?: string
           lease_expires_at?: string | null
           model_used?: string | null
+          next_attempt_at?: string | null
           operation_id?: string | null
           output_schema_version?: string
           pricing_version?: string
@@ -1127,6 +1108,18 @@ export type Database = {
         Args: { full_name: string; workspace_name: string }
         Returns: string
       }
+      claim_analysis: {
+        Args: { p_analysis_id?: string }
+        Returns: {
+          attempt_count: number
+          id: string
+          initiator_id: string
+          lease_expires_at: string
+          next_attempt_at: string
+          operation_id: string
+          workspace_id: string
+        }[]
+      }
       claim_ingestion_job: {
         Args: never
         Returns: {
@@ -1166,11 +1159,24 @@ export type Database = {
           workspace_id: string
         }[]
       }
+      complete_analysis: {
+        Args: { p_analysis_id: string; p_operation_id: string }
+        Returns: undefined
+      }
       enqueue_ingestion_job: {
         Args: {
           p_retry?: boolean
           p_version_id: string
           p_workspace_id: string
+        }
+        Returns: string
+      }
+      fail_analysis: {
+        Args: {
+          p_analysis_id: string
+          p_error_code: Database["public"]["Enums"]["analysis_failure_code"]
+          p_operation_id: string
+          p_retryable: boolean
         }
         Returns: string
       }
@@ -1275,6 +1281,16 @@ export type Database = {
           outcome: string
           upload_state: Database["public"]["Enums"]["upload_state"]
           version_id: string
+        }[]
+      }
+      renew_analysis_lease: {
+        Args: {
+          p_analysis_id: string
+          p_checkpoint: Json
+          p_operation_id: string
+        }
+        Returns: {
+          lease_expires_at: string
         }[]
       }
       reserve_document: {
@@ -1499,9 +1515,6 @@ export type CompositeTypes<
     : never
 
 export const Constants = {
-  graphql_public: {
-    Enums: {},
-  },
   public: {
     Enums: {
       analysis_failure_code: [

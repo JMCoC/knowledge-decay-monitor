@@ -32,33 +32,6 @@ function serviceClient() {
 
 type Service = ReturnType<typeof serviceClient>;
 
-// Generated database.ts predates the S2-06 regen (Task 7 owns it), so the
-// new columns and RPCs are reached through this narrow structural cast.
-// Only pre-S2-06 names go through the typed client.
-interface PrivilegedClient {
-  rpc<T = unknown>(
-    fn: string,
-    args?: Record<string, unknown>,
-  ): Promise<{
-    data: T | null;
-    error: { code?: string; message: string } | null;
-  }>;
-  from(table: string): {
-    update(
-      values: Record<string, unknown>,
-    ): {
-      eq(
-        column: string,
-        value: string,
-      ): Promise<{ error: { message: string } | null }>;
-    };
-  };
-}
-
-function privileged(service: Service): PrivilegedClient {
-  return service as unknown as PrivilegedClient;
-}
-
 interface PreparedJob {
   workspaceId: string;
   analysisId: string;
@@ -72,12 +45,12 @@ async function backdate(
   patch: { leaseExpired?: boolean; backoffPast?: boolean },
 ) {
   const past = new Date(Date.now() - 60_000).toISOString();
-  const update: Record<string, unknown> = {};
-  if (patch.leaseExpired) update["lease_expires_at"] = past;
-  if (patch.backoffPast) update["next_attempt_at"] = past;
-  const { error } = await privileged(service)
+  const { error } = await service
     .from("analyses")
-    .update(update)
+    .update({
+      ...(patch.leaseExpired ? { lease_expires_at: past } : {}),
+      ...(patch.backoffPast ? { next_attempt_at: past } : {}),
+    })
     .eq("id", analysisId);
   expect(error).toBeNull();
 }
@@ -97,31 +70,22 @@ async function readCheckpoint(
   service: Service,
   analysisId: string,
 ): Promise<{ processedPairs?: unknown; startedAt?: unknown } | null> {
-  const query = (
-    service.from("analyses") as unknown as {
-      select(columns: string): {
-        eq(
-          column: string,
-          value: string,
-        ): {
-          single(): Promise<{
-            data: { checkpoint: unknown } | null;
-            error: { message: string } | null;
-          }>;
-        };
-      };
-    }
-  )
+  const { data, error } = await service
+    .from("analyses")
     .select("checkpoint")
-    .eq("id", analysisId);
-  const { data, error } = await query.single();
+    .eq("id", analysisId)
+    .single();
   expect(error).toBeNull();
   if (!data || typeof data.checkpoint !== "object" || data.checkpoint === null) {
     return null;
   }
-  return data.checkpoint as {
-    processedPairs?: unknown;
-    startedAt?: unknown;
+  // checkpoint is Json: narrow at the boundary instead of casting.
+  const value: unknown = data.checkpoint;
+  if (typeof value !== "object" || value === null) return null;
+  const record = value as Record<string, unknown>;
+  return {
+    processedPairs: record["processedPairs"],
+    startedAt: record["startedAt"],
   };
 }
 
@@ -387,26 +351,26 @@ describe("FAKE-PROVIDER analysis worker integration", () => {
 
   it("FAKE-PROVIDER rejects a stale worker without side effects", async () => {
     const service = serviceClient();
-    const client = privileged(service);
     const job = await prepareJob(service, { versions: 2, sources: 1 });
     try {
-      const first = await client.rpc<Array<{ operation_id: string }>>(
-        "claim_analysis",
-        { p_analysis_id: job.analysisId },
-      );
+      const first = await service.rpc("claim_analysis", {
+        p_analysis_id: job.analysisId,
+      });
       expect(first.error).toBeNull();
       const staleOperation = first.data?.[0]?.operation_id;
       expect(staleOperation).toBeTruthy();
       await backdate(service, job.analysisId, { leaseExpired: true });
-      const second = await client.rpc<Array<{ operation_id: string }>>(
-        "claim_analysis",
-        { p_analysis_id: job.analysisId },
-      );
+      const second = await service.rpc("claim_analysis", {
+        p_analysis_id: job.analysisId,
+      });
       expect(second.error).toBeNull();
       const liveOperation = second.data?.[0]?.operation_id;
       expect(liveOperation).toBeTruthy();
       expect(liveOperation).not.toBe(staleOperation);
-      const stale = await client.rpc("complete_analysis", {
+      if (!staleOperation || !liveOperation) {
+        throw new Error("Local claim fixture did not return an operation.");
+      }
+      const stale = await service.rpc("complete_analysis", {
         p_analysis_id: job.analysisId,
         p_operation_id: staleOperation,
       });

@@ -313,12 +313,15 @@ S2-06 queda "completo pendiente de integración" (G2=A; cerrar solo con fakes co
 |---|------|-------|-----------|---------------------------|
 | 1 | Slot único retiene workspace ≤90min peor caso | S2-06 (documenta) | Demanda de concurrencia | Throughput 1 análisis/vez por workspace |
 | 2 | Plan B duplicación `lib/` + paridad | S2-06 | Task 0 (a) falla | Divergencia fingerprint Edge↔Node |
-| 3 | Runtime Sentry en Deno | S2-06 | Task 0 | Sin telemetría remota del worker |
+| 3 | Sentry no cableado en v1 (Task 5 decidió stdout-only JSON como única telemetría). SDK remoto reabre cuando S2-08 o un ticket posterior requiera captura remota del worker. Dueño S2-08. | S2-08 | S2-08 o posterior lo requiere | Sin telemetría remota del worker en v1 |
 | 4 | Recalibrar N/backoffs/lease | S2-06 | Task 0 mide | Timeouts o reclaim lento |
 | 5 | `TODO(S2-08)` claim (liberación terminal) | S2-08 | S2-08 merge | Reserva intacta tras `ATTEMPTS_EXHAUSTED` |
 | 6 | `TODO(S2-08)` complete (findings+consumo+evento) | S2-08 | S2-08 merge | `completed` sin resultados ni cargo |
 | 7 | `TODO(S2-08)` fail (liberación+evento) + texto F3 | S2-08 | S2-08 merge | Mensaje v1 sin promesa de liberación |
 | 8 | Findings cross-invocation se pierden hasta S2-08 staging (el close completed de la última invocation solo lleva sus findings) | S2-08 | S2-08 merge | Análisis multi-batch pierden findings hasta S2-08 |
+| 9 | Task 0 (a) verificó imports triviales; el grafo real no se verificó hasta Task 6 (bug de bootstrap Deno) | S2-06 | Refactor del grafo worker | Regresión silenciosa en bootstrap; protegida por tests/unit/deno-import-extensions.test.ts |
+| 10 | Bundle deployable incluye supabase/functions/analyze/ _test_doubles/ (statically imported para que Deno preloadee; gate en runtime decide uso) | Task 7 | Auditoría de bundle o necesidad de excluir tests del deploy | Código de tests en bundle de producción (inactivo bajo gate) |
+| 11 | Flake no identificado en test:integration (1/6 corridas, no reproducido en 5 posteriores; hipótesis contención Docker/puertos) | S2-06 / próximo merge a develop | Fallo de CI | Bloquea merges intermitentemente; investigar si reaparece |
 
 ### 12.2 Decisiones diferidas ("decidido no decidir hasta X; criterio = Y")
 

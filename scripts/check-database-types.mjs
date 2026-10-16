@@ -8,7 +8,7 @@ const outputPath = resolve(root, "src/types/database.ts");
 
 let generated;
 try {
-  generated = execFileSync(process.execPath, [cli, "gen", "types", "typescript", "--local"], {
+  generated = execFileSync(process.execPath, [cli, "gen", "types", "typescript", "--local", "--schema", "public"], {
     cwd: root,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
