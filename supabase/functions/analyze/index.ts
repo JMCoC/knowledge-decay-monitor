@@ -1,7 +1,7 @@
-// @ts-nocheck — Deno requires the .ts extension on relative imports; tsc rejects it. Temporary until Task 5 replaces this file with the real entrypoint (which imports npm:@supabase/supabase-js and does not need the extension workaround).
 // Task 0 skeleton — verifies Deno Edge can import src/modules/analysis/retrieval.ts.
 // Replaced by the real entrypoint in Task 5. NOT committed during Task 0.
 
+// @ts-expect-error TS5097 — Deno requires the .ts extension on relative imports; tsc rejects it without allowImportingTsExtensions. Temporary until Task 5.
 import { computeRequestFingerprint } from "../../../src/modules/analysis/retrieval.ts";
 
 declare const Deno: {
