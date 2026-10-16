@@ -318,6 +318,7 @@ S2-06 queda "completo pendiente de integración" (G2=A; cerrar solo con fakes co
 | 5 | `TODO(S2-08)` claim (liberación terminal) | S2-08 | S2-08 merge | Reserva intacta tras `ATTEMPTS_EXHAUSTED` |
 | 6 | `TODO(S2-08)` complete (findings+consumo+evento) | S2-08 | S2-08 merge | `completed` sin resultados ni cargo |
 | 7 | `TODO(S2-08)` fail (liberación+evento) + texto F3 | S2-08 | S2-08 merge | Mensaje v1 sin promesa de liberación |
+| 8 | Findings cross-invocation se pierden hasta S2-08 staging (el close completed de la última invocation solo lleva sus findings) | S2-08 | S2-08 merge | Análisis multi-batch pierden findings hasta S2-08 |
 
 ### 12.2 Decisiones diferidas ("decidido no decidir hasta X; criterio = Y")
 

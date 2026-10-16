@@ -103,13 +103,14 @@ function mockClient(options: {
   pairCount: number;
   claimRows?: unknown[];
   renewImpl?: () => Promise<unknown>;
+  checkpoint?: unknown;
 }) {
   const rpcCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
   const pairs = Array.from({ length: options.pairCount }, (_, i) =>
     pairRow(i),
   );
   const single = vi.fn(async () => ({
-    data: analysisRow(options.pairCount),
+    data: { ...analysisRow(options.pairCount), checkpoint: options.checkpoint ?? null },
     error: null,
   }));
   const eq = vi.fn(() => ({
@@ -163,12 +164,13 @@ describe("runAnalysisJob", () => {
     const { runAnalysisJob } = await import(
       "../../src/modules/analysis/worker/process-analysis"
     );
-    await runAnalysisJob({
+    const result = await runAnalysisJob({
       client,
       provider,
       finalization,
       analysisId: ANALYSIS_ID,
     });
+    expect(result).toEqual({ kind: "completed", claimedId: ANALYSIS_ID });
     expect(
       rpcCalls.find((call) => call.name === "claim_analysis")?.args,
     ).toEqual({ p_analysis_id: ANALYSIS_ID });
@@ -194,11 +196,16 @@ describe("runAnalysisJob", () => {
     const { runAnalysisJob } = await import(
       "../../src/modules/analysis/worker/process-analysis"
     );
-    await runAnalysisJob({
+    const result = await runAnalysisJob({
       client,
       provider,
       finalization,
       analysisId: ANALYSIS_ID,
+    });
+    expect(result).toEqual({
+      kind: "failed",
+      code: "PROVIDER_UNAVAILABLE",
+      claimedId: ANALYSIS_ID,
     });
     expect(finalization.calls).toHaveLength(1);
     expect(finalization.calls[0]?.outcome).toEqual({
@@ -219,12 +226,13 @@ describe("runAnalysisJob", () => {
     const { runAnalysisJob } = await import(
       "../../src/modules/analysis/worker/process-analysis"
     );
-    await runAnalysisJob({
+    const result = await runAnalysisJob({
       client,
       provider,
       finalization,
       analysisId: ANALYSIS_ID,
     });
+    expect(result).toEqual({ kind: "aborted", claimedId: ANALYSIS_ID });
     expect(finalization.calls).toHaveLength(0);
   });
 
@@ -239,12 +247,13 @@ describe("runAnalysisJob", () => {
     const { runAnalysisJob } = await import(
       "../../src/modules/analysis/worker/process-analysis"
     );
-    await runAnalysisJob({
+    const result = await runAnalysisJob({
       client,
       provider: provider as never,
       finalization,
       analysisId: ANALYSIS_ID,
     });
+    expect(result).toEqual({ kind: "aborted", claimedId: ANALYSIS_ID });
     expect(finalization.calls).toHaveLength(0);
   });
 
@@ -255,14 +264,13 @@ describe("runAnalysisJob", () => {
     const { runAnalysisJob } = await import(
       "../../src/modules/analysis/worker/process-analysis"
     );
-    await expect(
-      runAnalysisJob({
-        client,
-        provider,
-        finalization,
-        analysisId: ANALYSIS_ID,
-      }),
-    ).resolves.toBeUndefined();
+    const result = await runAnalysisJob({
+      client,
+      provider,
+      finalization,
+      analysisId: ANALYSIS_ID,
+    });
+    expect(result).toEqual({ kind: "completed", claimedId: ANALYSIS_ID });
     expect(finalization.calls).toHaveLength(1);
   });
 
@@ -282,14 +290,37 @@ describe("runAnalysisJob", () => {
     const { runAnalysisJob } = await import(
       "../../src/modules/analysis/worker/process-analysis"
     );
-    await runAnalysisJob({
+    const result = await runAnalysisJob({
       client,
       provider,
       finalization,
       analysisId: ANALYSIS_ID,
     });
+    expect(result).toEqual({ kind: "idle" });
     expect(provider.calls).toHaveLength(0);
     expect(finalization.calls).toHaveLength(0);
+  });
+
+  it("closes an empty analysis as completed with no findings", async () => {
+    const provider = new FakeAnalysisProvider();
+    const finalization = new FakeAnalysisFinalization();
+    const { client } = mockClient({ pairCount: 0 });
+    const { runAnalysisJob } = await import(
+      "../../src/modules/analysis/worker/process-analysis"
+    );
+    const result = await runAnalysisJob({
+      client,
+      provider,
+      finalization,
+      analysisId: ANALYSIS_ID,
+    });
+    expect(result).toEqual({ kind: "completed", claimedId: ANALYSIS_ID });
+    expect(provider.calls).toHaveLength(0);
+    expect(finalization.calls).toHaveLength(1);
+    expect(finalization.calls[0]?.outcome).toEqual({
+      kind: "completed",
+      findings: [],
+    });
   });
 
   it("operates on the claimed job when the sweep returns another id", async () => {
@@ -303,12 +334,13 @@ describe("runAnalysisJob", () => {
     const { runAnalysisJob } = await import(
       "../../src/modules/analysis/worker/process-analysis"
     );
-    await runAnalysisJob({
+    const sweepResult = await runAnalysisJob({
       client,
       provider,
       finalization,
       analysisId: ANALYSIS_ID,
     });
+    expect(sweepResult).toEqual({ kind: "completed", claimedId: SWEPT_ID });
     expect(
       rpcCalls.find((call) => call.name === "claim_analysis")?.args,
     ).toEqual({ p_analysis_id: ANALYSIS_ID });
@@ -327,12 +359,13 @@ describe("runAnalysisJob", () => {
     const { runAnalysisJob } = await import(
       "../../src/modules/analysis/worker/process-analysis"
     );
-    await runAnalysisJob({
+    const result = await runAnalysisJob({
       client,
       provider,
       finalization,
       analysisId: ANALYSIS_ID,
     });
+    expect(result).toEqual({ kind: "completed", claimedId: ANALYSIS_ID });
     expect(provider.calls[0]?.configuration).toEqual({
       retrieval: {
         topK: 5,
@@ -349,5 +382,93 @@ describe("runAnalysisJob", () => {
         fallback: { provider: "groq", model: "synthetic-fallback" },
       },
     });
+  });
+
+  it("processes one batch and returns has-more when pairs remain", async () => {
+    const provider = new FakeAnalysisProvider();
+    const finalization = new FakeAnalysisFinalization();
+    const { client, rpcCalls } = mockClient({ pairCount: 15 });
+    const { runAnalysisJob } = await import(
+      "../../src/modules/analysis/worker/process-analysis"
+    );
+    const { N: batchSize } = await import(
+      "../../src/modules/analysis/worker/constants"
+    );
+    const result = await runAnalysisJob({
+      client,
+      provider,
+      finalization,
+      analysisId: ANALYSIS_ID,
+    });
+    expect(result).toEqual({ kind: "has-more", claimedId: ANALYSIS_ID });
+    expect(provider.calls).toHaveLength(batchSize);
+    expect(finalization.calls).toHaveLength(0);
+    const renew = rpcCalls.find(
+      (call) => call.name === "renew_analysis_lease",
+    );
+    expect(
+      (renew?.args["p_checkpoint"] as { processedPairs: number })
+        .processedPairs,
+    ).toBe(batchSize);
+  });
+
+  it("reports the claimed id when more batches remain", async () => {
+    const SWEPT_ID = "c2222222-0000-4000-8000-000000000003";
+    const provider = new FakeAnalysisProvider();
+    const finalization = new FakeAnalysisFinalization();
+    const { client } = mockClient({
+      pairCount: 15,
+      claimRows: [{ ...claimedRow(), id: SWEPT_ID }],
+    });
+    const { runAnalysisJob } = await import(
+      "../../src/modules/analysis/worker/process-analysis"
+    );
+    const result = await runAnalysisJob({
+      client,
+      provider,
+      finalization,
+      analysisId: ANALYSIS_ID,
+    });
+    expect(result).toEqual({ kind: "has-more", claimedId: SWEPT_ID });
+    expect(finalization.calls).toHaveLength(0);
+  });
+
+  it("two consecutive invocations cover pairs 0-9 and 10-14", async () => {
+    const firstProvider = new FakeAnalysisProvider();
+    const firstFinalization = new FakeAnalysisFinalization();
+    const first = mockClient({ pairCount: 15 });
+    const { runAnalysisJob } = await import(
+      "../../src/modules/analysis/worker/process-analysis"
+    );
+    const firstResult = await runAnalysisJob({
+      client: first.client,
+      provider: firstProvider,
+      finalization: firstFinalization,
+      analysisId: ANALYSIS_ID,
+    });
+    expect(firstResult).toEqual({ kind: "has-more", claimedId: ANALYSIS_ID });
+    expect(firstProvider.calls).toHaveLength(10);
+
+    const secondProvider = new FakeAnalysisProvider();
+    const secondFinalization = new FakeAnalysisFinalization();
+    const second = mockClient({
+      pairCount: 15,
+      checkpoint: {
+        processedPairs: 10,
+        totalPairs: 15,
+        findingsCount: 0,
+        lastPairFingerprint: "synthetic-hash",
+        startedAt: "2026-10-15T00:00:00.000Z",
+      },
+    });
+    const secondResult = await runAnalysisJob({
+      client: second.client,
+      provider: secondProvider,
+      finalization: secondFinalization,
+      analysisId: ANALYSIS_ID,
+    });
+    expect(secondResult).toEqual({ kind: "completed", claimedId: ANALYSIS_ID });
+    expect(secondProvider.calls).toHaveLength(5);
+    expect(secondFinalization.calls).toHaveLength(1);
   });
 });

@@ -169,7 +169,24 @@ async function settle(
 }
 
 /**
- * Orchestrates one worker pass: claim → load → batches → finalize
+ * One invocation processes at most one batch (N pairs, spec §4.3) and
+ * reports what the caller must do next. The loop lives in the caller
+ * (self-fetch between batches, spec §4.2); the persisted checkpoint
+ * written by each batch renew is what advances the next invocation.
+ * Findings accumulate only in memory: the completed close carries this
+ * invocation's batch findings. Cross-invocation accumulation without
+ * loss requires S2-08 per-batch staging (RLS already hides findings of
+ * non-completed analyses); until then this is a documented v1 limit.
+ */
+export type RunAnalysisJobResult =
+  | { kind: "completed"; claimedId: string }
+  | { kind: "has-more"; claimedId: string }
+  | { kind: "failed"; code: AnalysisFailureCode; claimedId: string }
+  | { kind: "aborted"; claimedId: string }
+  | { kind: "idle" };
+
+/**
+ * Runs a single batch pass: claim → load → one batch → maybe finalize
  * (spec §6). Terminal calls happen only when the worker decides an
  * outcome (spec §8 F1): undecided failures (INTERNAL_ERROR, uncoded
  * throws, lost leases) leave the job processing for the sweep.
@@ -177,7 +194,7 @@ async function settle(
  */
 export async function runAnalysisJob(
   args: RunAnalysisJobArgs,
-): Promise<void> {
+): Promise<RunAnalysisJobResult> {
   const { client, provider, finalization, analysisId } = args;
 
   let claimed: ClaimedAnalysis;
@@ -191,13 +208,12 @@ export async function runAnalysisJob(
         ? []
         : claimResult.data;
     const first = rows[0];
-    if (first === undefined) return;
+    if (first === undefined) return { kind: "idle" };
     claimed = parseClaimedRow(first);
   } catch {
-    return;
+    return { kind: "idle" };
   }
 
-  const findings: InternalFinding[] = [];
   try {
     // NOTE: claimed.id, not the caller payload: a directed claim falls
     // back to the FIFO sweep (§4.2/§5.1) and may return another job.
@@ -207,41 +223,55 @@ export async function runAnalysisJob(
       claimed.id,
     );
     const resumed = await readPersistedResume(client, claimed.id);
-    let processed = resumed.startIndex;
-    let startedAt = resumed.startedAt;
-    while (processed < context.pairs.length) {
-      const result = await runBatch({
-        claimed,
-        context,
-        provider,
-        client,
-        configuration,
-        startIndex: processed,
-        startedAt,
-      });
-      processed = result.checkpoint.processedPairs;
-      startedAt = result.checkpoint.startedAt;
-      if (result.outcome.kind === "failed") {
-        if (result.outcome.code === "INTERNAL_ERROR") return;
-        await settle(finalization, claimed, {
-          kind: "failed",
-          code: result.outcome.code,
-        });
-        return;
-      }
-      if (result.outcome.kind === "aborted") return;
-      findings.push(...result.outcome.findings);
+    let startIndex = resumed.startIndex;
+    if (context.pairs.length > 0 && startIndex >= context.pairs.length) {
+      // Crash between the last renew and finalize: recompute from zero.
+      // S2-08 deduplicates findings intra-analysis by fingerprint.
+      startIndex = 0;
     }
-    await settle(finalization, claimed, { kind: "completed", findings });
+    if (startIndex >= context.pairs.length) {
+      // Genuinely empty analysis: valid completed close with no findings.
+      await settle(finalization, claimed, { kind: "completed", findings: [] });
+      return { kind: "completed", claimedId: claimed.id };
+    }
+    const result = await runBatch({
+      claimed,
+      context,
+      provider,
+      client,
+      configuration,
+      startIndex,
+      startedAt: resumed.startedAt,
+    });
+    if (result.outcome.kind === "failed") {
+      if (result.outcome.code === "INTERNAL_ERROR")
+        return { kind: "aborted", claimedId: claimed.id };
+      await settle(finalization, claimed, {
+        kind: "failed",
+        code: result.outcome.code,
+      });
+      return { kind: "failed", code: result.outcome.code, claimedId: claimed.id };
+    }
+    if (result.outcome.kind === "aborted")
+      return { kind: "aborted", claimedId: claimed.id };
+    if (result.checkpoint.processedPairs < context.pairs.length) {
+      return { kind: "has-more", claimedId: claimed.id };
+    }
+    await settle(finalization, claimed, {
+      kind: "completed",
+      findings: result.outcome.findings,
+    });
+    return { kind: "completed", claimedId: claimed.id };
   } catch (error: unknown) {
     if (error instanceof AnalysisWorkerError) {
-      if (error.code === "INTERNAL_ERROR") return;
+      if (error.code === "INTERNAL_ERROR")
+        return { kind: "aborted", claimedId: claimed.id };
       await settle(finalization, claimed, {
         kind: "failed",
         code: error.code,
       });
-      return;
+      return { kind: "failed", code: error.code, claimedId: claimed.id };
     }
-    return;
+    return { kind: "aborted", claimedId: claimed.id };
   }
 }
