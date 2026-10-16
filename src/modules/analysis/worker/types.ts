@@ -4,7 +4,7 @@ import type {
   AnalysisConfiguration,
   AnalysisFailureCode,
   InternalFinding,
-} from "../../../types/analysis-internal";
+} from "../../../types/analysis-internal.ts";
 
 /** Coded failure the worker maps to AnalysisFailureCode outcomes. */
 export class AnalysisWorkerError extends Error {
@@ -21,7 +21,7 @@ export class AnalysisWorkerError extends Error {
 export type {
   AIProvider,
   InternalFinding,
-} from "../../../types/analysis-internal";
+} from "../../../types/analysis-internal.ts";
 
 /** Minimal Supabase surface the worker needs; the client is injected. */
 export interface DbResult<T> {

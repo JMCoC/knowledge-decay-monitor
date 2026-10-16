@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AnalysisFinalization } from "../../src/modules/analysis/worker/finalization";
 import { createFinalization } from "../../src/modules/analysis/worker/finalization";
 import { createProvider } from "../../src/modules/analysis/worker/provider";
-import { FakeAnalysisFinalization } from "../fakes/analysis-finalization.fake";
+import { FakeAnalysisFinalization } from "../../supabase/functions/analyze/_test_doubles/analysis-finalization.fake";
 
 describe("analysis seams", () => {
   it("createProvider throws until S2-07 merges", () => {
@@ -32,7 +32,7 @@ describe("analysis seams", () => {
     }
   });
 
-  it("no file under src imports tests/fakes", () => {
+  it("no file under src imports test doubles", () => {
     const workerDir = join(
       dirname(fileURLToPath(import.meta.url)),
       "..",
@@ -49,6 +49,7 @@ describe("analysis seams", () => {
     for (const name of files) {
       const content = readFileSync(join(workerDir, name), "utf8");
       expect(content).not.toContain("tests/fakes");
+      expect(content).not.toContain("_test_doubles");
     }
   });
 

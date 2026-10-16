@@ -5,8 +5,8 @@ import type { InternalFinding } from "../../src/types/analysis-internal";
 import type { AnalysisWorkerDb } from "../../src/modules/analysis/worker/types";
 import { createFinalization } from "../../src/modules/analysis/worker/finalization";
 import { createProvider } from "../../src/modules/analysis/worker/provider";
-import { FakeAnalysisFinalization } from "../fakes/analysis-finalization.fake";
-import { FakeAnalysisProvider } from "../fakes/analysis-provider.fake";
+import { FakeAnalysisFinalization } from "../../supabase/functions/analyze/_test_doubles/analysis-finalization.fake";
+import { FakeAnalysisProvider } from "../../supabase/functions/analyze/_test_doubles/analysis-provider.fake";
 
 const WORKSPACE_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const ANALYSIS_ID = "b0000000-0000-4000-8000-000000000001";

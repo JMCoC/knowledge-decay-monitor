@@ -1,12 +1,12 @@
 import {
   computeRequestFingerprint,
   FROZEN_RETRIEVAL_PARAMS,
-} from "../retrieval";
-import type { AnalysisCandidatePair } from "../../../types/analysis-internal";
-import type { AnalysisScopeRole } from "../../../types/contracts";
-import { RETRIEVAL_TIMEOUT_MS } from "./constants";
-import type { AnalysisWorkerDb, LoadedContext } from "./types";
-import { AnalysisWorkerError } from "./types";
+} from "../retrieval.ts";
+import type { AnalysisCandidatePair } from "../../../types/analysis-internal.ts";
+import type { AnalysisScopeRole } from "../../../types/contracts.ts";
+import { RETRIEVAL_TIMEOUT_MS } from "./constants.ts";
+import type { AnalysisWorkerDb, LoadedContext } from "./types.ts";
+import { AnalysisWorkerError } from "./types.ts";
 
 interface CandidatePairRow {
   source_chunk_id: unknown;

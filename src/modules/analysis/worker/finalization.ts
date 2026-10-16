@@ -1,7 +1,7 @@
 import type {
   AnalysisFailureCode,
   InternalFinding,
-} from "../../../types/analysis-internal";
+} from "../../../types/analysis-internal.ts";
 
 /**
  * Frozen seam between the worker (S2-06) and the finalization owner

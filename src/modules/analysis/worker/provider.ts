@@ -1,4 +1,4 @@
-import type { AIProvider } from "../../../types/analysis-internal";
+import type { AIProvider } from "../../../types/analysis-internal.ts";
 
 /**
  * Real provider factory, unavailable until S2-07 merges (spec §7).

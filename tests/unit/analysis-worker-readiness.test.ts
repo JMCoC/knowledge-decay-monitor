@@ -2,17 +2,26 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   handleAnalyzeRequest,
+  isLocalTestEnv,
 } from "../../supabase/functions/analyze/index";
 import type {
   AnalyzeEnv,
   AnalyzeHandlerDeps,
 } from "../../supabase/functions/analyze/index";
 import type { AnalysisWorkerDb } from "../../src/modules/analysis/worker/types";
+import { createFinalization } from "../../src/modules/analysis/worker/finalization";
+import { createProvider } from "../../src/modules/analysis/worker/provider";
 
 const ENV: AnalyzeEnv = {
   analysisInternalToken: "test-token",
   supabaseUrl: "http://127.0.0.1:54321",
   supabaseServiceRoleKey: "service-key",
+  analysisSupabaseUrl: "http://127.0.0.1:54321",
+  analysisFakeProvider: undefined,
+  analysisFakeLatencyMs: undefined,
+  analysisFakeFailAtCallIndex: undefined,
+  analysisFakeFailCode: undefined,
+  analysisFakeThrowCode: undefined,
 };
 
 function throwingProvider(): never {
@@ -96,7 +105,7 @@ describe("analyze handler readiness", () => {
       d,
     );
     expect(response.status).toBe(503);
-    expect(vi.mocked(d.createClientFn)).not.toHaveBeenCalled();
+    expect(vi.mocked(d.createClientFn)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(d.runJobFn)).not.toHaveBeenCalled();
   });
 
@@ -108,7 +117,7 @@ describe("analyze handler readiness", () => {
       d,
     );
     expect(response.status).toBe(503);
-    expect(vi.mocked(d.createClientFn)).not.toHaveBeenCalled();
+    expect(vi.mocked(d.createClientFn)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(d.runJobFn)).not.toHaveBeenCalled();
   });
 
@@ -284,7 +293,40 @@ describe("analyze handler readiness", () => {
     });
   });
 
-  it("sanitizes unexpected failures to a 500 without internals", async () => {    const d = deps({
+  it("ignores body _fake overrides when the gate is closed", async () => {
+    const env: AnalyzeEnv = {
+      analysisInternalToken: "test-token",
+      supabaseUrl: "http://127.0.0.1:54321",
+      supabaseServiceRoleKey: "service-key",
+      analysisSupabaseUrl: "http://127.0.0.1:54321",
+      analysisFakeProvider: undefined,
+      analysisFakeLatencyMs: undefined,
+      analysisFakeFailAtCallIndex: undefined,
+      analysisFakeFailCode: undefined,
+      analysisFakeThrowCode: undefined,
+    };
+    const d = deps();
+    const res = await handleAnalyzeRequest(
+      new Request("http://x/", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: "Bearer test-token",
+        },
+        body: JSON.stringify({
+          analysisId: "00000000-0000-4000-8000-000000000000",
+          _fake: { latencyMs: 999999, failCode: "INTERNAL_ERROR" },
+        }),
+      }),
+      env,
+      d,
+    );
+    expect(res.status).toBe(503);
+    expect(vi.mocked(d.runJobFn)).not.toHaveBeenCalled();
+  });
+
+  it("sanitizes unexpected failures to a 500 without internals", async () => {
+    const d = deps({
       createProviderFn: readyProvider,
       createFinalizationFn: readyFinalization,
       runJobFn: vi.fn(async () => {
@@ -300,5 +342,128 @@ describe("analyze handler readiness", () => {
     const body = JSON.stringify(await response.json());
     expect(body).not.toContain("postgres://secret");
     expect(body).not.toContain("test-token");
+  });
+
+  it("enables the test hook only with flag plus local URL", () => {
+    const local = (flag: string | undefined, url: string | undefined) => ({
+      analysisInternalToken: "test-token",
+      supabaseUrl: url,
+      supabaseServiceRoleKey: "service-key",
+      analysisSupabaseUrl: url,
+      analysisFakeProvider: flag,
+      analysisFakeLatencyMs: undefined,
+      analysisFakeFailAtCallIndex: undefined,
+      analysisFakeFailCode: undefined,
+      analysisFakeThrowCode: undefined,
+    });
+    expect(
+      isLocalTestEnv(local("1", "http://127.0.0.1:54321")),
+    ).toBe(true);
+    expect(isLocalTestEnv(local("1", "http://localhost:54321"))).toBe(true);
+    expect(isLocalTestEnv(local("1", "http://[::1]:54321"))).toBe(true);
+    expect(isLocalTestEnv(local("1", "http://127.0.0.1:9999"))).toBe(true);
+    expect(
+      isLocalTestEnv(local("1", "https://abc.supabase.co")),
+    ).toBe(false);
+    expect(isLocalTestEnv(local(undefined, "http://127.0.0.1:54321"))).toBe(
+      false,
+    );
+    expect(isLocalTestEnv(local("0", "http://127.0.0.1:54321"))).toBe(false);
+    expect(isLocalTestEnv(local("1", "not-a-url"))).toBe(false);
+    expect(isLocalTestEnv(local("1", undefined))).toBe(false);
+  });
+
+  it("keeps failing loud when the test gate is closed", () => {
+    const closed = {
+      analysisInternalToken: "test-token",
+      supabaseUrl: "http://127.0.0.1:54321",
+      supabaseServiceRoleKey: "service-key",
+      analysisSupabaseUrl: "http://127.0.0.1:54321",
+      analysisFakeProvider: undefined,
+      analysisFakeLatencyMs: undefined,
+      analysisFakeFailAtCallIndex: undefined,
+      analysisFakeFailCode: undefined,
+      analysisFakeThrowCode: undefined,
+    };
+    expect(isLocalTestEnv(closed)).toBe(false);
+    expect(
+      isLocalTestEnv({ ...closed, supabaseUrl: "https://remote.example.com" }),
+    ).toBe(false);
+    expect(() => createProvider()).toThrow(
+      "S2-07 not merged: AIProvider unavailable.",
+    );
+    expect(() => createFinalization()).toThrow(
+      "S2-08 not merged: AnalysisFinalization unavailable.",
+    );
+  });
+
+  it("stays closed in hosted deployments even with spoofed analysis URL", () => {
+    // Reinforced gate: a hosted runtime URL blocks the gate even when
+    // the flag is set and the harness URL is loopback. Setting env vars
+    // requires project-owner privilege; this closes the remaining hole
+    // where the platform-injected URL is ignored.
+    const spoofed: AnalyzeEnv = {
+      analysisInternalToken: "test-token",
+      supabaseUrl: "https://xyz.supabase.co",
+      supabaseServiceRoleKey: "service-key",
+      analysisSupabaseUrl: "http://127.0.0.1:54321",
+      analysisFakeProvider: "1",
+      analysisFakeLatencyMs: undefined,
+      analysisFakeFailAtCallIndex: undefined,
+      analysisFakeFailCode: undefined,
+      analysisFakeThrowCode: undefined,
+    };
+    expect(isLocalTestEnv(spoofed)).toBe(false);
+  });
+
+  it("runs the fake branch end to end when the gate is open", async () => {
+    const openEnv: AnalyzeEnv = {
+      analysisInternalToken: "test-token",
+      supabaseUrl: "http://127.0.0.1:54321",
+      supabaseServiceRoleKey: "service-key",
+      analysisSupabaseUrl: "http://127.0.0.1:54321",
+      analysisFakeProvider: "1",
+      analysisFakeLatencyMs: undefined,
+      analysisFakeFailAtCallIndex: undefined,
+      analysisFakeFailCode: undefined,
+      analysisFakeThrowCode: undefined,
+    };
+    expect(isLocalTestEnv(openEnv)).toBe(true);
+    const d = deps({
+      runJobFn: vi.fn(async () => ({
+        kind: "completed" as const,
+        claimedId: "claimed-job",
+      })),
+    });
+    const response = await handleAnalyzeRequest(
+      post({ analysisId: "analysis-1" }, "test-token"),
+      openEnv,
+      d,
+    );
+    expect(response.status).toBe(200);
+    expect(vi.mocked(d.createClientFn)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(d.runJobFn)).toHaveBeenCalledTimes(1);
+  });
+
+  it("parses per-request fake behavior without throwing", async () => {
+    const { parseFakeBehaviorSafe } = await import(
+      "../../supabase/functions/analyze/_test_doubles/analysis-provider.fake.ts"
+    );
+    expect(parseFakeBehaviorSafe(undefined)).toEqual({});
+    expect(parseFakeBehaviorSafe(null)).toEqual({});
+    expect(
+      parseFakeBehaviorSafe({
+        latencyMs: 400,
+        failAtCallIndex: 0,
+        failCode: "PROVIDER_UNAVAILABLE",
+        throwCode: "bogus",
+        injected: "dropped",
+      }),
+    ).toEqual({
+      latencyMs: 400,
+      failAtCallIndex: 0,
+      failCode: "PROVIDER_UNAVAILABLE",
+    });
+    expect(parseFakeBehaviorSafe({ latencyMs: -1 })).toEqual({});
   });
 });

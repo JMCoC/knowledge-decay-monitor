@@ -1,7 +1,7 @@
-import type { ClaimedAnalysis } from "./types";
-import { AnalysisWorkerError } from "./types";
+import type { ClaimedAnalysis } from "./types.ts";
+import { AnalysisWorkerError } from "./types.ts";
 
-export type { ClaimArgs, ClaimedAnalysis } from "./types";
+export type { ClaimArgs, ClaimedAnalysis } from "./types.ts";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;

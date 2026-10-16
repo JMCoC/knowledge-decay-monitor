@@ -1,4 +1,4 @@
-import type { AnalysisFinalization } from "../../src/modules/analysis/worker/finalization";
+import type { AnalysisFinalization } from "../../../../src/modules/analysis/worker/finalization.ts";
 
 export interface FakeFinalizationBehavior {
   /** Throw instead of recording. Default false. */

@@ -1,12 +1,12 @@
-import { buildPairHashes } from "../retrieval";
-import { N } from "./constants";
+import { buildPairHashes } from "../retrieval.ts";
+import { N } from "./constants.ts";
 import type {
   BatchResult,
   CheckpointState,
   InternalFinding,
   RunBatchArgs,
-} from "./types";
-import { AnalysisWorkerError } from "./types";
+} from "./types.ts";
+import { AnalysisWorkerError } from "./types.ts";
 
 function pairFingerprint(
   sourceChunkId: string,

@@ -1,4 +1,4 @@
-import type { AnalysisFailureCode } from "../../../types/analysis-internal";
+import type { AnalysisFailureCode } from "../../../types/analysis-internal.ts";
 
 export type AnalysisWorkerTelemetryOperation =
   | "claim"

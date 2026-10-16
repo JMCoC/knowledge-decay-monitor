@@ -12,7 +12,7 @@ import type {
   ClaimedAnalysis,
   LoadedContext,
 } from "../../src/modules/analysis/worker/types";
-import { FakeAnalysisProvider } from "../fakes/analysis-provider.fake";
+import { FakeAnalysisProvider } from "../../supabase/functions/analyze/_test_doubles/analysis-provider.fake";
 
 const WORKSPACE_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const ANALYSIS_ID = "b0000000-0000-4000-8000-000000000001";

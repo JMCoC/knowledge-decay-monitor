@@ -1,19 +1,19 @@
-import { FROZEN_RETRIEVAL_PARAMS } from "../retrieval";
+import { FROZEN_RETRIEVAL_PARAMS } from "../retrieval.ts";
 import type {
   AIProvider,
   AnalysisConfiguration,
   AnalysisFailureCode,
   InternalFinding,
-} from "../../../types/analysis-internal";
-import { runBatch } from "./batch";
-import { parseClaimedRow } from "./claim";
-import { loadAnalysisContext } from "./context";
-import type { AnalysisFinalization } from "./finalization";
+} from "../../../types/analysis-internal.ts";
+import { runBatch } from "./batch.ts";
+import { parseClaimedRow } from "./claim.ts";
+import { loadAnalysisContext } from "./context.ts";
+import type { AnalysisFinalization } from "./finalization.ts";
 import type {
   AnalysisWorkerDb,
   ClaimedAnalysis,
-} from "./types";
-import { AnalysisWorkerError } from "./types";
+} from "./types.ts";
+import { AnalysisWorkerError } from "./types.ts";
 
 export interface RunAnalysisJobArgs {
   client: AnalysisWorkerDb;
