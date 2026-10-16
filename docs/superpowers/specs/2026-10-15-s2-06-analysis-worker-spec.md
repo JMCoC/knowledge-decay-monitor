@@ -322,6 +322,7 @@ S2-06 queda "completo pendiente de integración" (G2=A; cerrar solo con fakes co
 | 9 | Task 0 (a) verificó imports triviales; el grafo real no se verificó hasta Task 6 (bug de bootstrap Deno) | S2-06 | Refactor del grafo worker | Regresión silenciosa en bootstrap; protegida por tests/unit/deno-import-extensions.test.ts |
 | 10 | Bundle deployable incluye supabase/functions/analyze/ _test_doubles/ (statically imported para que Deno preloadee; gate en runtime decide uso) | Task 7 | Auditoría de bundle o necesidad de excluir tests del deploy | Código de tests en bundle de producción (inactivo bajo gate) |
 | 11 | Flake no identificado en test:integration (1/6 corridas, no reproducido en 5 posteriores; hipótesis contención Docker/puertos) | S2-06 / próximo merge a develop | Fallo de CI | Bloquea merges intermitentemente; investigar si reaparece |
+| 12 | Claim concurrente real sin probar (skip con método dblink documentado en `supabase/tests/database/020_s2_06_analysis_leases.test.sql`) | S2-06 | Antes del cierre S2-12 | Doble worker podría reclamar el mismo job (mitigado: advisory lock + SKIP LOCKED + CHECK attempt_count, patrón probado concurrentemente en S1-07) |
 
 ### 12.2 Decisiones diferidas ("decidido no decidir hasta X; criterio = Y")
 
