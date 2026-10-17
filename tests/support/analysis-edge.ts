@@ -25,6 +25,7 @@ export interface AnalysisEdgeHandle {
   baseUrl: string;
   token: string;
   stop: (opts?: { force?: boolean }) => Promise<void>;
+  diagnostics: () => string;
 }
 
 const EDGE_RUNTIME_CONTAINER =
@@ -113,6 +114,22 @@ export async function startAnalysisEdge(
 
   let child: ChildProcess | undefined;
   const stderrTail: string[] = [];
+  const stdoutTail: string[] = [];
+  const recordOutput = (target: string[], chunk: Buffer) => {
+    target.push(...chunk.toString("utf8").split(/\r?\n/).filter(Boolean));
+    while (target.join("\n").length > 4000) target.shift();
+  };
+  const diagnostics = () => {
+    const relevant = [...stdoutTail, ...stderrTail]
+      .filter((line) => /error|exception|panic|failed|warning/i.test(line))
+      .join("\n")
+      .replaceAll(opts.token, "[redacted]")
+      .replaceAll(opts.serviceRoleKey, "[redacted]")
+      .replace(/eyJ[A-Za-z0-9._-]{20,}/g, "[redacted-token]")
+      .replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, "[uuid]")
+      .slice(-2000);
+    return relevant || "(no runtime error output)";
+  };
   const stop = async (stopOpts?: { force?: boolean }) => {
     try {
       if (
@@ -161,10 +178,8 @@ export async function startAnalysisEdge(
     },
   );
   child.on("error", () => undefined);
-  child.stderr?.on("data", (chunk: Buffer) => {
-    stderrTail.push(chunk.toString("utf8"));
-    while (stderrTail.join("").length > 4000) stderrTail.shift();
-  });
+  child.stdout?.on("data", (chunk: Buffer) => recordOutput(stdoutTail, chunk));
+  child.stderr?.on("data", (chunk: Buffer) => recordOutput(stderrTail, chunk));
   const deadline = Date.now() + readinessTimeoutMs;
   while (Date.now() < deadline) {
     if (child.exitCode !== null || child.signalCode !== null) {
@@ -175,13 +190,18 @@ export async function startAnalysisEdge(
       );
     }
     try {
+      // A GET/405 may be answered by the gateway while the Edge runtime is
+      // still restarting. Exercise the function route itself without auth;
+      // 401 proves the handler is ready and cannot claim a job.
       const response = await fetch(baseUrl, {
-        method: "GET",
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
         signal: AbortSignal.timeout(1_000),
       });
-      if (response.status === 405) {
+      if (response.status === 401) {
         await response.arrayBuffer().catch(() => undefined);
-        return { baseUrl, token: opts.token, stop };
+        return { baseUrl, token: opts.token, stop, diagnostics };
       }
     } catch {
       // Wait for the Edge runtime to bind.

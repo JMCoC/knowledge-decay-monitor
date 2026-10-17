@@ -4,6 +4,7 @@ import type {
   AnalysisConfiguration,
   AnalysisFailureCode,
   InternalFinding,
+  AnalysisPairCursor,
 } from "../../../types/analysis-internal.ts";
 
 /** Coded failure the worker maps to AnalysisFailureCode outcomes. */
@@ -68,6 +69,7 @@ export interface CheckpointState {
   findingsCount: number;
   lastPairFingerprint: string | null;
   startedAt: string;
+  cursor: AnalysisPairCursor | null;
 }
 
 export interface LoadedContext {
@@ -76,9 +78,26 @@ export interface LoadedContext {
   sourceVersionIds: string[];
   comparisonVersionIds: string[];
   pairs: AnalysisCandidatePair[];
+  pairCursors: AnalysisPairCursor[];
+  cursor: AnalysisPairCursor | null;
   fingerprint: string;
   chunkCount: number;
   candidatePairCount: number;
+}
+
+export interface AnalysisBatchPersistenceInput {
+  analysisId: string;
+  operationId: string;
+  expectedProcessedPairs: number;
+  checkpoint: CheckpointState;
+  findings: InternalFinding[];
+  hasMore: boolean;
+}
+
+export interface AnalysisBatchPersistence {
+  persist(
+    input: AnalysisBatchPersistenceInput,
+  ): Promise<{ ok: true } | { ok: false; code: string }>;
 }
 
 export interface RunBatchArgs {
@@ -86,9 +105,11 @@ export interface RunBatchArgs {
   context: LoadedContext;
   provider: AIProvider;
   client: AnalysisWorkerDb;
+  persistence: AnalysisBatchPersistence;
   configuration: AnalysisConfiguration;
-  startIndex: number;
-  startedAt?: string;
+  checkpoint: CheckpointState;
+  heartbeatIntervalMs?: number;
+  batchTimeoutMs?: number;
 }
 
 export type BatchOutcome =

@@ -101,6 +101,7 @@ export interface AIProvider {
   analyzePair(input: {
     pair: AnalysisCandidatePair;
     configuration: AnalysisConfiguration;
+    signal?: AbortSignal;
   }): Promise<AIProviderResult>;
 }
 

@@ -8,6 +8,7 @@ import type {
   RunAnalysisJobResult,
 } from "../../../src/modules/analysis/worker/process-analysis.ts";
 import { createProvider } from "../../../src/modules/analysis/worker/provider.ts";
+import { createBatchPersistence } from "../../../src/modules/analysis/worker/batch-persistence.ts";
 import { reportAnalysisFailure } from "../../../src/modules/analysis/worker/telemetry.ts";
 // Static import (not dynamic) so Deno bundles the test doubles: the
 // edge runtime only preloads the static graph, and tests/ is outside
@@ -18,12 +19,20 @@ import {
   parseFakeBehaviorSafe,
 } from "./_test_doubles/analysis-provider.fake.ts";
 import { createTestFinalization } from "./_test_doubles/analysis-finalization.test-shim.ts";
+import { FakeAnalysisBatchPersistence } from "./_test_doubles/analysis-batch-persistence.fake.ts";
 import type { AIProvider } from "../../../src/modules/analysis/worker/types.ts";
-import type { AnalysisWorkerDb } from "../../../src/modules/analysis/worker/types.ts";
+import type {
+  AnalysisBatchPersistence,
+  AnalysisWorkerDb,
+} from "../../../src/modules/analysis/worker/types.ts";
 
 declare const Deno: {
   serve: (handler: (req: Request) => Promise<Response> | Response) => void;
   env: { get(key: string): string | undefined };
+};
+
+declare const EdgeRuntime: {
+  waitUntil: (promise: Promise<unknown>) => void;
 };
 
 export interface AnalyzeEnv {
@@ -41,9 +50,13 @@ export interface AnalyzeEnv {
 export interface AnalyzeHandlerDeps {
   createProviderFn: () => AIProvider;
   createFinalizationFn: () => AnalysisFinalization;
+  createBatchPersistenceFn: (
+    client: AnalysisWorkerDb,
+  ) => AnalysisBatchPersistence;
   createClientFn: (env: AnalyzeEnv) => AnalysisWorkerDb;
   runJobFn: (args: RunAnalysisJobArgs) => Promise<RunAnalysisJobResult>;
   fetchFn: (input: string, init?: RequestInit) => Promise<Response>;
+  waitUntilFn: (promise: Promise<unknown>) => void;
 }
 
 function json(status: number, body: Record<string, unknown>): Response {
@@ -102,13 +115,80 @@ export function isLocalTestEnv(env: AnalyzeEnv): boolean {
   return true;
 }
 
+interface AnalyzeRequestBody {
+  analysisId: string | null;
+  continuationBudget: number;
+  fakeOverrides: unknown;
+}
+
+function parseAnalyzeRequestBody(body: unknown): AnalyzeRequestBody | null {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    return null;
+  }
+  const record = body as Record<string, unknown>;
+  const rawId = record["analysisId"];
+  if (rawId !== undefined && (typeof rawId !== "string" || rawId.length === 0)) {
+    return null;
+  }
+  const rawBudget = record["continuationBudget"];
+  const continuationBudget = rawBudget === undefined ? 10 : rawBudget;
+  if (
+    typeof continuationBudget !== "number" ||
+    !Number.isInteger(continuationBudget) ||
+    continuationBudget < 0 ||
+    continuationBudget > 10
+  ) {
+    return null;
+  }
+  return {
+    analysisId: typeof rawId === "string" ? rawId : null,
+    continuationBudget,
+    fakeOverrides: record["_fake"],
+  };
+}
+
+async function continueAcceptedWork(
+  request: Request,
+  env: AnalyzeEnv,
+  deps: AnalyzeHandlerDeps,
+  args: RunAnalysisJobArgs,
+  continuationBudget: number,
+): Promise<void> {
+  let result: RunAnalysisJobResult;
+  try {
+    result = await deps.runJobFn(args);
+  } catch {
+    reportAnalysisFailure({
+      module: "analysis",
+      operation: "recover",
+      code: "INTERNAL_ERROR",
+      ...(args.analysisId ? { analysis_id: args.analysisId } : {}),
+    });
+    return;
+  }
+  if (result.kind !== "has-more" || continuationBudget <= 0) return;
+  try {
+    await deps.fetchFn(request.url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${env.analysisInternalToken ?? ""}`,
+      },
+      body: JSON.stringify({
+        analysisId: result.claimedId,
+        continuationBudget: continuationBudget - 1,
+      }),
+      signal: AbortSignal.timeout(2000),
+    });
+  } catch {
+    // Durable queued work remains available to the recovery sweep.
+  }
+}
+
 /**
- * Analysis worker HTTP entrypoint (spec §4.1, §11 G2). Order: method →
- * token → body → readiness (factories only, no client, no claim) →
- * client → single batch → mapped response. Self-fetch continues to
- * the next batch fire-and-forget (spec §4.2); the sweep reclaims
- * anything this invocation leaves behind. Never logs tokens, bodies
- * or document content.
+ * Analysis worker HTTP entrypoint. A 202 acknowledges only that the
+ * background task was registered; it does not promise a claim or result.
+ * Readiness is checked before the task may claim a job.
  */
 export async function handleAnalyzeRequest(
   request: Request,
@@ -121,32 +201,34 @@ export async function handleAnalyzeRequest(
   if (!isAuthorized(request, env)) {
     return json(401, { error: "unauthorized" });
   }
-  let analysisId: string | null = null;
-  let fakeOverrides: unknown = undefined;
+  let body: AnalyzeRequestBody | null = null;
   try {
-    const body: unknown = await request.json();
-    if (typeof body === "object" && body !== null) {
-      const record = body as Record<string, unknown>;
-      const candidate = record["analysisId"];
-      if (typeof candidate === "string" && candidate.length > 0) {
-        analysisId = candidate;
-      }
-      // Test-only per-request fake behavior. Honored only when the
-      // isLocalTestEnv gate below is open; ignored otherwise.
-      fakeOverrides = record["_fake"];
-    }
+    body = parseAnalyzeRequestBody(await request.json());
   } catch {
-    analysisId = null;
+    body = null;
   }
-  if (analysisId === null) {
-    return json(400, { error: "invalid analysisId" });
+  if (body === null) {
+    return json(400, { error: "invalid request" });
   }
 
   let provider: AIProvider;
   let finalization: AnalysisFinalization;
+  let persistence: AnalysisBatchPersistence;
   let client: AnalysisWorkerDb;
   try {
     client = deps.createClientFn(env);
+    if (isLocalTestEnv(env)) {
+      provider = createFakeProvider(
+        env,
+        parseFakeBehaviorSafe(body.fakeOverrides),
+      );
+      finalization = createTestFinalization(client);
+      persistence = new FakeAnalysisBatchPersistence(client);
+    } else {
+      provider = deps.createProviderFn();
+      finalization = deps.createFinalizationFn();
+      persistence = deps.createBatchPersistenceFn(client);
+    }
   } catch {
     reportAnalysisFailure({
       module: "analysis",
@@ -156,95 +238,37 @@ export async function handleAnalyzeRequest(
     return json(503, { error: "not ready" });
   }
 
-  if (isLocalTestEnv(env)) {
-    provider = createFakeProvider(
-      env,
-      parseFakeBehaviorSafe(fakeOverrides),
-    );
-    finalization = createTestFinalization(client);
-  } else {
-    try {
-      provider = deps.createProviderFn();
-      finalization = deps.createFinalizationFn();
-    } catch {
-      reportAnalysisFailure({
-        module: "analysis",
-        operation: "recover",
-        code: "INTERNAL_ERROR",
-      });
-      return json(503, { error: "not ready" });
-    }
-  }
-
-  let result: RunAnalysisJobResult;
+  const jobArgs: RunAnalysisJobArgs = {
+    client,
+    provider,
+    finalization,
+    persistence,
+    analysisId: body.analysisId,
+  };
+  let registered = false;
+  const work = Promise.resolve().then(() =>
+    registered
+      ? continueAcceptedWork(
+          request,
+          env,
+          deps,
+          jobArgs,
+          body.continuationBudget,
+        )
+      : undefined,
+  );
   try {
-    result = await deps.runJobFn({
-      client,
-      provider,
-      finalization,
-      analysisId,
-    });
+    deps.waitUntilFn(work);
+    registered = true;
   } catch {
     reportAnalysisFailure({
       module: "analysis",
       operation: "recover",
       code: "INTERNAL_ERROR",
-      analysis_id: analysisId,
     });
-    return json(500, { error: "internal" });
+    return json(503, { error: "not ready" });
   }
-
-  if (result.kind === "has-more") {
-    // NOTE: self-fetch chains the CLAIMED job, never the caller payload:
-    // a directed claim may fall back to the FIFO sweep (§4.2/§5.1) and
-    // chaining the payload id could strand another job mid-batches.
-    // The response reports the claimed id for coherence.
-    const continued = { analysisId: result.claimedId };
-    void deps
-      .fetchFn(request.url, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${env.analysisInternalToken ?? ""}`,
-        },
-        body: JSON.stringify(continued),
-        signal: AbortSignal.timeout(2000),
-      })
-      .catch(() => {});
-    return json(202, {
-      ok: true,
-      analysisId,
-      claimedId: result.claimedId,
-      continued: true,
-    });
-  }
-  if (result.kind === "failed") {
-    return json(200, {
-      ok: true,
-      analysisId,
-      claimedId: result.claimedId,
-      final: false,
-      code: result.code,
-    });
-  }
-  if (result.kind === "aborted") {
-    return json(200, {
-      ok: true,
-      analysisId,
-      claimedId: result.claimedId,
-      final: false,
-      aborted: true,
-    });
-  }
-  if (result.kind === "idle") {
-    return json(200, { ok: true, analysisId, claimed: false });
-  }
-  return json(200, {
-    ok: true,
-    analysisId,
-    claimedId: result.claimedId,
-    final: true,
-  });
+  return json(202, { ok: true, accepted: true });
 }
 
 // S2-05 uses a dedicated analysis token, separate from INGESTION_INTERNAL_TOKEN.
@@ -279,7 +303,9 @@ if (typeof Deno !== "undefined" && typeof Deno.serve === "function") {
             e.supabaseServiceRoleKey ?? "",
           ) as unknown as AnalysisWorkerDb,
         runJobFn: (args) => runAnalysisJob(args),
+        createBatchPersistenceFn: (db) => createBatchPersistence(db),
         fetchFn: (input, init) => fetch(input, init),
+        waitUntilFn: (promise) => EdgeRuntime.waitUntil(promise),
       },
     );
   });

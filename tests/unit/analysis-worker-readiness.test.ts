@@ -9,6 +9,8 @@ import type {
   AnalyzeHandlerDeps,
 } from "../../supabase/functions/analyze/index";
 import type { AnalysisWorkerDb } from "../../src/modules/analysis/worker/types";
+import type { AnalysisBatchPersistence } from "../../src/modules/analysis/worker/types";
+import { createBatchPersistence } from "../../src/modules/analysis/worker/batch-persistence";
 import { createFinalization } from "../../src/modules/analysis/worker/finalization";
 import { createProvider } from "../../src/modules/analysis/worker/provider";
 
@@ -32,11 +34,11 @@ function throwingFinalization(): never {
   throw new Error("S2-08 not merged: AnalysisFinalization unavailable.");
 }
 
-function readyProvider() {
-  return {} as never;
+function throwingPersistence(): AnalysisBatchPersistence {
+  return createBatchPersistence({ rpc: vi.fn() } as never);
 }
 
-function readyFinalization() {
+function ready() {
   return {} as never;
 }
 
@@ -46,6 +48,7 @@ function deps(
   return {
     createProviderFn: throwingProvider,
     createFinalizationFn: throwingFinalization,
+    createBatchPersistenceFn: throwingPersistence,
     createClientFn: vi.fn(
       (): AnalysisWorkerDb => ({ rpc: vi.fn() }) as unknown as AnalysisWorkerDb,
     ),
@@ -54,6 +57,7 @@ function deps(
       claimedId: "claimed-job",
     })),
     fetchFn: vi.fn(async () => new Response("ok")),
+    waitUntilFn: vi.fn(() => {}),
     ...overrides,
   };
 }
@@ -66,119 +70,82 @@ function post(body: unknown, token?: string) {
   });
 }
 
-describe("analyze handler readiness", () => {
-  it("rejects a missing token with 401 and zero RPCs", async () => {
+describe("analyze handler readiness and async acknowledgement", () => {
+  it("rejects missing or wrong tokens before creating a client", async () => {
+    for (const token of [undefined, "wrong-token"]) {
+      const d = deps({ createProviderFn: ready, createFinalizationFn: ready, createBatchPersistenceFn: ready });
+      const response = await handleAnalyzeRequest(post({}, token), ENV, d);
+      expect(response.status).toBe(401);
+      expect(d.createClientFn).not.toHaveBeenCalled();
+      expect(d.runJobFn).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each([
+    ["provider", throwingProvider, ready, ready],
+    ["finalization", ready, throwingFinalization, ready],
+    ["batch persistence", ready, ready, throwingPersistence],
+  ])("returns 503 without a claim when %s is missing", async (_label, provider, finalization, persistence) => {
     const d = deps({
-      createProviderFn: readyProvider,
-      createFinalizationFn: readyFinalization,
-    });
-    const response = await handleAnalyzeRequest(
-      post({ analysisId: "a" }),
-      ENV,
-      d,
-    );
-    expect(response.status).toBe(401);
-    expect(vi.mocked(d.createClientFn)).not.toHaveBeenCalled();
-    expect(vi.mocked(d.runJobFn)).not.toHaveBeenCalled();
-  });
-
-  it("rejects a wrong token with 401 and zero RPCs", async () => {
-    const d = deps({
-      createProviderFn: readyProvider,
-      createFinalizationFn: readyFinalization,
-    });
-    const response = await handleAnalyzeRequest(
-      post({ analysisId: "a" }, "wrong-token"),
-      ENV,
-      d,
-    );
-    expect(response.status).toBe(401);
-    expect(vi.mocked(d.createClientFn)).not.toHaveBeenCalled();
-    expect(vi.mocked(d.runJobFn)).not.toHaveBeenCalled();
-  });
-
-  it("returns 503 without claiming when the provider is missing", async () => {
-    const d = deps({ createFinalizationFn: readyFinalization });
-    const response = await handleAnalyzeRequest(
-      post({ analysisId: "a" }, "test-token"),
-      ENV,
-      d,
-    );
-    expect(response.status).toBe(503);
-    expect(vi.mocked(d.createClientFn)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(d.runJobFn)).not.toHaveBeenCalled();
-  });
-
-  it("returns 503 without claiming when finalization is missing", async () => {
-    const d = deps({ createProviderFn: readyProvider });
-    const response = await handleAnalyzeRequest(
-      post({ analysisId: "a" }, "test-token"),
-      ENV,
-      d,
-    );
-    expect(response.status).toBe(503);
-    expect(vi.mocked(d.createClientFn)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(d.runJobFn)).not.toHaveBeenCalled();
-  });
-
-  it("rejects a body without analysisId with 400 and zero claims", async () => {
-    const d = deps({
-      createProviderFn: readyProvider,
-      createFinalizationFn: readyFinalization,
-    });
-    const response = await handleAnalyzeRequest(
-      post({}, "test-token"),
-      ENV,
-      d,
-    );
-    expect(response.status).toBe(400);
-    expect(vi.mocked(d.runJobFn)).not.toHaveBeenCalled();
-  });
-
-  it("proceeds to the job on a valid request", async () => {
-    const d = deps({
-      createProviderFn: readyProvider,
-      createFinalizationFn: readyFinalization,
+      createProviderFn: provider,
+      createFinalizationFn: finalization,
+      createBatchPersistenceFn: persistence,
     });
     const response = await handleAnalyzeRequest(
       post({ analysisId: "analysis-1" }, "test-token"),
       ENV,
       d,
     );
-    expect(response.status).toBe(200);
-    expect(vi.mocked(d.runJobFn)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(d.runJobFn).mock.calls[0]?.[0]).toMatchObject({
-      analysisId: "analysis-1",
-    });
+    expect(response.status).toBe(503);
+    expect(d.createClientFn).toHaveBeenCalledTimes(1);
+    expect(d.runJobFn).not.toHaveBeenCalled();
   });
 
-  it("rejects non-POST methods", async () => {
-    const d = deps();
-    const response = await handleAnalyzeRequest(
-      new Request("http://localhost/functions/v1/analyze", {
-        method: "GET",
+  it("requires waitUntil registration before the job can claim", async () => {
+    const d = deps({
+      createProviderFn: ready,
+      createFinalizationFn: ready,
+      createBatchPersistenceFn: ready,
+      waitUntilFn: vi.fn(() => {
+        throw new Error("no background runtime");
       }),
+    });
+    const response = await handleAnalyzeRequest(
+      post({ analysisId: "analysis-1" }, "test-token"),
       ENV,
       d,
     );
-    expect(response.status).toBe(405);
-    expect(vi.mocked(d.runJobFn)).not.toHaveBeenCalled();
+    await Promise.resolve();
+    expect(response.status).toBe(503);
+    expect(d.runJobFn).not.toHaveBeenCalled();
   });
 
-  it("self-fetches fire-and-forget when more batches remain", async () => {
-    const SWEPT_ID = "c2222222-0000-4000-8000-000000000003";
-    let resolveFetch!: (value: Response) => void;
-    const pending = new Promise<Response>((resolve) => {
-      resolveFetch = resolve;
-    });
+  it("returns 400 for invalid JSON shape or continuation budget", async () => {
+    const d = deps({ createProviderFn: ready, createFinalizationFn: ready, createBatchPersistenceFn: ready });
+    const invalidShape = await handleAnalyzeRequest(post([], "test-token"), ENV, d);
+    const invalidBudget = await handleAnalyzeRequest(
+      post({ continuationBudget: 11 }, "test-token"),
+      ENV,
+      d,
+    );
+    expect(invalidShape.status).toBe(400);
+    expect(invalidBudget.status).toBe(400);
+    expect(d.runJobFn).not.toHaveBeenCalled();
+  });
+
+  it("accepts a directed run and acknowledges before background work completes", async () => {
+    let resolveJob!: (result: { kind: "completed"; claimedId: string }) => void;
+    let background: Promise<unknown> | undefined;
     const d = deps({
-      createProviderFn: readyProvider,
-      createFinalizationFn: readyFinalization,
-      runJobFn: vi.fn(async () => ({
-        kind: "has-more" as const,
-        claimedId: SWEPT_ID,
+      createProviderFn: ready,
+      createFinalizationFn: ready,
+      createBatchPersistenceFn: ready,
+      waitUntilFn: vi.fn((promise) => {
+        background = promise;
+      }),
+      runJobFn: vi.fn(() => new Promise<{ kind: "completed"; claimedId: string }>((resolve) => {
+        resolveJob = resolve;
       })),
-      fetchFn: vi.fn(() => pending),
     });
     const response = await handleAnalyzeRequest(
       post({ analysisId: "analysis-1" }, "test-token"),
@@ -186,282 +153,162 @@ describe("analyze handler readiness", () => {
       d,
     );
     expect(response.status).toBe(202);
-    expect(await response.json()).toEqual({
-      ok: true,
-      analysisId: "analysis-1",
-      claimedId: SWEPT_ID,
-      continued: true,
-    });
-    expect(vi.mocked(d.fetchFn)).toHaveBeenCalledTimes(1);
-    const [url, init] = vi.mocked(d.fetchFn).mock.calls[0] as [string, RequestInit];
-    expect(url).toContain("/functions/v1/analyze");
-    expect(init.method).toBe("POST");
-    expect(init.headers).toMatchObject({
-      authorization: "Bearer test-token",
-    });
-    expect(String(init.body)).toBe(JSON.stringify({ analysisId: SWEPT_ID }));
-    expect(init.signal).toBeInstanceOf(AbortSignal);
-    resolveFetch(new Response("ok"));
+    expect(await response.json()).toEqual({ ok: true, accepted: true });
+    expect(d.waitUntilFn).toHaveBeenCalledTimes(1);
+    expect(d.runJobFn).toHaveBeenCalledTimes(1);
+    resolveJob({ kind: "completed", claimedId: "analysis-1" });
+    await background;
   });
 
-  it("maps failed and aborted outcomes without leaking internals", async () => {
-    const failed = deps({
-      createProviderFn: readyProvider,
-      createFinalizationFn: readyFinalization,
+  it("accepts an empty sweep request and passes a null analysis id", async () => {
+    let background: Promise<unknown> | undefined;
+    const d = deps({
+      createProviderFn: ready,
+      createFinalizationFn: ready,
+      createBatchPersistenceFn: ready,
+      waitUntilFn: vi.fn((promise) => {
+        background = promise;
+      }),
+    });
+    const response = await handleAnalyzeRequest(post({}, "test-token"), ENV, d);
+    expect(response.status).toBe(202);
+    await background;
+    expect(d.runJobFn).toHaveBeenCalledWith(expect.objectContaining({ analysisId: null }));
+  });
+
+  it("self-fetches the claimed job with a decreasing bounded continuation budget", async () => {
+    let background: Promise<unknown> | undefined;
+    const d = deps({
+      createProviderFn: ready,
+      createFinalizationFn: ready,
+      createBatchPersistenceFn: ready,
+      waitUntilFn: vi.fn((promise) => {
+        background = promise;
+      }),
       runJobFn: vi.fn(async () => ({
-        kind: "failed" as const,
-        code: "PROVIDER_UNAVAILABLE" as const,
+        kind: "has-more" as const,
         claimedId: "claimed-job",
       })),
     });
-    const failedResponse = await handleAnalyzeRequest(
-      post({ analysisId: "a" }, "test-token"),
+    const response = await handleAnalyzeRequest(
+      post({ analysisId: "payload-job" }, "test-token"),
       ENV,
-      failed,
-    );
-    expect(failedResponse.status).toBe(200);
-    expect(await failedResponse.json()).toEqual({
-      ok: true,
-      analysisId: "a",
-      claimedId: "claimed-job",
-      final: false,
-      code: "PROVIDER_UNAVAILABLE",
-    });
-
-    const aborted = deps({
-      createProviderFn: readyProvider,
-      createFinalizationFn: readyFinalization,
-      runJobFn: vi.fn(async () => ({ kind: "aborted" as const, claimedId: "claimed-job" })),
-    });
-    const abortedResponse = await handleAnalyzeRequest(
-      post({ analysisId: "a" }, "test-token"),
-      ENV,
-      aborted,
-    );
-    expect(await abortedResponse.json()).toEqual({
-      ok: true,
-      analysisId: "a",
-      claimedId: "claimed-job",
-      final: false,
-      aborted: true,
-    });
-  });
-
-  it("echoes the claimed id on failed and aborted responses", async () => {
-    const SWEPT_ID = "c2222222-0000-4000-8000-000000000003";
-    const failedDeps = deps({
-      createProviderFn: readyProvider,
-      createFinalizationFn: readyFinalization,
-      runJobFn: vi.fn(async () => ({
-        kind: "failed" as const,
-        code: "TIMEOUT" as const,
-        claimedId: SWEPT_ID,
-      })),
-    });
-    const failedResponse = await handleAnalyzeRequest(
-      post({ analysisId: "payload-id" }, "test-token"),
-      ENV,
-      failedDeps,
-    );
-    expect(await failedResponse.json()).toEqual({
-      ok: true,
-      analysisId: "payload-id",
-      claimedId: SWEPT_ID,
-      final: false,
-      code: "TIMEOUT",
-    });
-
-    const abortedDeps = deps({
-      createProviderFn: readyProvider,
-      createFinalizationFn: readyFinalization,
-      runJobFn: vi.fn(async () => ({
-        kind: "aborted" as const,
-        claimedId: SWEPT_ID,
-      })),
-    });
-    const abortedResponse = await handleAnalyzeRequest(
-      post({ analysisId: "payload-id" }, "test-token"),
-      ENV,
-      abortedDeps,
-    );
-    expect(await abortedResponse.json()).toEqual({
-      ok: true,
-      analysisId: "payload-id",
-      claimedId: SWEPT_ID,
-      final: false,
-      aborted: true,
-    });
-  });
-
-  it("ignores body _fake overrides when the gate is closed", async () => {
-    const env: AnalyzeEnv = {
-      analysisInternalToken: "test-token",
-      supabaseUrl: "http://127.0.0.1:54321",
-      supabaseServiceRoleKey: "service-key",
-      analysisSupabaseUrl: "http://127.0.0.1:54321",
-      analysisFakeProvider: undefined,
-      analysisFakeLatencyMs: undefined,
-      analysisFakeFailAtCallIndex: undefined,
-      analysisFakeFailCode: undefined,
-      analysisFakeThrowCode: undefined,
-    };
-    const d = deps();
-    const res = await handleAnalyzeRequest(
-      new Request("http://x/", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: "Bearer test-token",
-        },
-        body: JSON.stringify({
-          analysisId: "00000000-0000-4000-8000-000000000000",
-          _fake: { latencyMs: 999999, failCode: "INTERNAL_ERROR" },
-        }),
-      }),
-      env,
       d,
     );
-    expect(res.status).toBe(503);
-    expect(vi.mocked(d.runJobFn)).not.toHaveBeenCalled();
+    expect(response.status).toBe(202);
+    await background;
+    expect(d.fetchFn).toHaveBeenCalledTimes(1);
+    const [url, init] = vi.mocked(d.fetchFn).mock.calls[0] as [string, RequestInit];
+    expect(url).toContain("/functions/v1/analyze");
+    expect(init.method).toBe("POST");
+    expect(init.headers).toMatchObject({ authorization: "Bearer test-token" });
+    expect(JSON.parse(String(init.body))).toEqual({
+      analysisId: "claimed-job",
+      continuationBudget: 9,
+    });
+    expect(init.signal).toBeInstanceOf(AbortSignal);
   });
 
-  it("sanitizes unexpected failures to a 500 without internals", async () => {
+  it("leaves a yielded continuation queued when its budget is exhausted", async () => {
+    let background: Promise<unknown> | undefined;
     const d = deps({
-      createProviderFn: readyProvider,
-      createFinalizationFn: readyFinalization,
+      createProviderFn: ready,
+      createFinalizationFn: ready,
+      createBatchPersistenceFn: ready,
+      waitUntilFn: vi.fn((promise) => {
+        background = promise;
+      }),
+      runJobFn: vi.fn(async () => ({
+        kind: "has-more" as const,
+        claimedId: "claimed-job",
+      })),
+    });
+    const response = await handleAnalyzeRequest(
+      post({ analysisId: "analysis-1", continuationBudget: 0 }, "test-token"),
+      ENV,
+      d,
+    );
+    expect(response.status).toBe(202);
+    await background;
+    expect(d.fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("stays fail-closed for the test fake gate in hosted runtimes", () => {
+    const local = (flag: string | undefined, analysisUrl: string | undefined, runtimeUrl?: string) => ({
+      ...ENV,
+      supabaseUrl: runtimeUrl ?? analysisUrl,
+      analysisSupabaseUrl: analysisUrl,
+      analysisFakeProvider: flag,
+    });
+    expect(isLocalTestEnv(local("1", "http://127.0.0.1:54321"))).toBe(true);
+    expect(isLocalTestEnv(local("1", "https://abc.supabase.co"))).toBe(false);
+    expect(isLocalTestEnv(local("1", "http://127.0.0.1:54321", "https://abc.supabase.co"))).toBe(false);
+    expect(isLocalTestEnv(local(undefined, "http://127.0.0.1:54321"))).toBe(false);
+  });
+
+  it("does not put an internal failure into the acknowledgement response", async () => {
+    let background: Promise<unknown> | undefined;
+    const d = deps({
+      createProviderFn: ready,
+      createFinalizationFn: ready,
+      createBatchPersistenceFn: ready,
+      waitUntilFn: vi.fn((promise) => {
+        background = promise;
+      }),
       runJobFn: vi.fn(async () => {
         throw new Error("connection string postgres://secret");
       }),
     });
     const response = await handleAnalyzeRequest(
-      post({ analysisId: "a" }, "test-token"),
+      post({ analysisId: "analysis-1" }, "test-token"),
       ENV,
       d,
     );
-    expect(response.status).toBe(500);
+    expect(response.status).toBe(202);
     const body = JSON.stringify(await response.json());
     expect(body).not.toContain("postgres://secret");
     expect(body).not.toContain("test-token");
+    await background;
   });
 
-  it("enables the test hook only with flag plus local URL", () => {
-    const local = (flag: string | undefined, url: string | undefined) => ({
-      analysisInternalToken: "test-token",
-      supabaseUrl: url,
-      supabaseServiceRoleKey: "service-key",
-      analysisSupabaseUrl: url,
-      analysisFakeProvider: flag,
-      analysisFakeLatencyMs: undefined,
-      analysisFakeFailAtCallIndex: undefined,
-      analysisFakeFailCode: undefined,
-      analysisFakeThrowCode: undefined,
-    });
-    expect(
-      isLocalTestEnv(local("1", "http://127.0.0.1:54321")),
-    ).toBe(true);
-    expect(isLocalTestEnv(local("1", "http://localhost:54321"))).toBe(true);
-    expect(isLocalTestEnv(local("1", "http://[::1]:54321"))).toBe(true);
-    expect(isLocalTestEnv(local("1", "http://127.0.0.1:9999"))).toBe(true);
-    expect(
-      isLocalTestEnv(local("1", "https://abc.supabase.co")),
-    ).toBe(false);
-    expect(isLocalTestEnv(local(undefined, "http://127.0.0.1:54321"))).toBe(
-      false,
-    );
-    expect(isLocalTestEnv(local("0", "http://127.0.0.1:54321"))).toBe(false);
-    expect(isLocalTestEnv(local("1", "not-a-url"))).toBe(false);
-    expect(isLocalTestEnv(local("1", undefined))).toBe(false);
-  });
-
-  it("keeps failing loud when the test gate is closed", () => {
-    const closed = {
-      analysisInternalToken: "test-token",
-      supabaseUrl: "http://127.0.0.1:54321",
-      supabaseServiceRoleKey: "service-key",
-      analysisSupabaseUrl: "http://127.0.0.1:54321",
-      analysisFakeProvider: undefined,
-      analysisFakeLatencyMs: undefined,
-      analysisFakeFailAtCallIndex: undefined,
-      analysisFakeFailCode: undefined,
-      analysisFakeThrowCode: undefined,
-    };
-    expect(isLocalTestEnv(closed)).toBe(false);
-    expect(
-      isLocalTestEnv({ ...closed, supabaseUrl: "https://remote.example.com" }),
-    ).toBe(false);
-    expect(() => createProvider()).toThrow(
-      "S2-07 not merged: AIProvider unavailable.",
-    );
-    expect(() => createFinalization()).toThrow(
-      "S2-08 not merged: AnalysisFinalization unavailable.",
-    );
-  });
-
-  it("stays closed in hosted deployments even with spoofed analysis URL", () => {
-    // Reinforced gate: a hosted runtime URL blocks the gate even when
-    // the flag is set and the harness URL is loopback. Setting env vars
-    // requires project-owner privilege; this closes the remaining hole
-    // where the platform-injected URL is ignored.
-    const spoofed: AnalyzeEnv = {
-      analysisInternalToken: "test-token",
-      supabaseUrl: "https://xyz.supabase.co",
-      supabaseServiceRoleKey: "service-key",
-      analysisSupabaseUrl: "http://127.0.0.1:54321",
+  it("runs fake work only when the test gate is open", async () => {
+    let background: Promise<unknown> | undefined;
+    const env: AnalyzeEnv = {
+      ...ENV,
       analysisFakeProvider: "1",
-      analysisFakeLatencyMs: undefined,
-      analysisFakeFailAtCallIndex: undefined,
-      analysisFakeFailCode: undefined,
-      analysisFakeThrowCode: undefined,
     };
-    expect(isLocalTestEnv(spoofed)).toBe(false);
-  });
-
-  it("runs the fake branch end to end when the gate is open", async () => {
-    const openEnv: AnalyzeEnv = {
-      analysisInternalToken: "test-token",
-      supabaseUrl: "http://127.0.0.1:54321",
-      supabaseServiceRoleKey: "service-key",
-      analysisSupabaseUrl: "http://127.0.0.1:54321",
-      analysisFakeProvider: "1",
-      analysisFakeLatencyMs: undefined,
-      analysisFakeFailAtCallIndex: undefined,
-      analysisFakeFailCode: undefined,
-      analysisFakeThrowCode: undefined,
-    };
-    expect(isLocalTestEnv(openEnv)).toBe(true);
     const d = deps({
-      runJobFn: vi.fn(async () => ({
-        kind: "completed" as const,
-        claimedId: "claimed-job",
-      })),
+      waitUntilFn: vi.fn((promise) => {
+        background = promise;
+      }),
     });
     const response = await handleAnalyzeRequest(
       post({ analysisId: "analysis-1" }, "test-token"),
-      openEnv,
+      env,
       d,
     );
-    expect(response.status).toBe(200);
-    expect(vi.mocked(d.createClientFn)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(d.runJobFn)).toHaveBeenCalledTimes(1);
+    expect(response.status).toBe(202);
+    await background;
+    expect(d.createClientFn).toHaveBeenCalledTimes(1);
+    expect(d.runJobFn).toHaveBeenCalledTimes(1);
+    expect(d.runJobFn).toHaveBeenCalledWith(expect.objectContaining({ persistence: expect.anything() }));
   });
 
-  it("parses per-request fake behavior without throwing", async () => {
+  it("keeps failing factories explicit", () => {
+    expect(() => createProvider()).toThrow("S2-07 not merged: AIProvider unavailable.");
+    expect(() => createFinalization()).toThrow("S2-08 not merged: AnalysisFinalization unavailable.");
+    expect(() => throwingPersistence()).toThrow(
+      "S2-08 not merged: analysis batch staging unavailable.",
+    );
+  });
+
+  it("parses fake behavior without allowing unsupported values", async () => {
     const { parseFakeBehaviorSafe } = await import(
-      "../../supabase/functions/analyze/_test_doubles/analysis-provider.fake.ts"
+      "../../supabase/functions/analyze/_test_doubles/analysis-provider.fake"
     );
     expect(parseFakeBehaviorSafe(undefined)).toEqual({});
-    expect(parseFakeBehaviorSafe(null)).toEqual({});
-    expect(
-      parseFakeBehaviorSafe({
-        latencyMs: 400,
-        failAtCallIndex: 0,
-        failCode: "PROVIDER_UNAVAILABLE",
-        throwCode: "bogus",
-        injected: "dropped",
-      }),
-    ).toEqual({
+    expect(parseFakeBehaviorSafe({ latencyMs: 400, failCode: "PROVIDER_UNAVAILABLE", injected: true })).toEqual({
       latencyMs: 400,
-      failAtCallIndex: 0,
       failCode: "PROVIDER_UNAVAILABLE",
     });
     expect(parseFakeBehaviorSafe({ latencyMs: -1 })).toEqual({});
