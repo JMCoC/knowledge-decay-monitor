@@ -6,7 +6,7 @@
 
 **Depende de:** contratos S2-01, ledger S2-02 y estimación S2-04
 
-**Estado:** Run/Retry SQL implementados; Server Actions y disparo al worker quedan en la tarea siguiente.
+**Estado:** Run/Retry SQL, Server Actions y disparo post-commit implementados; la UI de S2-09 y la ejecución productiva siguen en sus tickets propietarios.
 
 ## 1. Límite de responsabilidad
 
@@ -16,9 +16,9 @@ documentos ni llama proveedores.
 
 El procesamiento continúa a cargo del worker en el repositorio separado
 `KDM/kdm-demo-worker`. Esta entrega no copia su código, cambia su configuración
-ni añade una cola o un endpoint de proveedor alternativo. La llamada al worker
-después del commit se implementa en la tarea S2-05 siguiente; la durabilidad se
-mantiene en el job almacenado en PostgreSQL.
+ni añade una cola o un endpoint de proveedor alternativo. La app dispara la
+Edge Function de análisis después del commit; la durabilidad se mantiene en el
+job almacenado en PostgreSQL.
 
 Las RPC de este contrato son privadas para el servidor de la aplicación. No
 constituyen endpoints para el navegador ni un API REST nuevo.
@@ -112,12 +112,45 @@ antes de volver a validar el estado del padre.
 | `P2102` | Estimación o snapshot stale |
 | `55P03`, `57014` | Lock/statement timeout; se trata como fallo interno recuperable por la aplicación |
 
-La Server Action asignará estos códigos a `ActionResult<T>` y mensajes de
-producto controlados. Nunca debe exponer errores SQL crudos, manifiestos,
-versiones privadas o datos de retrieval. Una violación de unicidad `23505` no
-equivale por sí sola a replay exitoso.
+Las Server Actions asignan estos códigos a `ActionResult<T>` y mensajes de
+producto controlados. Nunca exponen errores SQL crudos, manifiestos, versiones
+privadas o datos de retrieval. Una violación de unicidad `23505` no equivale
+por sí sola a replay exitoso.
 
-## 6. Verificación local
+## 6. Server Actions y consumo desde S2-09
+
+La frontera pública del módulo conserva los DTO compartidos:
+
+```ts
+runAnalysis(input: RunAnalysisInput): Promise<ActionResult<RunAnalysisResult>>
+retryAnalysis(input: RetryAnalysisInput): Promise<ActionResult<RetryAnalysisResult>>
+```
+
+`RunAnalysisInput` contiene solo `estimateRef` e `idempotencyKey`; Retry agrega
+`failedAnalysisId`. La Action revalida sesión/Profile y rol Admin/QA, valida
+UUIDs, una key opaca de 1–128 caracteres sin espacios extremos y rechaza campos
+adicionales. El actor y el manifiesto provienen del servidor; la UI no puede
+enviar workspace, rol, coste o configuración.
+
+El cliente interpreta `ActionResult` y los códigos controlados:
+`UNAUTHENTICATED`, `FORBIDDEN`, `INVALID_INPUT`, `NOT_FOUND`, `CONFLICT`,
+`INSUFFICIENT_CREDITS`, `ESTIMATE_EXPIRED`, `ESTIMATE_STALE` e
+`INTERNAL_ERROR`. Si pierde la respuesta de un Run/Retry, reenvía exactamente
+la misma key y payload para recuperar el mismo `analysisId`; no crea otra key
+por timeout de red. Un Retry manual nuevo sí requiere una nueva estimación y
+una key distinta.
+
+Solo después de que el RPC confirme su commit, la Action registra `after()`
+para hacer POST a la URL configurada de Supabase en `/functions/v1/analyze`,
+con el cuerpo exacto `{ "analysisId": "<uuid>" }`, Bearer
+`ANALYSIS_INTERNAL_TOKEN` y timeout de 2 segundos. El token es server-only e
+independiente de `INGESTION_INTERNAL_TOKEN`. El dispatch es best-effort: timeout,
+401, 503, fallo de red o error de registro no cambian el resultado confirmado.
+La cola SQL conserva el trabajo durable y las fallas de dispatch solo admiten
+telemetría segura, sin token, cuerpo, URL ni respuesta cruda. Un replay puede
+repetir el disparo sin crear otro job ni reserva.
+
+## 7. Verificación local
 
 `supabase/tests/database/023_s2_05_run_commands.test.sql` cubre permisos,
 reserva única, replay, expiración, scope, Retry y rollback. Las pruebas de

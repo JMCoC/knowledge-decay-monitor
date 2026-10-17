@@ -460,7 +460,7 @@ Los tickets se pueden iniciar con contratos/fixtures desde el primer día. S2-01
 
 * Integrar el selector S2-03 con la estimación S2-04 y mostrar solo Estimated cost: X credits antes de confirmar; selección nueva invalida la confirmación anterior.
 * Mostrar saldo available/reserved y ledger en Billing / Credits para Admin/QA; Member accede solo al saldo autorizado de su workspace. No mostrar checkout ni paquetes S4.
-* Confirmar Run llama S2-05 con idempotency key estable durante un mismo intento; doble clic, respuesta perdida y reload recuperan el mismo análisis.
+* Confirmar Run llama S2-05 con idempotency key estable durante un mismo intento; doble clic, respuesta perdida y reload recuperan el mismo análisis. Si se reenvía una petición cuya respuesta se perdió, se conserva el mismo payload y key hasta recuperar su `analysisId`; un Retry manual sí usa una estimación nueva y una key distinta.
 * Mostrar Queued, Processing, Completed y Failed desde estado persistido. Evitar que error HTTP equivalga a éxito o que una respuesta perdida genere otro cargo.
 * Seguir análisis por ID con control de sesión/RLS y refresco acotado; salir de la página o cerrar sesión no detiene el job. Al volver, recuperar el análisis activo o su estado terminal.
 * Después de completed, abrir findings del analysisId correcto; cero hallazgos muestra estado válido sin resultados.
@@ -490,6 +490,7 @@ Los tickets se pueden iniciar con contratos/fixtures desde el primer día. S2-01
 
 * **Responsable:** Juan Pablo Castaño Arango.
 * Continuidad: SAA-9/SAA-11; Juan Pablo conserva presentación y recuperación.
+* Contrato Server Action consumido por esta UI: `runAnalysis(RunAnalysisInput): Promise<ActionResult<RunAnalysisResult>>` y `retryAnalysis(RetryAnalysisInput): Promise<ActionResult<RetryAnalysisResult>>`. El cliente presenta los errores controlados `UNAUTHENTICATED`, `FORBIDDEN`, `INVALID_INPUT`, `NOT_FOUND`, `CONFLICT`, `INSUFFICIENT_CREDITS`, `ESTIMATE_EXPIRED`, `ESTIMATE_STALE` e `INTERNAL_ERROR`; una respuesta perdida no justifica generar otra key.
 * Inicio independiente: fixtures de estado/acciones del contrato S2-01. Integración real con S2-02–S2-05/S2-06/S2-08.
 * Referencias: PRD §§24, 27–32, 34, 42, 56 y 66. Coordinar rutas/shell compartido con Dev 1.
 * Sin reanálisis automático por upload/aprobación ni controles humanos de S3.

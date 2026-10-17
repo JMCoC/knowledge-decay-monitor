@@ -158,6 +158,17 @@ describe("safe Sentry events", () => {
     expect(receipt).toEqual({ correlationId, eventId: "0123456789abcdef0123456789abcdef" });
   });
 
+  it.each(["run", "retry", "trigger"] as const)("accepts the closed analysis/%s operation", (operation) => {
+    const receipt = captureSafeFailure({
+      module: "analysis",
+      operation,
+      code: "INTERNAL_ERROR",
+      correlationId,
+    });
+
+    expect(receipt).toEqual({ correlationId, eventId: "0123456789abcdef0123456789abcdef" });
+  });
+
   it("rejects credit operations outside the closed catalog", () => {
     expect(filterSafeEvent(safeCandidate({
       tags: {

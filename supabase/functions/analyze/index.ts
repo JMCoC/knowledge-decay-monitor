@@ -247,8 +247,7 @@ export async function handleAnalyzeRequest(
   });
 }
 
-// TODO(S2-05): Dev 1 confirma si compartimos con INGESTION_INTERNAL_TOKEN
-// o mantenemos ANALYSIS_INTERNAL_TOKEN separado (spec §4.1).
+// S2-05 uses a dedicated analysis token, separate from INGESTION_INTERNAL_TOKEN.
 if (typeof Deno !== "undefined" && typeof Deno.serve === "function") {
   Deno.serve(async (req: Request): Promise<Response> => {
     // @ts-expect-error TS2307 — Deno npm: specifier; tsc cannot resolve it. Executes only in Edge.

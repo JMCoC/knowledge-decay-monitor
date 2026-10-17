@@ -96,7 +96,7 @@ claim (terminal marking, no credits move in v1 — TODO S2-08).
 
 | Variable | Source | Purpose |
 |---|---|---|
-| `ANALYSIS_INTERNAL_TOKEN` | harness/tests, secret | Bearer token for invoke + self-fetch |
+| `ANALYSIS_INTERNAL_TOKEN` | Next.js app + Edge, secret | Dedicated Bearer token for Run/Retry dispatch and Edge self-fetch; separate from ingestion |
 | `ANALYSIS_SUPABASE_URL` | harness (`http://127.0.0.1:54321`) | Gate URL (loopback proof) + DB fallback |
 | `ANALYSIS_SUPABASE_SERVICE_ROLE_KEY` | local stack | DB fallback key |
 | `SUPABASE_URL` | **runtime-injected** (`http://kong:8000`) | Real DB connectivity inside workers |
@@ -107,6 +107,10 @@ claim (terminal marking, no credits move in v1 — TODO S2-08).
 
 `SUPABASE_*` values in `--env-file` are silently skipped (reserved
 prefix); never rely on setting them from files.
+
+Configure the same `ANALYSIS_INTERNAL_TOKEN` secret in the Next.js server
+environment and the Edge Function. Never expose it as a `NEXT_PUBLIC_*`
+variable or reuse `INGESTION_INTERNAL_TOKEN`.
 
 ## 6. Gate isLocalTestEnv: modelo de amenaza
 
