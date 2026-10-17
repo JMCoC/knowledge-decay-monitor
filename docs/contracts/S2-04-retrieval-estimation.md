@@ -103,9 +103,11 @@ Firma TypeScript:
 
 - enable row level security en analysis_estimates.
 - Policy select: Admin/QA del mismo workspace.
-- Policy insert: initiator_id = auth.uid() + rol Admin/QA.
-- Sin update, sin delete para authenticated.
-- grant select, insert on analysis_estimates to authenticated.
+- La política INSERT y el grant directo de S2-04 quedaron retirados por el
+  handoff S2-05 §5.4; las estimaciones actuales solo nacen en la RPC confiable.
+- Sin insert, update ni delete para authenticated.
+- `authenticated` conserva SELECT únicamente de las columnas de proyección
+  requeridas por el producto; huella, conteos internos y manifiesto son privados.
 
 ---
 
@@ -163,6 +165,28 @@ se valida contra el resumen completo antes de procesar. Un trigger bloquea
 las filas de versión al insertar, actualizar o borrar chunks; el resumen
 toma esos mismos bloqueos en orden UUID y vuelve a comprobar estado y puntero
 activo después de esperarlos. Así una mutación no puede cruzar el snapshot.
+
+### 5.4 Creación confiable de estimaciones
+
+`public.create_analysis_estimate(actor_id, source_ids, comparison_ids,
+manifest)` es una RPC `SECURITY DEFINER` ejecutable solo por `service_role`.
+El servidor obtiene el actor de la sesión verificada; PostgreSQL vuelve a
+resolver su workspace y rol desde `public.profiles`, rechaza Member y verifica
+scope, versiones `ready + active`, punteros y el manifiesto antes de guardar.
+
+El manifiesto privado se lee de `ANALYSIS_EXECUTION_MANIFEST`. Solo contiene
+las revisiones `fingerprintVersion`, `pricingVersion`, `promptVersion` y
+`outputSchemaVersion`, además de referencias `provider/model` para primary y
+fallback. No contiene prompts ni credenciales. Si falta o no coincide con el
+contrato conocido, se devuelve `INTERNAL_ERROR` y no se crea estimación.
+
+La RPC calcula precio, conteos, huella y revisión en PostgreSQL y fija
+`created_at`/`expires_at` con el reloj SQL, exactamente a 30 minutos. Las
+filas S2-04 históricas permanecen con snapshot nulo; una estimación nueva
+guarda `execution_manifest` y `fingerprint_version = s2-05-v2`. El snapshot
+es inmutable, y una fila ya referenciada por un análisis no se puede borrar.
+La Server Action devuelve únicamente `estimateRef`, costo, alcance y
+expiración, sin conteos, textos, huellas ni referencias de proveedores.
 
 ---
 

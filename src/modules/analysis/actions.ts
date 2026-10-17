@@ -9,19 +9,9 @@ import type {
   AnalysisEstimate,
   AnalysisSelectionInput,
 } from "@/types/contracts";
-import {
-  buildChunksRevision,
-  computeRequestFingerprint,
-} from "./retrieval";
-import { ANALYSIS_PRICING, computeFixedCost } from "./pricing";
+import { readAnalysisExecutionManifest } from "./execution-config";
+import { AnalysisQueryError, createAnalysisEstimate } from "./queries";
 import { selectionSchema } from "./schemas";
-import {
-  callRetrieveCandidatePairs,
-  getEligibleVersions,
-  insertEstimate,
-} from "./queries";
-
-const ESTIMATE_TTL_MS = 30 * 60 * 1000;
 
 type FailedResult = { ok: false; error: ActionError };
 
@@ -68,11 +58,33 @@ function identityFailure(error: unknown): FailedResult {
   );
 }
 
+function mapEstimateQueryFailure(error: unknown): FailedResult {
+  if (error instanceof AnalysisQueryError) {
+    if (error.code === "42501") {
+      return failure(
+        "FORBIDDEN",
+        "Only Admins and QA Leads can request an analysis estimate.",
+      );
+    }
+    if (error.code === "22023" || error.code === "P0002") {
+      return failure(
+        "NOT_FOUND",
+        "The selected documents are no longer available.",
+      );
+    }
+  }
+  const { correlationId } = reportEstimateFailure();
+  return failure(
+    "INTERNAL_ERROR",
+    "We could not estimate this analysis. Try again.",
+    correlationId,
+  );
+}
+
 /**
- * Bounded retrieval estimate (contract §§1-2, 8-9). Session-scoped end to
- * end: no service_role, no credit reservation, no LLM. Retrieved pairs are
- * counted, hashed into the fingerprint, and discarded; the estimate row is
- * the only effect.
+ * Estimate with server-held configuration and an authoritative SQL snapshot.
+ * The public DTO remains limited to the selected scope, price, reference, and
+ * expiry; retrieval text, counts, and provider references stay server-side.
  */
 export async function estimateAnalysis(
   input: AnalysisSelectionInput,
@@ -105,99 +117,29 @@ export async function estimateAnalysis(
     );
   }
 
-  let eligible: Set<string>;
-  try {
-    eligible = await getEligibleVersions([...sources, ...comparisons]);
-  } catch {
+  const manifest = readAnalysisExecutionManifest(
+    process.env.ANALYSIS_EXECUTION_MANIFEST,
+  );
+  if (!manifest) {
     const { correlationId } = reportEstimateFailure();
     return failure(
       "INTERNAL_ERROR",
-      "We could not load the selected documents. Try again.",
-      correlationId,
-    );
-  }
-  if (eligible.size !== new Set([...sources, ...comparisons]).size) {
-    return failure(
-      "NOT_FOUND",
-      "The selected documents are no longer available.",
-    );
-  }
-
-  let pairs;
-  try {
-    pairs = await callRetrieveCandidatePairs(actor.workspaceId, sources, comparisons);
-  } catch {
-    const { correlationId } = reportEstimateFailure();
-    return failure(
-      "INTERNAL_ERROR",
-      "We could not estimate this analysis. Try again.",
+      "Analysis estimation is temporarily unavailable.",
       correlationId,
     );
   }
 
-  const uniqueChunkIds = new Set<string>();
-  for (const pair of pairs) {
-    uniqueChunkIds.add(pair.source_chunk_id);
-    uniqueChunkIds.add(pair.comparison_chunk_id);
-  }
-  const chunkIds = [...uniqueChunkIds].sort();
-  const chunkCount = uniqueChunkIds.size;
-  const candidatePairCount = pairs.length;
-  const fixedCost = computeFixedCost(chunkCount, candidatePairCount);
-  const pairInputs = pairs.map((pair) => ({
-    sourceChunkId: pair.source_chunk_id,
-    comparisonChunkId: pair.comparison_chunk_id,
-  }));
-  const chunksRevision = buildChunksRevision(chunkIds);
-  const fingerprint = computeRequestFingerprint({
-    chunkCount,
-    candidatePairCount,
-    sortedSourceVersionIds: sources,
-    sortedComparisonVersionIds: comparisons,
-    pairs: pairInputs,
-    chunkIds,
-  });
-  const retrievalConfig = {
-    topK: 5,
-    similarityThreshold: 0.75,
-    chunksRevision,
-    embeddingRevision: "gte-small-384-v1",
-    fingerprint,
-  };
-  const expiresAt = new Date(Date.now() + ESTIMATE_TTL_MS).toISOString();
-
-  let estimateId: string;
   try {
-    ({ id: estimateId } = await insertEstimate({
-      workspaceId: actor.workspaceId,
-      initiatorId: actor.userId,
-      sourceVersionIds: sources,
-      comparisonVersionIds: comparisons,
-      requestFingerprint: fingerprint,
-      retrievalConfig,
-      chunkCount,
-      candidatePairCount,
-      fixedCost,
-      pricingVersion: ANALYSIS_PRICING.version,
-      expiresAt,
-    }));
-  } catch {
-    const { correlationId } = reportEstimateFailure();
-    return failure(
-      "INTERNAL_ERROR",
-      "We could not save this estimate. Try again.",
-      correlationId,
+    const estimate = await createAnalysisEstimate(
+      actor.userId,
+      {
+        sourceVersionIds: sources,
+        comparisonVersionIds: comparisons,
+      },
+      manifest,
     );
+    return { ok: true, data: estimate };
+  } catch (error) {
+    return mapEstimateQueryFailure(error);
   }
-
-  return {
-    ok: true,
-    data: {
-      sourceVersionIds: sources,
-      comparisonVersionIds: comparisons,
-      estimateRef: estimateId,
-      fixedCost,
-      expiresAt,
-    },
-  };
 }

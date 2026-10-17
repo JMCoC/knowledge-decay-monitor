@@ -18,7 +18,7 @@ select ok((select indexdef ilike '%ef_construction%64%'
     and indexname = 'document_chunks_embedding_hnsw'),
   'HNSW index carries the contract build parameters');
 
--- 2. analysis_estimates columns verbatim contract §4.1 (13 columns).
+-- 2. analysis_estimates base columns plus the nullable S2-05 snapshot fields.
 select is((select count(*)
   from information_schema.columns
   where table_schema = 'public' and table_name = 'analysis_estimates'
@@ -26,8 +26,9 @@ select is((select count(*)
       'source_version_ids','comparison_version_ids',
       'request_fingerprint','retrieval_config',
       'chunk_count','candidate_pair_count','fixed_cost',
-      'pricing_version','expires_at','created_at')),
-  13::bigint, 'analysis_estimates exposes the 13 contract columns');
+      'pricing_version','expires_at','created_at',
+      'execution_manifest','fingerprint_version')),
+  15::bigint, 'analysis_estimates exposes the S2-04 columns and S2-05 snapshot');
 
 -- 3. RPC signature verbatim contract §5.1.
 select has_function('public', 'retrieve_candidate_pairs',
@@ -406,7 +407,7 @@ select set_config('request.jwt.claims',
   '{"sub":"10000000-0000-4000-8000-000000000001","role":"authenticated"}', true);
 select is((select count(*) from public.analysis_estimates), 1::bigint,
   'Admin A reads the Workspace A estimate');
-select lives_ok($$insert into public.analysis_estimates
+select throws_ok($$insert into public.analysis_estimates
   (workspace_id,initiator_id,source_version_ids,comparison_version_ids,
    request_fingerprint,retrieval_config,chunk_count,candidate_pair_count,
    fixed_cost,pricing_version,expires_at) values
@@ -415,7 +416,7 @@ select lives_ok($$insert into public.analysis_estimates
    array['30000000-0000-4000-8000-0000000000d2']::uuid[],
    repeat('e', 64),'{}',2,6,
    3,'s2-04-v1',now() + interval '30 minutes')$$,
-  'Admin A inserts under the insert policy');
+  '42501', null, 'Admin A cannot insert an estimate outside the trusted RPC');
 select set_config('request.jwt.claims',
   '{"sub":"10000000-0000-4000-8000-000000000003","role":"authenticated"}', true);
 select is((select count(*) from public.analysis_estimates), 0::bigint,

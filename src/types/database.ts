@@ -183,7 +183,9 @@ export type Database = {
           chunk_count: number
           comparison_version_ids: string[]
           created_at: string
+          execution_manifest: Json | null
           expires_at: string
+          fingerprint_version: string | null
           fixed_cost: number
           id: string
           initiator_id: string
@@ -198,7 +200,9 @@ export type Database = {
           chunk_count: number
           comparison_version_ids: string[]
           created_at?: string
+          execution_manifest?: Json | null
           expires_at: string
+          fingerprint_version?: string | null
           fixed_cost: number
           id?: string
           initiator_id: string
@@ -213,7 +217,9 @@ export type Database = {
           chunk_count?: number
           comparison_version_ids?: string[]
           created_at?: string
+          execution_manifest?: Json | null
           expires_at?: string
+          fingerprint_version?: string | null
           fixed_cost?: number
           id?: string
           initiator_id?: string
@@ -1162,6 +1168,21 @@ export type Database = {
       complete_analysis: {
         Args: { p_analysis_id: string; p_operation_id: string }
         Returns: undefined
+      }
+      create_analysis_estimate: {
+        Args: {
+          p_actor_id: string
+          p_comparison_version_ids: string[]
+          p_manifest: Json
+          p_source_version_ids: string[]
+        }
+        Returns: {
+          comparison_version_ids: string[]
+          estimate_ref: string
+          expires_at: string
+          fixed_cost: number
+          source_version_ids: string[]
+        }[]
       }
       enqueue_ingestion_job: {
         Args: {
