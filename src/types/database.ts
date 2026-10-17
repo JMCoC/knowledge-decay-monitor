@@ -13,10 +13,12 @@ export type Database = {
         Row: {
           attempt_count: number
           checkpoint: Json | null
+          command_fingerprint: string | null
           created_at: string
           error_code:
             | Database["public"]["Enums"]["analysis_failure_code"]
             | null
+          estimate_id: string | null
           finished_at: string | null
           fixed_cost: number
           id: string
@@ -43,10 +45,12 @@ export type Database = {
         Insert: {
           attempt_count?: number
           checkpoint?: Json | null
+          command_fingerprint?: string | null
           created_at?: string
           error_code?:
             | Database["public"]["Enums"]["analysis_failure_code"]
             | null
+          estimate_id?: string | null
           finished_at?: string | null
           fixed_cost: number
           id?: string
@@ -73,10 +77,12 @@ export type Database = {
         Update: {
           attempt_count?: number
           checkpoint?: Json | null
+          command_fingerprint?: string | null
           created_at?: string
           error_code?:
             | Database["public"]["Enums"]["analysis_failure_code"]
             | null
+          estimate_id?: string | null
           finished_at?: string | null
           fixed_cost?: number
           id?: string
@@ -101,6 +107,13 @@ export type Database = {
           workspace_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "analyses_estimate_owner_fkey"
+            columns: ["estimate_id", "workspace_id", "initiator_id"]
+            isOneToOne: false
+            referencedRelation: "analysis_estimates"
+            referencedColumns: ["id", "workspace_id", "initiator_id"]
+          },
           {
             foreignKeyName: "analyses_initiator_id_workspace_id_fkey"
             columns: ["initiator_id", "workspace_id"]
@@ -1365,6 +1378,32 @@ export type Database = {
           source_document_id: string
           source_text: string
           source_version_id: string
+        }[]
+      }
+      retry_analysis: {
+        Args: {
+          p_actor_id: string
+          p_current_manifest: Json
+          p_estimate_ref: string
+          p_failed_analysis_id: string
+          p_idempotency_key: string
+        }
+        Returns: {
+          analysis_id: string
+          retry_of_analysis_id: string
+          status: Database["public"]["Enums"]["analysis_job_status"]
+        }[]
+      }
+      run_analysis: {
+        Args: {
+          p_actor_id: string
+          p_current_manifest: Json
+          p_estimate_ref: string
+          p_idempotency_key: string
+        }
+        Returns: {
+          analysis_id: string
+          status: Database["public"]["Enums"]["analysis_job_status"]
         }[]
       }
     }
