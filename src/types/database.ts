@@ -1194,6 +1194,10 @@ export type Database = {
         Args: { p_analysis_id: string; p_operation_id: string }
         Returns: undefined
       }
+      configure_analysis_recovery: {
+        Args: { p_enabled: boolean }
+        Returns: undefined
+      }
       create_analysis_estimate: {
         Args: {
           p_actor_id: string

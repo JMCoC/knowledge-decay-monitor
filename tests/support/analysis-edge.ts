@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -190,17 +191,32 @@ export async function startAnalysisEdge(
       );
     }
     try {
-      // A GET/405 may be answered by the gateway while the Edge runtime is
-      // still restarting. Exercise the function route itself without auth;
-      // 401 proves the handler is ready and cannot claim a job.
+      // Fake-worker readiness uses a valid token plus a deliberately invalid
+      // UUID. The handler acknowledges it, while PostgREST rejects claim before
+      // the SQL sweep fallback can select a fixture job. For a production-seam
+      // worker, a valid random UUID reaches factories that return 503 before
+      // any claim; both probes distinguish Edge from a gateway auth response.
+      const productionSeamProbe = opts.fakeProvider === undefined;
       const response = await fetch(baseUrl, {
         method: "POST",
-        headers: { "content-type": "application/json" },
-        body: "{}",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${opts.token}`,
+        },
+        body: JSON.stringify(
+          productionSeamProbe
+            ? { analysisId: randomUUID() }
+            : { analysisId: "invalid-local-readiness-id" },
+        ),
         signal: AbortSignal.timeout(1_000),
       });
-      if (response.status === 401) {
-        await response.arrayBuffer().catch(() => undefined);
+      const responseBody = await response.text().catch(() => "");
+      const isHandlerAccepted =
+        response.status === 202 && responseBody === '{"ok":true,"accepted":true}';
+      if (
+        (productionSeamProbe && response.status === 503) ||
+        (!productionSeamProbe && isHandlerAccepted)
+      ) {
         return { baseUrl, token: opts.token, stop, diagnostics };
       }
     } catch {
@@ -221,7 +237,6 @@ export async function startEdgeConFake(
     token?: string;
   } = {},
 ): Promise<AnalysisEdgeHandle> {
-  const { randomUUID } = await import("node:crypto");
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   const supabaseUrl = process.env.KDM_LOCAL_SUPABASE_URL;
   if (
