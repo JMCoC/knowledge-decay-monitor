@@ -40,6 +40,10 @@ const s204Names = [
   "20261012233545_s2_04_retrieval_estimation.sql",
 ];
 
+const s206Names = [
+  "20261015221607_s2_06_analysis_leases.sql",
+];
+
 const s203Names = [
   "20261011030000_s2_03_eligible_documents_projection.sql",
 ];
@@ -54,6 +58,9 @@ describe("analysis migration upgrade stages", () => {
     }
     for (const name of s204Names) {
       expect(migrationStage(`supabase/migrations/${name}`)).toBe("s2_04");
+    }
+    for (const name of s206Names) {
+      expect(migrationStage(`supabase/migrations/${name}`)).toBe("s2_06");
     }
     for (const name of s203Names) {
       expect(migrationStage(`supabase/migrations/${name}`)).toBe("s2_03");
@@ -74,6 +81,7 @@ describe("analysis migration upgrade stages", () => {
     const s202 = "supabase/migrations/20990101000000_s2_02_credit_operations.sql";
     const s203 = "supabase/migrations/20261011030000_s2_03_eligible_documents_projection.sql";
     const s204 = "supabase/migrations/20261012233545_s2_04_retrieval_estimation.sql";
+    const s206 = "supabase/migrations/20261015221607_s2_06_analysis_leases.sql";
     expect(includeMigration(s1, "s1")).toBe(true);
     expect(includeMigration(s201, "s1")).toBe(false);
     expect(includeMigration(s1, "s2_01")).toBe(true);
@@ -85,6 +93,8 @@ describe("analysis migration upgrade stages", () => {
     expect(includeMigration(s204, "s2_03")).toBe(false);
     expect(includeMigration(s204, "s2_02")).toBe(false);
     expect(includeMigration(s204, "s2_04")).toBe(true);
+    expect(includeMigration(s206, "s2_04")).toBe(false);
+    expect(includeMigration(s206, "s2_06")).toBe(true);
   });
 
   it("normalizes Windows separators and rejects paths or names outside the inventory", () => {

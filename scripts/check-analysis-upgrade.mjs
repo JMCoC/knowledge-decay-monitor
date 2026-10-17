@@ -146,7 +146,11 @@ select
 
 const s201HistoryHashSql = `
 with selected_rows(kind, row_id, row_data) as (
-  select 'analyses', a.id::text, to_jsonb(a)
+  -- S2-06 adds checkpoint and next_attempt_at to public.analyses.
+  -- Exclude post-S2-01 columns so the S2-01 history hash remains
+  -- stable across additive migrations. If a future migration adds
+  -- another column, extend this exclusion list here.
+  select 'analyses', a.id::text, to_jsonb(a) - 'checkpoint' - 'next_attempt_at'
   from public.analyses a
   where a.workspace_id = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'::uuid
   union all
