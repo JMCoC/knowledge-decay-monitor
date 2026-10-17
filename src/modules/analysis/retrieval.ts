@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { AnalysisExecutionManifest } from "../../types/analysis-internal.ts";
 
 /**
  * Pure retrieval helpers for S2-04 estimates (no DB, no I/O, no server-only).
@@ -52,6 +53,7 @@ export interface FingerprintOverrides {
   pricingVersion?: string;
   promptVersion?: string;
   outputSchemaVersion?: string;
+  executionManifest?: AnalysisExecutionManifest;
 }
 
 function sha256Hex(text: string): string {
@@ -126,6 +128,11 @@ export function computeRequestFingerprint(
   if (overrides.outputSchemaVersion !== undefined) {
     versions.outputSchemaVersion = overrides.outputSchemaVersion;
   }
+  if (overrides.executionManifest !== undefined) {
+    versions.pricingVersion = overrides.executionManifest.pricingVersion;
+    versions.promptVersion = overrides.executionManifest.promptVersion;
+    versions.outputSchemaVersion = overrides.executionManifest.outputSchemaVersion;
+  }
   const payload = {
     candidatePairCount: input.candidatePairCount,
     chunkCount: input.chunkCount,
@@ -142,6 +149,9 @@ export function computeRequestFingerprint(
     },
     sortedComparisonVersionIds: [...input.sortedComparisonVersionIds].sort(),
     sortedSourceVersionIds: [...input.sortedSourceVersionIds].sort(),
+    ...(overrides.executionManifest === undefined
+      ? {}
+      : { executionManifest: overrides.executionManifest }),
   };
   return sha256Hex(canonicalJson(payload));
 }

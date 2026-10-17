@@ -27,6 +27,30 @@ export interface AnalysisConfiguration {
   };
 }
 
+/** Immutable execution versions recorded with an S2-05 estimate. */
+export interface AnalysisExecutionManifest {
+  fingerprintVersion: "s2-05-v2";
+  pricingVersion: "s2-04-v1";
+  promptVersion: string;
+  outputSchemaVersion: string;
+  providers: AnalysisConfiguration["providers"];
+}
+
+/** Stable keyset cursor over canonical unordered chunk pairs. */
+export interface AnalysisPairCursor {
+  lowChunkId: string;
+  highChunkId: string;
+}
+
+/** Complete SQL-computed estimate, independent of PostgREST max_rows. */
+export interface AnalysisRetrievalSummary {
+  chunkCount: number;
+  candidatePairCount: number;
+  chunksRevision: string;
+  fingerprint: string;
+  fixedCost: number;
+}
+
 export interface AnalysisLease {
   analysisId: string;
   workspaceId: string;

@@ -144,6 +144,26 @@ Canonicalización: cada par se ordena (least(id_a, id_b), greatest(id_a, id_b)).
 
 Deduplicación: DISTINCT ON (least, greatest).
 
+### 5.3 Handoff operacional S2-05
+
+La consulta pública conserva su firma, seguridad invoker, permisos y reglas de
+Top K. El orden final desempata por versiones y chunks source/comparison, para
+que los pares solapados mantengan la misma orientación entre lecturas.
+
+El resumen que usan las nuevas estimaciones cuenta **todos** los chunks de la
+unión de versiones source/comparison, también los que no formaron ningún par.
+`chunk_count`, `chunks_revision`, precio y fingerprint se calculan en una RPC
+privada dentro de PostgreSQL, sin depender del máximo HTTP de 1.000 filas. El
+fingerprint v2 incluye el manifiesto de ejecución inmutable de S2-05 además de
+los campos v1 y conserva `pricing_version = s2-04-v1`.
+
+El worker lee pares por páginas keyset de hasta diez, ordenadas por los IDs
+canónicos `(least(chunk_id), greatest(chunk_id))`. La versión de cada página
+se valida contra el resumen completo antes de procesar. Un trigger bloquea
+las filas de versión al insertar, actualizar o borrar chunks; el resumen
+toma esos mismos bloqueos en orden UUID y vuelve a comprobar estado y puntero
+activo después de esperarlos. Así una mutación no puede cruzar el snapshot.
+
 ---
 
 ## 6. Fórmula integer-safe
