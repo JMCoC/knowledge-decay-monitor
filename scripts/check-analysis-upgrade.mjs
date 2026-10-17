@@ -3,7 +3,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { includeMigration } from "./analysis-upgrade-policy.mjs";
+import { includeFunction, includeMigration } from "./analysis-upgrade-policy.mjs";
 import { redactCliOutput } from "./cli-output-redaction.mjs";
 
 if (process.env.CI !== "true" || process.env.GITHUB_ACTIONS !== "true") {
@@ -15,9 +15,6 @@ const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const migrationRoot = "supabase/migrations/";
 const seededS2TableList = "'analyses','analysis_documents','credit_ledger','findings','finding_evidence','notification_events'";
 const seededS2ViewList = "'analysis_runs','analysis_scope','analysis_findings','analysis_finding_evidence'";
-// Analytics (logflare) and vector are not needed to validate the migration upgrade,
-// and they mirror the documented Day Zero workaround for `supabase start` health failures.
-const supabaseStartFlags = ["-x", "logflare,vector"];
 
 const s1RowsHashSql = `
 with selected_rows(kind, row_id, row_data) as (
@@ -273,6 +270,7 @@ function copyS1Workspace(temporaryRoot, stage) {
   for (const relativeFile of trackedFiles) {
     if (!relativeFile.startsWith("supabase/")) throw new Error("Unexpected Supabase source path.");
     if (relativeFile.startsWith(migrationRoot) && !includeMigration(relativeFile, stage)) continue;
+    if (relativeFile.startsWith("supabase/functions/") && !includeFunction(relativeFile, stage)) continue;
     if (/(^|\/)\.env(?:\.[^/]*)?$/.test(relativeFile) || /(^|\/)\.temp(?:\/|$)/.test(relativeFile)) continue;
     const source = relativeFile === "supabase/seed.sql" && stage !== "s2_02"
       ? historicalSeed
@@ -471,7 +469,7 @@ function main() {
     copyS1Workspace(s1Root, "s1");
     copyS1Workspace(s201Root, "s2_01");
 
-    runSupabase(["start", ...supabaseStartFlags, "--workdir", s1Root], "S1 disposable stack start");
+    runSupabase(["start", "--workdir", s1Root], "S1 disposable stack start");
     const container = databaseContainer(projectId, s1Root);
     runSupabase(["db", "reset", "--local", "--workdir", s1Root], "S1 disposable migration and seed reset");
 
@@ -514,7 +512,7 @@ function main() {
     assertNoExistingStack(projectId);
     conflictRoot = mkdtempSync(join(tmpdir(), "kdm-s2-02-conflict-"));
     copyS1Workspace(conflictRoot, "s1");
-    runSupabase(["start", ...supabaseStartFlags, "--workdir", conflictRoot], "Promotional conflict stack start");
+    runSupabase(["start", "--workdir", conflictRoot], "Promotional conflict stack start");
     const conflictContainer = databaseContainer(projectId, conflictRoot);
     runSupabase(["db", "reset", "--local", "--workdir", conflictRoot], "Promotional conflict S1 reset");
     const conflictBaseline = assertS1Baseline(conflictContainer);

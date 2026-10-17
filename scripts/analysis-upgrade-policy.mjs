@@ -43,6 +43,11 @@ const s203Names = new Set([
 
 const stageOrder = Object.freeze({ s1: 0, s2_01: 1, s2_02: 2, s2_03: 3, s2_04: 4, s2_06: 5 });
 
+const functionStage = Object.freeze({
+  "supabase/functions/embed/": "s1",
+  "supabase/functions/analyze/": "s2_06",
+});
+
 /** @param {string} path */
 export function migrationStage(path) {
   const normalized = path.replaceAll("\\", "/");
@@ -69,4 +74,17 @@ export function migrationStage(path) {
 export function includeMigration(path, stage) {
   if (!Object.hasOwn(stageOrder, stage)) throw new Error("Unknown upgrade stage.");
   return stageOrder[migrationStage(path)] <= stageOrder[stage];
+}
+
+/**
+ * @param {string} path
+ * @param {"s1" | "s2_01" | "s2_02" | "s2_03" | "s2_04" | "s2_06"} stage
+ */
+export function includeFunction(path, stage) {
+  if (!Object.hasOwn(stageOrder, stage)) throw new Error("Unknown upgrade stage.");
+  const normalized = path.replaceAll("\\", "/");
+  for (const [prefix, owner] of Object.entries(functionStage)) {
+    if (normalized.startsWith(prefix)) return stageOrder[owner] <= stageOrder[stage];
+  }
+  throw new Error("Unreviewed function in upgrade inventory.");
 }

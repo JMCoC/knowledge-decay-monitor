@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  includeFunction,
   includeMigration,
   migrationStage,
   type MigrationStage,
@@ -103,5 +104,29 @@ describe("analysis migration upgrade stages", () => {
     expect(() => migrationStage("C:\\work\\supabase\\migrations\\00001_initial_schema.sql")).toThrow();
     expect(() => migrationStage("supabase/migrations/20990101000001_unreviewed.sql")).toThrow();
     expect(() => includeMigration("supabase/migrations/00001_initial_schema.sql", "s3" as MigrationStage)).toThrow();
+  });
+});
+
+describe("analysis function upgrade stages", () => {
+  it("includes only functions at or before the requested stage", () => {
+    const embed = "supabase/functions/embed/index.ts";
+    const analyze = "supabase/functions/analyze/index.ts";
+    const cases: ReadonlyArray<readonly [string, MigrationStage, boolean]> = [
+      [embed, "s1", true],
+      [analyze, "s1", false],
+      [analyze, "s2_01", false],
+      [analyze, "s2_04", false],
+      [analyze, "s2_06", true],
+      [embed, "s2_06", true],
+    ];
+    for (const [path, stage, expected] of cases) {
+      expect(includeFunction(path, stage)).toBe(expected);
+    }
+  });
+
+  it("rejects functions outside the reviewed inventory", () => {
+    expect(() => includeFunction("supabase/functions/unknown/index.ts", "s1"))
+      .toThrow("Unreviewed function in upgrade inventory.");
+    expect(() => includeFunction("supabase/functions/embed/index.ts", "s3" as MigrationStage)).toThrow();
   });
 });
