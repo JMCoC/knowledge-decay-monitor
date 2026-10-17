@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  includeFunction,
   includeMigration,
   migrationStage,
   type MigrationStage,
@@ -40,6 +41,10 @@ const s204Names = [
   "20261012233545_s2_04_retrieval_estimation.sql",
 ];
 
+const s206Names = [
+  "20261015221607_s2_06_analysis_leases.sql",
+];
+
 const s203Names = [
   "20261011030000_s2_03_eligible_documents_projection.sql",
 ];
@@ -54,6 +59,9 @@ describe("analysis migration upgrade stages", () => {
     }
     for (const name of s204Names) {
       expect(migrationStage(`supabase/migrations/${name}`)).toBe("s2_04");
+    }
+    for (const name of s206Names) {
+      expect(migrationStage(`supabase/migrations/${name}`)).toBe("s2_06");
     }
     for (const name of s203Names) {
       expect(migrationStage(`supabase/migrations/${name}`)).toBe("s2_03");
@@ -74,6 +82,7 @@ describe("analysis migration upgrade stages", () => {
     const s202 = "supabase/migrations/20990101000000_s2_02_credit_operations.sql";
     const s203 = "supabase/migrations/20261011030000_s2_03_eligible_documents_projection.sql";
     const s204 = "supabase/migrations/20261012233545_s2_04_retrieval_estimation.sql";
+    const s206 = "supabase/migrations/20261015221607_s2_06_analysis_leases.sql";
     expect(includeMigration(s1, "s1")).toBe(true);
     expect(includeMigration(s201, "s1")).toBe(false);
     expect(includeMigration(s1, "s2_01")).toBe(true);
@@ -85,6 +94,8 @@ describe("analysis migration upgrade stages", () => {
     expect(includeMigration(s204, "s2_03")).toBe(false);
     expect(includeMigration(s204, "s2_02")).toBe(false);
     expect(includeMigration(s204, "s2_04")).toBe(true);
+    expect(includeMigration(s206, "s2_04")).toBe(false);
+    expect(includeMigration(s206, "s2_06")).toBe(true);
   });
 
   it("normalizes Windows separators and rejects paths or names outside the inventory", () => {
@@ -93,5 +104,29 @@ describe("analysis migration upgrade stages", () => {
     expect(() => migrationStage("C:\\work\\supabase\\migrations\\00001_initial_schema.sql")).toThrow();
     expect(() => migrationStage("supabase/migrations/20990101000001_unreviewed.sql")).toThrow();
     expect(() => includeMigration("supabase/migrations/00001_initial_schema.sql", "s3" as MigrationStage)).toThrow();
+  });
+});
+
+describe("analysis function upgrade stages", () => {
+  it("includes only functions at or before the requested stage", () => {
+    const embed = "supabase/functions/embed/index.ts";
+    const analyze = "supabase/functions/analyze/index.ts";
+    const cases: ReadonlyArray<readonly [string, MigrationStage, boolean]> = [
+      [embed, "s1", true],
+      [analyze, "s1", false],
+      [analyze, "s2_01", false],
+      [analyze, "s2_04", false],
+      [analyze, "s2_06", true],
+      [embed, "s2_06", true],
+    ];
+    for (const [path, stage, expected] of cases) {
+      expect(includeFunction(path, stage)).toBe(expected);
+    }
+  });
+
+  it("rejects functions outside the reviewed inventory", () => {
+    expect(() => includeFunction("supabase/functions/unknown/index.ts", "s1"))
+      .toThrow("Unreviewed function in upgrade inventory.");
+    expect(() => includeFunction("supabase/functions/embed/index.ts", "s3" as MigrationStage)).toThrow();
   });
 });

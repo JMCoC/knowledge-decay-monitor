@@ -1,4 +1,4 @@
-import type { Actor, AnalysisScopeRole, FindingSeverity, FindingType } from "./contracts";
+import type { Actor, AnalysisScopeRole, FindingSeverity, FindingType } from "./contracts.ts";
 
 export type AnalysisFailureCode =
   | "RETRIEVAL_FAILED"

@@ -3,7 +3,8 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { includeMigration } from "./analysis-upgrade-policy.mjs";
+import { includeFunction, includeMigration } from "./analysis-upgrade-policy.mjs";
+import { redactCliOutput } from "./cli-output-redaction.mjs";
 
 if (process.env.CI !== "true" || process.env.GITHUB_ACTIONS !== "true") {
   console.error("Disposable CI is required.");
@@ -146,7 +147,11 @@ select
 
 const s201HistoryHashSql = `
 with selected_rows(kind, row_id, row_data) as (
-  select 'analyses', a.id::text, to_jsonb(a)
+  -- S2-06 adds checkpoint and next_attempt_at to public.analyses.
+  -- Exclude post-S2-01 columns so the S2-01 history hash remains
+  -- stable across additive migrations. If a future migration adds
+  -- another column, extend this exclusion list here.
+  select 'analyses', a.id::text, to_jsonb(a) - 'checkpoint' - 'next_attempt_at'
   from public.analyses a
   where a.workspace_id = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'::uuid
   union all
@@ -192,11 +197,17 @@ function runQuiet(command, args, stage, cwd = projectRoot) {
   try {
     execFileSync(command, args, {
       cwd,
-      stdio: "ignore",
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
+      maxBuffer: 4 * 1024 * 1024,
     });
-  } catch {
-    throw new Error(`${stage} failed.`);
+  } catch (error) {
+    const captured = [error?.stdout, error?.stderr]
+      .filter((part) => typeof part === "string" && part.length > 0)
+      .join("\n");
+    const detail = redactCliOutput(captured);
+    throw new Error(detail ? `${stage} failed.\n${detail}` : `${stage} failed.`);
   }
 }
 
@@ -259,6 +270,7 @@ function copyS1Workspace(temporaryRoot, stage) {
   for (const relativeFile of trackedFiles) {
     if (!relativeFile.startsWith("supabase/")) throw new Error("Unexpected Supabase source path.");
     if (relativeFile.startsWith(migrationRoot) && !includeMigration(relativeFile, stage)) continue;
+    if (relativeFile.startsWith("supabase/functions/") && !includeFunction(relativeFile, stage)) continue;
     if (/(^|\/)\.env(?:\.[^/]*)?$/.test(relativeFile) || /(^|\/)\.temp(?:\/|$)/.test(relativeFile)) continue;
     const source = relativeFile === "supabase/seed.sql" && stage !== "s2_02"
       ? historicalSeed
