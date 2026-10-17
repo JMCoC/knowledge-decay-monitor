@@ -158,3 +158,60 @@ integración `analysis-run.test.ts` y `analysis-run-concurrency.test.ts`
 ejercitan PostgREST y sesiones PostgreSQL concurrentes contra Supabase local.
 No prueban la interfaz ni una ejecución end-to-end con el worker separado;
 esos gates pertenecen a las tareas posteriores.
+
+## 8. Handoff SQL, intentos y deadlines
+
+La migración `20261017205245_s2_05_worker_handoff.sql` separa
+`attempt_started_at`, `attempt_deadline_at` y `analysis_deadline_at`. El primer
+claim fija el presupuesto total de 90 minutos; cada intento admite hasta 30
+minutos y cada lease hasta 180 segundos, siempre limitados por el deadline
+total. Renew y continuación nunca mueven esos deadlines. Filas que ya estaban
+`processing` reciben límites derivados de sus timestamps actuales, sin tiempo
+adicional; una retry `queued` conserva el deadline total y obtiene uno de
+intento al reclamarse.
+
+```sql
+public.yield_analysis_batch(
+  p_analysis_id uuid,
+  p_operation_id uuid,
+  p_expected_processed_pairs integer,
+  p_checkpoint jsonb
+) returns boolean
+
+public.read_analysis_retrieval_summary(p_analysis_id uuid, p_operation_id uuid)
+public.read_analysis_pair_batch(
+  p_analysis_id uuid, p_operation_id uuid,
+  p_after_low uuid, p_after_high uuid, p_limit integer
+)
+
+public.renew_analysis_lease(
+  p_analysis_id uuid, p_operation_id uuid,
+  p_expected_processed_pairs integer, p_checkpoint jsonb
+)
+```
+
+`yield_analysis_batch` requiere avance estricto, checkpoint esperado actual,
+operation_id vigente, lease y deadlines activos. Guarda el checkpoint, mueve
+`processing → queued` con `continuation_pending = true`, libera el token anterior
+y no fija backoff ni consume otro intento. El siguiente claim rota
+`operation_id`, mantiene la reserva, slot, checkpoint, contador y deadlines. Un
+fallo recuperable limpia la marca de continuación y programa el backoff; un
+crash con lease vencido inicia otro intento. Una continuación vencida termina
+en `failed/TIMEOUT`; el intento 3 vencido termina en
+`failed/ATTEMPTS_EXHAUSTED`.
+
+Las dos RPC de lectura son exclusivas de `service_role`. Derivan workspace,
+scope y configuración desde el análisis, sus roles persistidos y la estimación
+inmutable enlazada; no aceptan IDs de versiones ni parámetros de retrieval del
+caller. El resumen recalcula fingerprint, conteos y coste; ambas lecturas
+requieren la operación, el lease y los deadlines vigentes. La página limita el
+lote a 1–10 pares, bloquea las versiones activas mientras lee y rechaza una
+revisión de chunks distinta del snapshot. La firma anterior de
+`renew_analysis_lease(analysis_id, operation_id, checkpoint)` se mantiene para
+compatibilidad; las dos variantes limitan el lease y rechazan un checkpoint
+regresivo.
+
+La cesión y la terminalización por deadline no liquidan créditos ni emiten
+eventos. Esa unidad atómica, junto con el staging durable de hallazgos, sigue
+siendo responsabilidad de S2-08. La migración de handoff no modifica el worker
+del repositorio separado `KDM/kdm-demo-worker`.

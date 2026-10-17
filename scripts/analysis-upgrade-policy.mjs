@@ -35,6 +35,16 @@ const s204Names = new Set([
 
 const s206Names = new Set([
   "20261015221607_s2_06_analysis_leases.sql",
+  // S2-05's persisted analysis/worker contracts are applied with the worker
+  // stage because they consume the S2-06 lease and claim primitives above.
+  "20261017190000_s2_05_retrieval_snapshot.sql",
+  "20261017190100_s2_05_estimate_commands.sql",
+  "20261017190110_s2_05_estimate_json_validation_fix.sql",
+  "20261017190120_s2_05_empty_comparison_normalization.sql",
+  "20261017190130_s2_05_empty_comparison_array_fix.sql",
+  "20261017190200_s2_05_run_commands.sql",
+  "20261017190210_s2_05_analysis_estimate_timeouts.sql",
+  "20261017205245_s2_05_worker_handoff.sql",
 ]);
 
 const s203Names = new Set([

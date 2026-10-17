@@ -49,6 +49,115 @@ async function estimate(
 beforeAll(assertLocalSupabaseReady);
 
 describe("atomic analysis Run and Retry through local Supabase", () => {
+  it("reads only the persisted analysis snapshot through a live operation fence", async () => {
+    const fixture = await createAnalysisFixture({ versionCount: 2 });
+    const service = serviceClient();
+    try {
+      const source = fixture.versions[0];
+      const comparison = fixture.versions[1];
+      if (!source || !comparison) throw new Error("Retrieval reader fixture versions are missing.");
+      const estimateRef = await estimate(service, fixture.adminId, [source.versionId], [comparison.versionId]);
+      const created = await service.rpc("run_analysis", {
+        p_actor_id: fixture.adminId,
+        p_estimate_ref: estimateRef,
+        p_idempotency_key: "worker-reader-integration",
+        p_current_manifest: MANIFEST_JSON,
+      });
+      expect(created.error?.code).toBeUndefined();
+      const analysisId = created.data?.[0]?.analysis_id;
+      if (!analysisId) throw new Error("The trusted Run did not return an analysis ID.");
+
+      const claim = await service.rpc("claim_analysis", { p_analysis_id: analysisId });
+      expect(claim.error?.code).toBeUndefined();
+      const lease = claim.data?.[0];
+      if (!lease?.operation_id) throw new Error("The worker did not claim the Run.");
+
+      const summary = await service.rpc("read_analysis_retrieval_summary", {
+        p_analysis_id: analysisId,
+        p_operation_id: lease.operation_id,
+      });
+      expect(summary.error?.code).toBeUndefined();
+      expect(summary.data?.[0]).toMatchObject({
+        chunk_count: 2,
+        candidate_pair_count: 1,
+        fixed_cost: 2,
+      });
+      const fingerprint = summary.data?.[0]?.request_fingerprint;
+      const revision = summary.data?.[0]?.chunks_revision;
+      expect(fingerprint).toMatch(/^[0-9a-f]{64}$/);
+      expect(revision).toMatch(/^[0-9a-f]{64}$/);
+
+      const firstPage = await service.rpc("read_analysis_pair_batch", {
+        p_analysis_id: analysisId,
+        p_operation_id: lease.operation_id,
+        // PostgREST accepts nullable UUID cursors; generated Database Args
+        // currently model UUID parameters as string even when SQL permits NULL.
+        p_after_low: null as unknown as string,
+        p_after_high: null as unknown as string,
+        p_limit: 10,
+      });
+      expect(firstPage.error?.code).toBeUndefined();
+      expect(firstPage.data).toHaveLength(1);
+      expect(firstPage.data?.[0]).toMatchObject({
+        source_version_id: source.versionId,
+        comparison_version_id: comparison.versionId,
+        source_text: "Synthetic analysis fixture chunk",
+        comparison_text: "Synthetic analysis fixture chunk",
+      });
+
+      const lastPair = firstPage.data?.[0];
+      if (!lastPair) throw new Error("The bounded page did not contain its expected pair.");
+      const exhaustedPage = await service.rpc("read_analysis_pair_batch", {
+        p_analysis_id: analysisId,
+        p_operation_id: lease.operation_id,
+        p_after_low: lastPair.pair_low_id,
+        p_after_high: lastPair.pair_high_id,
+        p_limit: 10,
+      });
+      expect(exhaustedPage.error?.code).toBeUndefined();
+      expect(exhaustedPage.data).toEqual([]);
+
+      await fixture.sql.query(`
+        insert into public.document_chunks(
+          workspace_id, version_id, chunk_index, text_content, embedding
+        ) values (
+          '${fixture.workspaceId}'::uuid, '${source.versionId}'::uuid, 1,
+          'Concurrent chunk revision',
+          ('[1,' || repeat('0,', 382) || '0]')::extensions.vector(384)
+        );
+      `);
+      const staleSnapshotPage = await service.rpc("read_analysis_pair_batch", {
+        p_analysis_id: analysisId,
+        p_operation_id: lease.operation_id,
+        p_after_low: null as unknown as string,
+        p_after_high: null as unknown as string,
+        p_limit: 10,
+      });
+      expect(staleSnapshotPage.error?.code).toBe("P2102");
+
+      const staleOperation = await service.rpc("read_analysis_retrieval_summary", {
+        p_analysis_id: analysisId,
+        p_operation_id: "00000000-0000-0000-0000-000000000000",
+      });
+      expect(staleOperation.error?.code).toBe("22023");
+
+      await fixture.sql.query(`
+        update public.analyses set lease_expires_at = clock_timestamp() - interval '1 second'
+        where id = '${analysisId}'::uuid;
+      `);
+      const expiredLease = await service.rpc("read_analysis_pair_batch", {
+        p_analysis_id: analysisId,
+        p_operation_id: lease.operation_id,
+        p_after_low: null as unknown as string,
+        p_after_high: null as unknown as string,
+        p_limit: 10,
+      });
+      expect(expiredLease.error?.code).toBe("22023");
+    } finally {
+      await fixture.dispose();
+    }
+  }, 60_000);
+
   it("creates once and replays after expiry, scope changes, and missing current config", async () => {
     const fixture = await createAnalysisFixture({ versionCount: 2 });
     const foreignFixture = await createAnalysisFixture({ versionCount: 1 });

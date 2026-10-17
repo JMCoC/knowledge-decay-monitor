@@ -62,13 +62,15 @@ one, `operation_id` set. If nothing is claimable: `200
 
 ```sql
 -- Processing with an expired lease: reclaimable by the next sweep.
-select id, workspace_id, attempt_count, lease_expires_at, started_at
+select id, workspace_id, attempt_count, lease_expires_at, started_at,
+       attempt_started_at, attempt_deadline_at, analysis_deadline_at
 from public.analyses
 where status = 'processing' and lease_expires_at < now()
 order by lease_expires_at;
 
 -- Queued past their backoff: next to be swept.
-select id, workspace_id, attempt_count, next_attempt_at
+select id, workspace_id, attempt_count, continuation_pending,
+       next_attempt_at, attempt_deadline_at, analysis_deadline_at
 from public.analyses
 where status = 'queued'
   and (next_attempt_at is null or next_attempt_at <= now())
@@ -78,7 +80,15 @@ order by created_at, id;
 A job that stays `processing` with a fresh lease is healthy (a worker
 owns it). A job stuck `processing` with an expired lease and
 `attempt_count >= 3` is marked `failed/ATTEMPTS_EXHAUSTED` by the next
-claim (terminal marking, no credits move in v1 — TODO S2-08).
+claim. A queued continuation is identified by `continuation_pending=true`:
+claiming it rotates `operation_id` but preserves the attempt count, checkpoint,
+attempt deadline and 90-minute total deadline. It occupies the same active
+workspace slot and does not use backoff. A recoverable error clears the marker
+and applies the existing 30-second / 2-minute retry backoff; an expired
+continuation is terminal `failed/TIMEOUT`, not another attempt. The first
+claim starts a 30-minute attempt deadline and a 90-minute total deadline;
+renewal and continuation never extend either one. Terminal marking still does
+not move credits or emit events in v1 — TODO S2-08.
 
 ## 4. Troubleshooting
 
@@ -131,9 +141,13 @@ Task 0 numbers (local Edge, `supabase-edge-runtime-1.74.3`):
 `T_overhead≈22ms` (ingestion-RPC proxy), batch `N=10` ≈ 51s worst case
 against a 105s budget (`150s × 0.7`). Integration timings (5-run
 median): single-batch invoke ≈ 1–6s, checkpoint resume ≈ 2 invocations,
-full 30-pair analysis ≈ 3 claims ≈ attempt budget exactly. A sweep
-reclaims an expired lease on the next invocation; there is no
-background scheduler in v1 (spec Nota PRD-2).
+full 30-pair analysis ≈ 3 claims. That timing predates the durable continuation
+state: it is not evidence that the current worker paginates successfully or
+that batches preserve attempt_count. The new database handoff is covered by
+SQL and concurrent-session tests; Task 6 still has to make the worker consume
+the summary, page, CAS heartbeat and yield RPCs. A sweep reclaims an expired
+processing lease on the next invocation; there is no background scheduler in
+v1 (spec Nota PRD-2).
 
 ## 8. Deuda (TODO S2-08 / Task 7)
 

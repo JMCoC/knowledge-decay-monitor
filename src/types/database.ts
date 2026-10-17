@@ -11,9 +11,13 @@ export type Database = {
     Tables: {
       analyses: {
         Row: {
+          analysis_deadline_at: string | null
           attempt_count: number
+          attempt_deadline_at: string | null
+          attempt_started_at: string | null
           checkpoint: Json | null
           command_fingerprint: string | null
+          continuation_pending: boolean
           created_at: string
           error_code:
             | Database["public"]["Enums"]["analysis_failure_code"]
@@ -43,9 +47,13 @@ export type Database = {
           workspace_id: string
         }
         Insert: {
+          analysis_deadline_at?: string | null
           attempt_count?: number
+          attempt_deadline_at?: string | null
+          attempt_started_at?: string | null
           checkpoint?: Json | null
           command_fingerprint?: string | null
+          continuation_pending?: boolean
           created_at?: string
           error_code?:
             | Database["public"]["Enums"]["analysis_failure_code"]
@@ -75,9 +83,13 @@ export type Database = {
           workspace_id: string
         }
         Update: {
+          analysis_deadline_at?: string | null
           attempt_count?: number
+          attempt_deadline_at?: string | null
+          attempt_started_at?: string | null
           checkpoint?: Json | null
           command_fingerprint?: string | null
+          continuation_pending?: boolean
           created_at?: string
           error_code?:
             | Database["public"]["Enums"]["analysis_failure_code"]
@@ -1302,6 +1314,38 @@ export type Database = {
         }
         Returns: boolean
       }
+      read_analysis_pair_batch: {
+        Args: {
+          p_after_high: string
+          p_after_low: string
+          p_analysis_id: string
+          p_limit: number
+          p_operation_id: string
+        }
+        Returns: {
+          comparison_chunk_id: string
+          comparison_document_id: string
+          comparison_text: string
+          comparison_version_id: string
+          pair_high_id: string
+          pair_low_id: string
+          similarity: number
+          source_chunk_id: string
+          source_document_id: string
+          source_text: string
+          source_version_id: string
+        }[]
+      }
+      read_analysis_retrieval_summary: {
+        Args: { p_analysis_id: string; p_operation_id: string }
+        Returns: {
+          candidate_pair_count: number
+          chunk_count: number
+          chunks_revision: string
+          fixed_cost: number
+          request_fingerprint: string
+        }[]
+      }
       reconcile_legacy_upload: {
         Args: {
           p_observation: string
@@ -1317,16 +1361,28 @@ export type Database = {
           version_id: string
         }[]
       }
-      renew_analysis_lease: {
-        Args: {
-          p_analysis_id: string
-          p_checkpoint: Json
-          p_operation_id: string
-        }
-        Returns: {
-          lease_expires_at: string
-        }[]
-      }
+      renew_analysis_lease:
+        | {
+            Args: {
+              p_analysis_id: string
+              p_checkpoint: Json
+              p_operation_id: string
+            }
+            Returns: {
+              lease_expires_at: string
+            }[]
+          }
+        | {
+            Args: {
+              p_analysis_id: string
+              p_checkpoint: Json
+              p_expected_processed_pairs: number
+              p_operation_id: string
+            }
+            Returns: {
+              lease_expires_at: string
+            }[]
+          }
       reserve_document: {
         Args: {
           p_category: Database["public"]["Enums"]["document_category"]
@@ -1405,6 +1461,15 @@ export type Database = {
           analysis_id: string
           status: Database["public"]["Enums"]["analysis_job_status"]
         }[]
+      }
+      yield_analysis_batch: {
+        Args: {
+          p_analysis_id: string
+          p_checkpoint: Json
+          p_expected_processed_pairs: number
+          p_operation_id: string
+        }
+        Returns: boolean
       }
     }
     Enums: {

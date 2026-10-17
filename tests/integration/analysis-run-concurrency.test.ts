@@ -279,4 +279,59 @@ describe("analysis Run concurrency through local PostgreSQL", () => {
       }
     },
   );
+
+  it("allows only one of two concurrent handoffs with the same cursor", async () => {
+    const fixture = await createAnalysisFixture({ status: "queued", withLedger: true, versionCount: 1 });
+    let contender: LocalSqlSession | undefined;
+    let observer: LocalSqlSession | undefined;
+    let firstTransactionOpen = false;
+    let secondYield: Promise<string> | undefined;
+    try {
+      const claimed = await fixture.sql.query(`
+        select operation_id::text from public.claim_analysis('${fixture.analysisId}'::uuid);
+      `);
+      const operationId = claimed.split(/\r?\n/).find(Boolean);
+      if (!operationId || !/^[0-9a-f-]{36}$/i.test(operationId)) {
+        throw new Error("The synthetic analysis did not receive an operation token.");
+      }
+      const checkpoint = json({
+        processedPairs: 10,
+        totalPairs: 40,
+        findingsCount: 0,
+        lastPairFingerprint: "pair-10",
+        startedAt: "2026-10-17T00:00:00Z",
+      });
+      const yieldSql = `select public.yield_analysis_batch(
+        ${uuid(fixture.analysisId)}, ${uuid(operationId)}, 0, ${checkpoint}
+      );`;
+
+      await fixture.sql.query("begin;");
+      firstTransactionOpen = true;
+      const firstResult = await fixture.sql.query(yieldSql);
+      expect(firstResult.split(/\r?\n/).find(Boolean)).toBe("t");
+
+      contender = await openLocalSqlSession("kdm_s205_yield_race");
+      observer = await openLocalSqlSession("kdm_s205_yield_observer");
+      secondYield = contender.query(yieldSql);
+      await waitForSqlLock(observer, contender.pid, fixture.sql.pid);
+
+      await fixture.sql.query("commit;");
+      firstTransactionOpen = false;
+      expect((await secondYield).split(/\r?\n/).find(Boolean)).toBe("f");
+
+      const persisted = await fixture.sql.query(`
+        select status::text || '|' || continuation_pending::text || '|'
+          || attempt_count::text || '|' || (checkpoint->>'processedPairs') || '|'
+          || (operation_id is null)::text
+        from public.analyses where id = ${uuid(fixture.analysisId)};
+      `);
+      expect(persisted.split(/\r?\n/).find(Boolean)).toBe("queued|true|1|10|true");
+    } finally {
+      if (firstTransactionOpen) await fixture.sql.query("rollback;").catch(() => undefined);
+      await secondYield?.catch(() => undefined);
+      await observer?.close();
+      await contender?.close();
+      await fixture.dispose();
+    }
+  }, 30_000);
 });
