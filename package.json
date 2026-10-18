@@ -18,6 +18,7 @@
     "test:fixtures": "node scripts/check-local-fixtures.mjs",
     "test:processing": "node scripts/with-local-supabase.mjs integration tests/integration/ingestion-worker.test.ts",
     "test:integration": "node scripts/with-local-supabase.mjs integration",
+    "analysis:capacity": "tsx scripts/measure-analysis-capacity.ts",
     "test:e2e:auth": "node scripts/with-local-supabase.mjs e2e",
     "test:auth:restart": "node scripts/check-auth-restart.mjs",
     "worker:ingestion": "node --conditions=react-server --import tsx scripts/ingestion-worker.ts",

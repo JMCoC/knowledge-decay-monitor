@@ -4,7 +4,7 @@ export const operationCatalog = {
   ingestion: ["reserve", "verify", "resume", "recover", "cleanup", "reconcile", "process", "retry"],
   repository: ["list", "open"],
   credits: ["snapshot", "ledger"],
-  analysis: ["selection", "scope_validation", "estimate"],
+  analysis: ["selection", "scope_validation", "estimate", "run", "retry", "trigger"],
   application: ["request", "render", "unhandled", "transport", "diagnostic"],
 } as const;
 

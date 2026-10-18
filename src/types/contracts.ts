@@ -1,4 +1,4 @@
-import type { Database } from "./database";
+import type { Database } from "./database.ts";
 
 type Tables = Database["public"]["Tables"];
 type Enums = Database["public"]["Enums"];

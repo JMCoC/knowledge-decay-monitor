@@ -1,9 +1,10 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { includeMigration } from "./analysis-upgrade-policy.mjs";
+import { filterFunctionConfigForStage, includeFunction, includeMigration } from "./analysis-upgrade-policy.mjs";
+import { redactCliOutput } from "./cli-output-redaction.mjs";
 
 if (process.env.CI !== "true" || process.env.GITHUB_ACTIONS !== "true") {
   console.error("Disposable CI is required.");
@@ -146,7 +147,14 @@ select
 
 const s201HistoryHashSql = `
 with selected_rows(kind, row_id, row_data) as (
+  -- S2-05 and S2-06 add operational columns to public.analyses.
+  -- Exclude post-S2-01 columns so this hash compares only S2-01 history.
+  -- Extend this list when a later migration adds another column.
   select 'analyses', a.id::text, to_jsonb(a)
+    - 'checkpoint' - 'next_attempt_at'
+    - 'estimate_id' - 'command_fingerprint'
+    - 'continuation_pending' - 'attempt_started_at'
+    - 'attempt_deadline_at' - 'analysis_deadline_at'
   from public.analyses a
   where a.workspace_id = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'::uuid
   union all
@@ -192,11 +200,17 @@ function runQuiet(command, args, stage, cwd = projectRoot) {
   try {
     execFileSync(command, args, {
       cwd,
-      stdio: "ignore",
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
+      maxBuffer: 4 * 1024 * 1024,
     });
-  } catch {
-    throw new Error(`${stage} failed.`);
+  } catch (error) {
+    const captured = [error?.stdout, error?.stderr]
+      .filter((part) => typeof part === "string" && part.length > 0)
+      .join("\n");
+    const detail = redactCliOutput(captured);
+    throw new Error(detail ? `${stage} failed.\n${detail}` : `${stage} failed.`);
   }
 }
 
@@ -259,6 +273,7 @@ function copyS1Workspace(temporaryRoot, stage) {
   for (const relativeFile of trackedFiles) {
     if (!relativeFile.startsWith("supabase/")) throw new Error("Unexpected Supabase source path.");
     if (relativeFile.startsWith(migrationRoot) && !includeMigration(relativeFile, stage)) continue;
+    if (relativeFile.startsWith("supabase/functions/") && !includeFunction(relativeFile, stage)) continue;
     if (/(^|\/)\.env(?:\.[^/]*)?$/.test(relativeFile) || /(^|\/)\.temp(?:\/|$)/.test(relativeFile)) continue;
     const source = relativeFile === "supabase/seed.sql" && stage !== "s2_02"
       ? historicalSeed
@@ -266,7 +281,12 @@ function copyS1Workspace(temporaryRoot, stage) {
     const destination = resolve(supabaseRoot, relativeFile.slice("supabase/".length).split("/").join(sep));
     if (!destination.startsWith(`${supabaseRoot}${sep}`)) throw new Error("Unexpected Supabase copy destination.");
     mkdirSync(dirname(destination), { recursive: true });
-    copyFileSync(source, destination);
+    if (relativeFile === "supabase/config.toml") {
+      const config = readFileSync(source, "utf8");
+      writeFileSync(destination, filterFunctionConfigForStage(config, stage), "utf8");
+    } else {
+      copyFileSync(source, destination);
+    }
   }
   if (!trackedFiles.includes("supabase/config.toml") || !trackedFiles.includes("supabase/seed.sql")
       || !trackedFiles.includes("supabase/fixtures/upgrade/s1-seed.sql")) {

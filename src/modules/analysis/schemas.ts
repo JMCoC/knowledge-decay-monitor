@@ -27,6 +27,22 @@ export const analysisSelectionInputSchema = z.object({
   comparisonVersionIds: z.array(versionId).max(20, "No more than 20 comparison documents can be selected.").default([]),
 });
 
+const idempotencyKey = z.string()
+  .min(1, "An idempotency key is required.")
+  .max(128, "The idempotency key cannot exceed 128 characters.")
+  .refine((value) => value === value.trim(), "The idempotency key cannot start or end with whitespace.");
+
+export const runAnalysisInputSchema = z.object({
+  estimateRef: versionId,
+  idempotencyKey,
+}).strict();
+
+export const retryAnalysisInputSchema = z.object({
+  estimateRef: versionId,
+  idempotencyKey,
+  failedAnalysisId: versionId,
+}).strict();
+
 export const resolveFilteredScopeSchema = z.object({
   query: eligibleDocumentsQuerySchema.default({ page: 1, pageSize: 25 }),
   targetRole: z.enum(["source", "comparison"]),

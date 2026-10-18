@@ -103,9 +103,11 @@ Firma TypeScript:
 
 - enable row level security en analysis_estimates.
 - Policy select: Admin/QA del mismo workspace.
-- Policy insert: initiator_id = auth.uid() + rol Admin/QA.
-- Sin update, sin delete para authenticated.
-- grant select, insert on analysis_estimates to authenticated.
+- La política INSERT y el grant directo de S2-04 quedaron retirados por el
+  handoff S2-05 §5.4; las estimaciones actuales solo nacen en la RPC confiable.
+- Sin insert, update ni delete para authenticated.
+- `authenticated` conserva SELECT únicamente de las columnas de proyección
+  requeridas por el producto; huella, conteos internos y manifiesto son privados.
 
 ---
 
@@ -143,6 +145,48 @@ Para cada chunk S en versiones source:
 Canonicalización: cada par se ordena (least(id_a, id_b), greatest(id_a, id_b)).
 
 Deduplicación: DISTINCT ON (least, greatest).
+
+### 5.3 Handoff operacional S2-05
+
+La consulta pública conserva su firma, seguridad invoker, permisos y reglas de
+Top K. El orden final desempata por versiones y chunks source/comparison, para
+que los pares solapados mantengan la misma orientación entre lecturas.
+
+El resumen que usan las nuevas estimaciones cuenta **todos** los chunks de la
+unión de versiones source/comparison, también los que no formaron ningún par.
+`chunk_count`, `chunks_revision`, precio y fingerprint se calculan en una RPC
+privada dentro de PostgreSQL, sin depender del máximo HTTP de 1.000 filas. El
+fingerprint v2 incluye el manifiesto de ejecución inmutable de S2-05 además de
+los campos v1 y conserva `pricing_version = s2-04-v1`.
+
+El worker lee pares por páginas keyset de hasta diez, ordenadas por los IDs
+canónicos `(least(chunk_id), greatest(chunk_id))`. La versión de cada página
+se valida contra el resumen completo antes de procesar. Un trigger bloquea
+las filas de versión al insertar, actualizar o borrar chunks; el resumen
+toma esos mismos bloqueos en orden UUID y vuelve a comprobar estado y puntero
+activo después de esperarlos. Así una mutación no puede cruzar el snapshot.
+
+### 5.4 Creación confiable de estimaciones
+
+`public.create_analysis_estimate(actor_id, source_ids, comparison_ids,
+manifest)` es una RPC `SECURITY DEFINER` ejecutable solo por `service_role`.
+El servidor obtiene el actor de la sesión verificada; PostgreSQL vuelve a
+resolver su workspace y rol desde `public.profiles`, rechaza Member y verifica
+scope, versiones `ready + active`, punteros y el manifiesto antes de guardar.
+
+El manifiesto privado se lee de `ANALYSIS_EXECUTION_MANIFEST`. Solo contiene
+las revisiones `fingerprintVersion`, `pricingVersion`, `promptVersion` y
+`outputSchemaVersion`, además de referencias `provider/model` para primary y
+fallback. No contiene prompts ni credenciales. Si falta o no coincide con el
+contrato conocido, se devuelve `INTERNAL_ERROR` y no se crea estimación.
+
+La RPC calcula precio, conteos, huella y revisión en PostgreSQL y fija
+`created_at`/`expires_at` con el reloj SQL, exactamente a 30 minutos. Las
+filas S2-04 históricas permanecen con snapshot nulo; una estimación nueva
+guarda `execution_manifest` y `fingerprint_version = s2-05-v2`. El snapshot
+es inmutable, y una fila ya referenciada por un análisis no se puede borrar.
+La Server Action devuelve únicamente `estimateRef`, costo, alcance y
+expiración, sin conteos, textos, huellas ni referencias de proveedores.
 
 ---
 

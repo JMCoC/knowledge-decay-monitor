@@ -290,8 +290,31 @@ export async function cleanupLocalUser(userId: string) {
   const admin = createClient<Database>(LOCAL_API_URL, key, {
     auth: { autoRefreshToken: false, detectSessionInUrl: false, persistSession: false },
   });
-  const { error } = await admin.auth.admin.deleteUser(userId);
-  if (error) throw new Error("Synthetic local Auth user cleanup failed.");
+  let cleanupError: { status?: number; code?: string } | null = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const { error } = await admin.auth.admin.deleteUser(userId);
+    if (!error) return;
+    cleanupError = error;
+
+    // A local Edge test may briefly restart the API connection. Retry only
+    // transport failures, and verify this exact synthetic user still exists
+    // before another delete so a lost response cannot turn into a false error.
+    if (error.status !== 0) break;
+    const remaining = runLocalSql(
+      "SELECT count(*)::text FROM auth.users WHERE id = :'user_id'::uuid AND email LIKE 'kdm-%@example.test';",
+      { user_id: userId },
+    );
+    if (remaining === "0") return;
+    if (attempt < 2) await new Promise((resolveDelay) => setTimeout(resolveDelay, 100 * (attempt + 1)));
+  }
+
+  if (cleanupError) {
+    const status = Number.isInteger(cleanupError.status) ? cleanupError.status : "unknown";
+    const code = typeof cleanupError.code === "string" && /^[a-z0-9_-]{1,64}$/i.test(cleanupError.code)
+      ? cleanupError.code
+      : "unknown";
+    throw new Error(`Synthetic local Auth user cleanup failed (status=${status}, code=${code}).`);
+  }
 }
 
 export function bootstrapCounts(workspaceName: string) {
