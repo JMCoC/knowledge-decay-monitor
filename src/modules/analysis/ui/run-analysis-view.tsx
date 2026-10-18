@@ -1,10 +1,12 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { AnalysisSelectionItem, AnalysisEstimate, EligibleDocumentsQuery } from "@/types/contracts";
 import { DocumentSelectionTable } from "./document-selection-table";
 import { ScopeSummarySidebar } from "./scope-summary-sidebar";
-import { listEligibleDocumentsAction, resolveFilteredScopeAction, estimateAnalysisAction } from "../application/analysis.actions";
+import { listEligibleDocumentsAction, resolveFilteredScopeAction, estimateAnalysisAction, getActiveAnalysisAction } from "../application/analysis.actions";
+import { runAnalysis } from "../application/run-actions";
 
 interface RunAnalysisViewProps {
   initialItems: AnalysisSelectionItem[];
@@ -30,6 +32,7 @@ export function RunAnalysisView({
   initialTotal,
   eligibleOwners,
 }: RunAnalysisViewProps) {
+  const router = useRouter();
   const [activeTab, setActiveTab] = useState<"sources" | "comparisons">("sources");
   const [items, setItems] = useState<AnalysisSelectionItem[]>(initialItems);
   const [total, setTotal] = useState(initialTotal);
@@ -39,6 +42,10 @@ export function RunAnalysisView({
   const [validationError, setValidationError] = useState<string | null>(null);
   const [isEstimating, setIsEstimating] = useState(false);
   const [isBulkLoading, setIsBulkLoading] = useState(false);
+  const [showConfirmation, setShowConfirmation] = useState(false);
+  const [isStarting, setIsStarting] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
+  const idempotencyKey = useRef<string | null>(null);
   const [page, setPage] = useState(1);
   const [currentFilters, setCurrentFilters] = useState<AnalysisSelectionFilters>({});
   const scopeRevision = useRef(0);
@@ -49,7 +56,64 @@ export function RunAnalysisView({
   function invalidateEstimate() {
     scopeRevision.current += 1;
     setEstimate(null);
+    setShowConfirmation(false);
+    setRunError(null);
+    idempotencyKey.current = null;
+    try { window.sessionStorage.removeItem("pending-analysis-run"); } catch { /* Storage can be disabled. */ }
   }
+
+  async function confirmRun() {
+    if (!estimate || Date.parse(estimate.expiresAt) <= Date.now()) {
+      setEstimate(null);
+      setRunError("This estimate expired. Calculate a new estimate before running.");
+      setShowConfirmation(false);
+      return;
+    }
+    idempotencyKey.current ??= crypto.randomUUID();
+    try {
+      window.sessionStorage.setItem("pending-analysis-run", JSON.stringify({ estimateRef: estimate.estimateRef, idempotencyKey: idempotencyKey.current }));
+    } catch { /* Storage can be disabled; retain the key in memory. */ }
+    setIsStarting(true);
+    setRunError(null);
+    try {
+      const result = await runAnalysis({ estimateRef: estimate.estimateRef, idempotencyKey: idempotencyKey.current });
+      if (!result.ok) {
+        setRunError(result.error.message);
+        if (result.error.code === "ESTIMATE_EXPIRED" || result.error.code === "ESTIMATE_STALE") {
+          setEstimate(null);
+          try { window.sessionStorage.removeItem("pending-analysis-run"); } catch { /* Storage can be disabled. */ }
+        }
+        return;
+      }
+      try { window.sessionStorage.removeItem("pending-analysis-run"); } catch { /* Storage can be disabled. */ }
+      router.push(`/analysis/${result.data.analysisId}`);
+    } catch {
+      // Keep the idempotency key so retrying the same confirmation safely replays the command.
+      setRunError("We couldn't confirm whether the analysis started. Retry this confirmation to safely recover it.");
+    } finally {
+      setIsStarting(false);
+    }
+  }
+
+  useEffect(() => {
+    let active = true;
+    try {
+      const raw = window.sessionStorage.getItem("pending-analysis-run");
+      const pendingRun = raw ? JSON.parse(raw) as { estimateRef?: unknown; idempotencyKey?: unknown } : null;
+      if (typeof pendingRun?.estimateRef === "string" && typeof pendingRun.idempotencyKey === "string") {
+        void runAnalysis({ estimateRef: pendingRun.estimateRef, idempotencyKey: pendingRun.idempotencyKey }).then((result) => {
+          if (active && result.ok) {
+            window.sessionStorage.removeItem("pending-analysis-run");
+            router.replace(`/analysis/${result.data.analysisId}`);
+          }
+        }).catch(() => undefined);
+      }
+    } catch { /* Session storage may be unavailable or contain invalid data. */ }
+    void getActiveAnalysisAction().then((result) => {
+      if (active && result.ok && result.data) router.replace(`/analysis/${result.data.analysisId}`);
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [router]);
 
   useEffect(() => {
     let active = true;
@@ -259,13 +323,23 @@ export function RunAnalysisView({
         }}
         estimate={estimate}
         onCalculateEstimate={handleCalculateEstimate}
-        onProceedToRun={() => {
-          // Hooks into S2-09 confirmation flow
-          window.alert("Proceeding to analysis confirmation (Ticket S2-09 integration).");
-        }}
+        onProceedToRun={() => { setRunError(null); setShowConfirmation(true); }}
         isEstimating={isEstimating}
         validationError={validationError}
       />
+      {showConfirmation ? (
+        <div role="dialog" aria-modal="true" aria-labelledby="run-confirmation-title" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
+          <section className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+            <h2 id="run-confirmation-title" className="text-lg font-semibold">Confirm analysis</h2>
+            <p className="mt-3 text-sm text-slate-700">Estimated cost: {estimate?.fixedCost ?? 0} credits</p>
+            {runError ? <p role="alert" className="mt-3 text-sm text-rose-700">{runError}</p> : null}
+            <div className="mt-6 flex justify-end gap-3">
+              <button type="button" disabled={isStarting} onClick={() => setShowConfirmation(false)} className="rounded-lg border border-slate-300 px-4 py-2 text-sm">Cancel</button>
+              <button type="button" disabled={isStarting || !estimate} onClick={() => void confirmRun()} className="rounded-lg bg-cyan-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{isStarting ? "Starting…" : "Confirm and run"}</button>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }

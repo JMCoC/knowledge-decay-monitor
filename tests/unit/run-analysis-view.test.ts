@@ -2,6 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 vi.mock("server-only", () => ({}));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn(), replace: vi.fn() }) }));
 import { mergeAnalysisSelectionFilters, RunAnalysisView } from "@/modules/analysis/ui/run-analysis-view";
 import type { AnalysisSelectionItem } from "@/types/contracts";
 
