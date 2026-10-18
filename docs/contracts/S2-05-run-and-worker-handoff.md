@@ -99,6 +99,13 @@ ejecución conserva el vínculo `retry_of_analysis_id`, crea una reserva propia 
 empieza con key nueva. Repetir el mismo comando devuelve el nuevo análisis
 antes de volver a validar el estado del padre.
 
+La RPC también rechaza el Retry mientras el workspace tenga otro análisis
+`queued` o `processing`; esa condición es autoritativa junto con el ledger
+completamente `Released`. `AnalysisSnapshot.canRetry` es una proyección de
+lectura para la experiencia S2-09: debe reflejar el estado persistido, el ledger
+y el slot activo, pero nunca reemplaza la validación de `retry_analysis`.
+S2-05 no añade la consulta de estado ni la UI que S2-09 consume.
+
 ## 5. SQLSTATE de dominio
 
 | SQLSTATE | Significado para la frontera de aplicación |
@@ -210,6 +217,18 @@ revisión de chunks distinta del snapshot. La firma anterior de
 `renew_analysis_lease(analysis_id, operation_id, checkpoint)` se mantiene para
 compatibilidad; las dos variantes limitan el lease y rechazan un checkpoint
 regresivo.
+
+Para evitar recalcular los candidatos en cada lote, la primera lectura de
+resumen del worker materializa atómicamente una cabecera y los IDs orientados
+de pares en `private.analysis_candidate_pair_snapshots` y
+`private.analysis_candidate_pair_rows`. Las lecturas posteriores validan el
+scope y la revisión completa de chunks y reutilizan esa lista; la página une
+solo los IDs solicitados con el texto vigente en `document_chunks`. No se
+duplica texto en el snapshot ni se concede acceso directo a esas tablas. La
+lista se conserva mientras el análisis siga `queued`/`processing` para soportar
+continuaciones y retries automáticos, y se elimina en la transición terminal a
+`completed` o `failed`. Esta es la excepción explícita aprobada en S2-05 a la
+regla S2-04 de no persistir candidatos; la estimación no cambia.
 
 La cesión y la terminalización por deadline no liquidan créditos ni emiten
 eventos. Esa unidad atómica, junto con el staging durable de hallazgos, sigue

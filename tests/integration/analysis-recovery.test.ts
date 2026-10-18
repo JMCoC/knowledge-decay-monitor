@@ -161,6 +161,14 @@ async function postAnalyze(
   return { status: response.status, body: await response.json() as Record<string, unknown> };
 }
 
+function safeResponseDiagnostic(body: Record<string, unknown>) {
+  const error = body["error"];
+  if (typeof error === "string" && error.length <= 64 && /^[a-zA-Z0-9_. -]+$/.test(error)) {
+    return error;
+  }
+  return `response keys: ${Object.keys(body).sort().join(",")}`;
+}
+
 let sql: LocalSqlSession | undefined;
 let edge: AnalysisEdgeHandle | undefined;
 let workerToken: string | undefined;
@@ -321,12 +329,12 @@ describe("local pg_cron analysis recovery", () => {
       });
     } finally {
       try {
-        await job.fixture.dispose();
-      } finally {
         if (edge) {
           await edge.stop();
           edge = undefined;
         }
+      } finally {
+        await job.fixture.dispose();
       }
     }
   }, 30_000);
@@ -495,7 +503,7 @@ describe("local pg_cron analysis recovery", () => {
         "select coalesce(max(id), 0)::text from net._http_response;",
       ));
       const firstAttempt = await postAnalyze(edge, workerToken, job.analysisId);
-      expect(firstAttempt.status).toBe(202);
+      expect(firstAttempt.status, safeResponseDiagnostic(firstAttempt.body)).toBe(202);
       await expect.poll(async () => (await readJob(service, job.analysisId)).status, {
         timeout: 15_000,
         interval: 100,

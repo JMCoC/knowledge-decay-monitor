@@ -45,6 +45,9 @@ const s206Names = new Set([
   "20261017190200_s2_05_run_commands.sql",
   "20261017190210_s2_05_analysis_estimate_timeouts.sql",
   "20261017205245_s2_05_worker_handoff.sql",
+  "20261017230309_s2_05_analysis_recovery.sql",
+  "20261018021500_s2_05_materialized_candidate_snapshots.sql",
+  "20261018022500_s2_05_empty_comparison_candidate_snapshot.sql",
 ]);
 
 const s203Names = new Set([

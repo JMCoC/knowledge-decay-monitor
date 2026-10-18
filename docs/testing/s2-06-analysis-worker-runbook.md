@@ -239,7 +239,7 @@ integration above demonstrates this with fake-provider behavior only.
 | 2 | createFinalization() real (S2-08) | S2-08 | Test integración findings + ledger + eventos | Pendiente S2-08 |
 | 3 | Texto F3 con liberación ("Analysis failed. Your credits were released. Retry creates a new run.") | S2-08 | S2-08 merge | Pendiente S2-08 |
 | 4 | TODO(S2-08) en claim/complete/fail (liberación + evento) | S2-08 | S2-08 merge | Pendiente S2-08 |
-| 5 | canRetry con analyses_one_active | S2-05 | S2-05 merge | Pendiente S2-05 |
+| 5 | Retry bloquea otro run activo; `AnalysisSnapshot.canRetry` refleja estado/ledger/slot | S2-05 / S2-09 | SQL Retry y contrato de lectura S2-09 | RPC S2-05 implementada y probada localmente; proyección `canRetry` pendiente S2-09 |
 | 6 | Slot único retiene workspace ≤90min | S2-06 | Documentado (fila 1 §12.1) | Documentado |
 | 7 | Sentry remoto del worker | S2-08 | Fila 3 §12.1 | Documentado (stdout-only v1) |
 | 8 | Bundle deployable incluye _test_doubles | Task 7 | Fila 10 §12.1 | Documentado (opción A) |
