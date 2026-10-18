@@ -362,7 +362,7 @@ async function createAnalysisFixtureInternal(
         ? `cleanup SQLSTATE ${cleanupError.sqlState ?? "unavailable"}`
         : cleanupError instanceof Error && cleanupError.message.startsWith("Refusing to remove analysis rows")
           ? "workspace ownership guard rejected cleanup"
-          : cleanupError instanceof Error && cleanupError.message === "Synthetic local Auth user cleanup failed."
+          : cleanupError instanceof Error && cleanupError.message.startsWith("Synthetic local Auth user cleanup failed")
             ? "synthetic Auth cleanup failed"
             : "local cleanup failure";
       throw new Error(`Local analysis fixture cleanup could not be verified (${creationFailure}; ${cleanupFailure}).`);

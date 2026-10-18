@@ -1,6 +1,14 @@
-import { readFileSync, existsSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 
 const REPO_ROOT = resolve(
@@ -29,11 +37,15 @@ function isRelative(specifier: string): boolean {
   return specifier.startsWith("./") || specifier.startsWith("../");
 }
 
-function withinAllowedDirs(absolutePath: string): boolean {
-  return ALLOWED_DIRS.some(
-    (dir) =>
-      absolutePath === dir || absolutePath.startsWith(`${dir}/`),
-  );
+function withinAllowedDirs(absolutePath: string, allowedDirs: string[]): boolean {
+  return allowedDirs.some((dir) => {
+    const fromAllowedDir = relative(dir, absolutePath);
+    return fromAllowedDir === "" || (
+      fromAllowedDir !== ".." &&
+      !fromAllowedDir.startsWith(`..${sep}`) &&
+      !isAbsolute(fromAllowedDir)
+    );
+  });
 }
 
 function resolveSpecifier(
@@ -51,11 +63,14 @@ function resolveSpecifier(
   return null;
 }
 
-function collectGraph(): { files: string[]; violations: string[] } {
+function collectGraph(
+  entry: string = ENTRY,
+  allowedDirs: string[] = ALLOWED_DIRS,
+): { files: string[]; violations: string[] } {
   const files: string[] = [];
   const violations: string[] = [];
   const visited = new Set<string>();
-  const queue = [ENTRY];
+  const queue = [entry];
   while (queue.length > 0) {
     const file = queue.pop() as string;
     if (visited.has(file)) continue;
@@ -74,7 +89,7 @@ function collectGraph(): { files: string[]; violations: string[] } {
       if (
         absolute !== null &&
         absolute.endsWith(".ts") &&
-        withinAllowedDirs(absolute) &&
+        withinAllowedDirs(absolute, allowedDirs) &&
         existsSync(absolute)
       ) {
         queue.push(absolute);
@@ -93,5 +108,30 @@ describe("deno import extensions", () => {
   it("requires explicit .ts on every relative import in the graph", () => {
     const { violations } = collectGraph();
     expect(violations).toEqual([]);
+  });
+
+  it("finds extensionless imports inside child modules", () => {
+    const root = mkdtempSync(join(tmpdir(), "kdm-deno-graph-"));
+    const allowedDir = join(root, "analyze");
+    const entry = join(allowedDir, "index.ts");
+    const child = join(allowedDir, "child.ts");
+
+    try {
+      mkdirSync(allowedDir, { recursive: true });
+      writeFileSync(entry, 'import { child } from "./child.ts";\n');
+      writeFileSync(child, 'import { leaf } from "./leaf";\n');
+
+      const collectFixtureGraph = collectGraph as unknown as (
+        entry: string,
+        allowedDirs: string[],
+      ) => ReturnType<typeof collectGraph>;
+      const graph = collectFixtureGraph(entry, [allowedDir]);
+
+      expect(graph.files).toHaveLength(2);
+      expect(graph.violations).toHaveLength(1);
+      expect(graph.violations[0]).toContain(`${child}:1 -> ./leaf`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

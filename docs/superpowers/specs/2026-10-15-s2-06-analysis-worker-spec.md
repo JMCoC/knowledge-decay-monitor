@@ -41,7 +41,7 @@ Reglas numéricas (G1, razón del 0.9 = 10% para jitter, DNS, TLS, primeros byte
 
 ### 4.1 Disparo inicial (B1=A)
 
-La Server Action de S2-05 hace fetch firmado a la Edge con payload mínimo `{ analysisId }` tras el commit, fire-and-forget sin esperar respuesta; el worker relee todo de DB con `service_role` y hace su propio claim sin confiar en el caller; el sweep cubre el fallo de invocación (`:263` del bloque S2-05: invocación best-effort post-commit, job recuperable). Token interno: reusar el patrón `INGESTION_INTERNAL_TOKEN` (renombrar a `ANALYSIS_INTERNAL_TOKEN` o compartir — decidir con Dev 1, dueño de S2-05).
+La Server Action de S2-05 hace fetch firmado a la Edge con payload mínimo `{ analysisId }` tras el commit, fire-and-forget sin esperar respuesta; el worker relee todo de DB con `service_role` y hace su propio claim sin confiar en el caller; el sweep cubre el fallo de invocación (`:263` del bloque S2-05: invocación best-effort post-commit, job recuperable). Decisión S2-05: usar el secreto dedicado `ANALYSIS_INTERNAL_TOKEN`, configurado en el servidor Next.js y en la Edge Function, independiente de `INGESTION_INTERNAL_TOKEN`.
 
 > Nota PRD-2 (discrepancia documentada): "El PRD §30 pide scheduled recovery. La v1 usa sweep oportunista (cada invocación barre stale jobs antes de reclamar) porque no hay pg_cron ni Scheduled Function en el repo. Task 0 evalúa migrar a scheduler si la ventana medida no alcanza (decisión diferida #3)."
 

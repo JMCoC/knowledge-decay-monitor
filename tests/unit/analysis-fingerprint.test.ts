@@ -122,6 +122,31 @@ describe("computeRequestFingerprint", () => {
     expect(computeRequestFingerprint(baseInput())).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  it("includes the complete S2-05 execution manifest in the fingerprint", () => {
+    const executionManifest = {
+      fingerprintVersion: "s2-05-v2",
+      pricingVersion: "s2-04-v1",
+      promptVersion: "prompt-v1",
+      outputSchemaVersion: "schema-v1",
+      providers: {
+        primary: { provider: "provider-a", model: "model-a" },
+        fallback: { provider: "provider-b", model: "model-b" },
+      },
+    };
+    const fingerprint = (manifest: typeof executionManifest) =>
+      computeRequestFingerprint(baseInput(), { executionManifest: manifest } as never);
+
+    expect(fingerprint(executionManifest)).not.toBe(
+      fingerprint({
+        ...executionManifest,
+        providers: {
+          ...executionManifest.providers,
+          primary: { provider: "provider-a", model: "model-a-v2" },
+        },
+      }),
+    );
+  });
+
   it("freezes the contract versions", () => {
     expect(FROZEN_FINGERPRINT_VERSIONS).toEqual({
       embeddingRevision: "gte-small-384-v1",

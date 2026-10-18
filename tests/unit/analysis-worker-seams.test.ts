@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { AnalysisFinalization } from "../../src/modules/analysis/worker/finalization";
 import { createFinalization } from "../../src/modules/analysis/worker/finalization";
+import { createBatchPersistence } from "../../src/modules/analysis/worker/batch-persistence";
 import { createProvider } from "../../src/modules/analysis/worker/provider";
 import { FakeAnalysisFinalization } from "../../supabase/functions/analyze/_test_doubles/analysis-finalization.fake";
 
@@ -19,6 +20,12 @@ describe("analysis seams", () => {
   it("createFinalization throws until S2-08 merges", () => {
     expect(() => createFinalization()).toThrow(
       "S2-08 not merged: AnalysisFinalization unavailable.",
+    );
+  });
+
+  it("createBatchPersistence throws until S2-08 staging merges", () => {
+    expect(() => createBatchPersistence({ rpc: vi.fn() } as never)).toThrow(
+      "S2-08 not merged: analysis batch staging unavailable.",
     );
   });
 

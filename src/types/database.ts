@@ -11,12 +11,18 @@ export type Database = {
     Tables: {
       analyses: {
         Row: {
+          analysis_deadline_at: string | null
           attempt_count: number
+          attempt_deadline_at: string | null
+          attempt_started_at: string | null
           checkpoint: Json | null
+          command_fingerprint: string | null
+          continuation_pending: boolean
           created_at: string
           error_code:
             | Database["public"]["Enums"]["analysis_failure_code"]
             | null
+          estimate_id: string | null
           finished_at: string | null
           fixed_cost: number
           id: string
@@ -41,12 +47,18 @@ export type Database = {
           workspace_id: string
         }
         Insert: {
+          analysis_deadline_at?: string | null
           attempt_count?: number
+          attempt_deadline_at?: string | null
+          attempt_started_at?: string | null
           checkpoint?: Json | null
+          command_fingerprint?: string | null
+          continuation_pending?: boolean
           created_at?: string
           error_code?:
             | Database["public"]["Enums"]["analysis_failure_code"]
             | null
+          estimate_id?: string | null
           finished_at?: string | null
           fixed_cost: number
           id?: string
@@ -71,12 +83,18 @@ export type Database = {
           workspace_id: string
         }
         Update: {
+          analysis_deadline_at?: string | null
           attempt_count?: number
+          attempt_deadline_at?: string | null
+          attempt_started_at?: string | null
           checkpoint?: Json | null
+          command_fingerprint?: string | null
+          continuation_pending?: boolean
           created_at?: string
           error_code?:
             | Database["public"]["Enums"]["analysis_failure_code"]
             | null
+          estimate_id?: string | null
           finished_at?: string | null
           fixed_cost?: number
           id?: string
@@ -101,6 +119,13 @@ export type Database = {
           workspace_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "analyses_estimate_owner_fkey"
+            columns: ["estimate_id", "workspace_id", "initiator_id"]
+            isOneToOne: false
+            referencedRelation: "analysis_estimates"
+            referencedColumns: ["id", "workspace_id", "initiator_id"]
+          },
           {
             foreignKeyName: "analyses_initiator_id_workspace_id_fkey"
             columns: ["initiator_id", "workspace_id"]
@@ -183,7 +208,9 @@ export type Database = {
           chunk_count: number
           comparison_version_ids: string[]
           created_at: string
+          execution_manifest: Json | null
           expires_at: string
+          fingerprint_version: string | null
           fixed_cost: number
           id: string
           initiator_id: string
@@ -198,7 +225,9 @@ export type Database = {
           chunk_count: number
           comparison_version_ids: string[]
           created_at?: string
+          execution_manifest?: Json | null
           expires_at: string
+          fingerprint_version?: string | null
           fixed_cost: number
           id?: string
           initiator_id: string
@@ -213,7 +242,9 @@ export type Database = {
           chunk_count?: number
           comparison_version_ids?: string[]
           created_at?: string
+          execution_manifest?: Json | null
           expires_at?: string
+          fingerprint_version?: string | null
           fixed_cost?: number
           id?: string
           initiator_id?: string
@@ -1163,6 +1194,25 @@ export type Database = {
         Args: { p_analysis_id: string; p_operation_id: string }
         Returns: undefined
       }
+      configure_analysis_recovery: {
+        Args: { p_enabled: boolean }
+        Returns: undefined
+      }
+      create_analysis_estimate: {
+        Args: {
+          p_actor_id: string
+          p_comparison_version_ids: string[]
+          p_manifest: Json
+          p_source_version_ids: string[]
+        }
+        Returns: {
+          comparison_version_ids: string[]
+          estimate_ref: string
+          expires_at: string
+          fixed_cost: number
+          source_version_ids: string[]
+        }[]
+      }
       enqueue_ingestion_job: {
         Args: {
           p_retry?: boolean
@@ -1268,6 +1318,38 @@ export type Database = {
         }
         Returns: boolean
       }
+      read_analysis_pair_batch: {
+        Args: {
+          p_after_high: string
+          p_after_low: string
+          p_analysis_id: string
+          p_limit: number
+          p_operation_id: string
+        }
+        Returns: {
+          comparison_chunk_id: string
+          comparison_document_id: string
+          comparison_text: string
+          comparison_version_id: string
+          pair_high_id: string
+          pair_low_id: string
+          similarity: number
+          source_chunk_id: string
+          source_document_id: string
+          source_text: string
+          source_version_id: string
+        }[]
+      }
+      read_analysis_retrieval_summary: {
+        Args: { p_analysis_id: string; p_operation_id: string }
+        Returns: {
+          candidate_pair_count: number
+          chunk_count: number
+          chunks_revision: string
+          fixed_cost: number
+          request_fingerprint: string
+        }[]
+      }
       reconcile_legacy_upload: {
         Args: {
           p_observation: string
@@ -1283,16 +1365,28 @@ export type Database = {
           version_id: string
         }[]
       }
-      renew_analysis_lease: {
-        Args: {
-          p_analysis_id: string
-          p_checkpoint: Json
-          p_operation_id: string
-        }
-        Returns: {
-          lease_expires_at: string
-        }[]
-      }
+      renew_analysis_lease:
+        | {
+            Args: {
+              p_analysis_id: string
+              p_checkpoint: Json
+              p_operation_id: string
+            }
+            Returns: {
+              lease_expires_at: string
+            }[]
+          }
+        | {
+            Args: {
+              p_analysis_id: string
+              p_checkpoint: Json
+              p_expected_processed_pairs: number
+              p_operation_id: string
+            }
+            Returns: {
+              lease_expires_at: string
+            }[]
+          }
       reserve_document: {
         Args: {
           p_category: Database["public"]["Enums"]["document_category"]
@@ -1345,6 +1439,41 @@ export type Database = {
           source_text: string
           source_version_id: string
         }[]
+      }
+      retry_analysis: {
+        Args: {
+          p_actor_id: string
+          p_current_manifest: Json
+          p_estimate_ref: string
+          p_failed_analysis_id: string
+          p_idempotency_key: string
+        }
+        Returns: {
+          analysis_id: string
+          retry_of_analysis_id: string
+          status: Database["public"]["Enums"]["analysis_job_status"]
+        }[]
+      }
+      run_analysis: {
+        Args: {
+          p_actor_id: string
+          p_current_manifest: Json
+          p_estimate_ref: string
+          p_idempotency_key: string
+        }
+        Returns: {
+          analysis_id: string
+          status: Database["public"]["Enums"]["analysis_job_status"]
+        }[]
+      }
+      yield_analysis_batch: {
+        Args: {
+          p_analysis_id: string
+          p_checkpoint: Json
+          p_expected_processed_pairs: number
+          p_operation_id: string
+        }
+        Returns: boolean
       }
     }
     Enums: {

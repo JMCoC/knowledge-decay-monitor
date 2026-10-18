@@ -1,10 +1,8 @@
-import {
-  computeRequestFingerprint,
-  FROZEN_RETRIEVAL_PARAMS,
-} from "../retrieval.ts";
-import type { AnalysisCandidatePair } from "../../../types/analysis-internal.ts";
-import type { AnalysisScopeRole } from "../../../types/contracts.ts";
-import { RETRIEVAL_TIMEOUT_MS } from "./constants.ts";
+import type {
+  AnalysisCandidatePair,
+  AnalysisPairCursor,
+} from "../../../types/analysis-internal.ts";
+import { N, RETRIEVAL_TIMEOUT_MS } from "./constants.ts";
 import type { AnalysisWorkerDb, LoadedContext } from "./types.ts";
 import { AnalysisWorkerError } from "./types.ts";
 
@@ -17,32 +15,26 @@ interface CandidatePairRow {
   comparison_version_id: unknown;
   comparison_document_id: unknown;
   comparison_text: unknown;
+  pair_low_id: unknown;
+  pair_high_id: unknown;
 }
 
-interface ScopeRow {
-  document_id: unknown;
-  version_id: unknown;
-  role: unknown;
+interface ScopeSummaryRow {
+  chunk_count: unknown;
+  candidate_pair_count: unknown;
+  chunks_revision: unknown;
+  request_fingerprint: unknown;
+  fixed_cost: unknown;
 }
 
 export interface LoadAnalysisContextOptions {
   retrievalTimeoutMs?: number;
 }
 
-function configText(config: unknown, field: string): string | undefined {
-  if (typeof config === "object" && config !== null) {
-    const value = (config as Record<string, unknown>)[field];
-    if (typeof value === "string" && value.length > 0) return value;
-  }
-  return undefined;
-}
-
-function configNumber(config: unknown, field: string): number | undefined {
-  if (typeof config === "object" && config !== null) {
-    const value = (config as Record<string, unknown>)[field];
-    if (typeof value === "number" && Number.isFinite(value)) return value;
-  }
-  return undefined;
+function object(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : null;
 }
 
 function rowText(
@@ -58,7 +50,14 @@ function rowText(
 
 function nonEmptyText(value: unknown): string {
   if (typeof value !== "string" || value.length === 0) {
-    throw new AnalysisWorkerError("RETRIEVAL_FAILED", "Invalid pair text");
+    throw new AnalysisWorkerError("RETRIEVAL_FAILED", "Invalid pair row");
+  }
+  return value;
+}
+
+function nonNegativeInteger(value: unknown): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    throw new AnalysisWorkerError("RETRIEVAL_FAILED", "Invalid retrieval summary");
   }
   return value;
 }
@@ -80,6 +79,36 @@ function toPair(row: CandidatePairRow): AnalysisCandidatePair {
       text: nonEmptyText(row.comparison_text),
     },
   };
+}
+
+function toPairCursor(row: CandidatePairRow): AnalysisPairCursor {
+  const pair = toPair(row);
+  const expectedLow =
+    pair.source.chunkId < pair.comparison.chunkId
+      ? pair.source.chunkId
+      : pair.comparison.chunkId;
+  const expectedHigh =
+    pair.source.chunkId < pair.comparison.chunkId
+      ? pair.comparison.chunkId
+      : pair.source.chunkId;
+  const lowChunkId = nonEmptyText(row.pair_low_id);
+  const highChunkId = nonEmptyText(row.pair_high_id);
+  if (lowChunkId !== expectedLow || highChunkId !== expectedHigh) {
+    throw new AnalysisWorkerError("RETRIEVAL_FAILED", "Invalid pair cursor");
+  }
+  return { lowChunkId, highChunkId };
+}
+
+function cursorAfter(
+  left: AnalysisPairCursor | null,
+  right: AnalysisPairCursor,
+): boolean {
+  if (!left) return true;
+  return (
+    right.lowChunkId > left.lowChunkId ||
+    (right.lowChunkId === left.lowChunkId &&
+      right.highChunkId > left.highChunkId)
+  );
 }
 
 async function withRetrievalTimeout<T>(
@@ -108,112 +137,138 @@ async function withRetrievalTimeout<T>(
   }
 }
 
+function retrievalError(error: { code?: string } | null): AnalysisWorkerError {
+  if (error?.code === "P2102") {
+    return new AnalysisWorkerError("ESTIMATE_STALE", "Analysis snapshot is stale");
+  }
+  if (error?.code === "22023") {
+    // The operation or lease was superseded. Do not terminalize a live job
+    // based on a worker that no longer owns its fencing token.
+    return new AnalysisWorkerError("INTERNAL_ERROR", "Analysis operation expired");
+  }
+  return new AnalysisWorkerError("RETRIEVAL_FAILED", "Retrieval failed");
+}
+
+function firstRow(value: unknown): Record<string, unknown> | null {
+  if (Array.isArray(value)) return object(value[0]);
+  return object(value);
+}
+
 /**
- * Loads everything the worker needs from persisted state (spec §6 D1).
- * Only analysisId comes from the caller; scope, cost, configuration and
- * pairs are re-read from the database and the fingerprint is re-verified
- * on every attempt (divergence → ESTIMATE_STALE).
+ * Loads the immutable SQL-computed summary and one bounded keyset page.
+ * Pair text is never materialized beyond the worker batch size.
  */
 export async function loadAnalysisContext(
   analysisId: string,
+  operationId: string,
+  cursor: AnalysisPairCursor | null,
+  processedPairs: number,
   client: AnalysisWorkerDb,
   options?: LoadAnalysisContextOptions,
 ): Promise<LoadedContext> {
-  if (typeof analysisId !== "string" || analysisId.length === 0) {
-    throw new AnalysisWorkerError("RETRIEVAL_FAILED", "Invalid analysis id");
+  if (!analysisId || !operationId || !Number.isInteger(processedPairs) || processedPairs < 0) {
+    throw new AnalysisWorkerError("RETRIEVAL_FAILED", "Invalid analysis operation");
   }
   const timeoutMs = options?.retrievalTimeoutMs ?? RETRIEVAL_TIMEOUT_MS;
-
   const analysisResult = await client
     .from("analyses")
-    .select(
-      "id,workspace_id,request_fingerprint,retrieval_config,pricing_version,prompt_version,output_schema_version",
-    )
+    .select("workspace_id,request_fingerprint,retrieval_config,fixed_cost")
     .eq("id", analysisId)
     .single<Record<string, unknown>>();
   if (analysisResult.error || analysisResult.data === null) {
     throw new AnalysisWorkerError("RETRIEVAL_FAILED", "Analysis not found");
   }
-  const analysisRow = analysisResult.data;
-  const workspaceId = rowText(analysisRow, "workspace_id");
-  const requestFingerprint = rowText(analysisRow, "request_fingerprint");
-  const retrievalConfig: unknown = analysisRow["retrieval_config"];
 
-  const scopeResult = await client
-    .from("analysis_documents")
-    .select("document_id,version_id,role")
-    .eq("analysis_id", analysisId);
-  if (scopeResult.error || scopeResult.data === null) {
-    throw new AnalysisWorkerError("RETRIEVAL_FAILED", "Scope not found");
+  const analysis = analysisResult.data;
+  const workspaceId = rowText(analysis, "workspace_id");
+  const requestFingerprint = rowText(analysis, "request_fingerprint");
+  const retrievalConfig = object(analysis["retrieval_config"]);
+  if (!retrievalConfig) {
+    throw new AnalysisWorkerError("RETRIEVAL_FAILED", "Invalid retrieval config");
   }
-  const sourceVersionIds: string[] = [];
-  const comparisonVersionIds: string[] = [];
-  for (const entry of scopeResult.data as ScopeRow[]) {
-    if (typeof entry !== "object" || entry === null) continue;
-    const versionId =
-      typeof entry.version_id === "string" ? entry.version_id : null;
-    if (versionId === null || versionId.length === 0) continue;
-    const role: AnalysisScopeRole | null =
-      entry.role === "source" || entry.role === "comparison"
-        ? entry.role
-        : null;
-    if (role === "source") sourceVersionIds.push(versionId);
-    else if (role === "comparison") comparisonVersionIds.push(versionId);
-  }
+  const storedChunksRevision = rowText(retrievalConfig, "chunksRevision");
+  const storedConfigFingerprint = rowText(retrievalConfig, "fingerprint");
+  const fixedCost = nonNegativeInteger(analysis["fixed_cost"]);
 
-  const retrievalResult = await withRetrievalTimeout(
-    client.rpc<CandidatePairRow[]>("retrieve_candidate_pairs", {
-      p_workspace_id: workspaceId,
-      p_source_version_ids: sourceVersionIds,
-      p_comparison_version_ids: comparisonVersionIds,
-      p_top_k: FROZEN_RETRIEVAL_PARAMS.topK,
-      p_threshold: FROZEN_RETRIEVAL_PARAMS.similarityThreshold,
+  const summaryResult = await withRetrievalTimeout(
+    client.rpc<ScopeSummaryRow[]>("read_analysis_retrieval_summary", {
+      p_analysis_id: analysisId,
+      p_operation_id: operationId,
     }),
     timeoutMs,
   );
-  if (retrievalResult.error || retrievalResult.data === null) {
-    throw new AnalysisWorkerError("RETRIEVAL_FAILED", "Retrieval failed");
+  if (summaryResult.error || summaryResult.data === null) {
+    throw retrievalError(summaryResult.error);
   }
-  const pairs = retrievalResult.data.map(toPair);
+  const summary = firstRow(summaryResult.data);
+  if (!summary) {
+    throw new AnalysisWorkerError("RETRIEVAL_FAILED", "Retrieval summary missing");
+  }
+  const chunkCount = nonNegativeInteger(summary["chunk_count"]);
+  const candidatePairCount = nonNegativeInteger(summary["candidate_pair_count"]);
+  const chunksRevision = rowText(summary, "chunks_revision");
+  const fingerprint = rowText(summary, "request_fingerprint");
+  const summaryFixedCost = nonNegativeInteger(summary["fixed_cost"]);
+  if (
+    fingerprint !== requestFingerprint ||
+    fingerprint !== storedConfigFingerprint ||
+    chunksRevision !== storedChunksRevision ||
+    summaryFixedCost !== fixedCost
+  ) {
+    throw new AnalysisWorkerError("ESTIMATE_STALE", "Analysis snapshot diverged");
+  }
+  if (processedPairs > candidatePairCount) {
+    throw new AnalysisWorkerError("ESTIMATE_STALE", "Analysis cursor is beyond snapshot");
+  }
 
-  const chunkIds = new Set<string>();
-  for (const pair of pairs) {
-    chunkIds.add(pair.source.chunkId);
-    chunkIds.add(pair.comparison.chunkId);
-  }
-  const fingerprint = computeRequestFingerprint(
-    {
-      chunkCount: chunkIds.size,
-      candidatePairCount: pairs.length,
-      sortedSourceVersionIds: sourceVersionIds,
-      sortedComparisonVersionIds: comparisonVersionIds,
-      pairs: pairs.map((pair) => ({
-        sourceChunkId: pair.source.chunkId,
-        comparisonChunkId: pair.comparison.chunkId,
-      })),
-      chunkIds: [...chunkIds],
-    },
-    {
-      similarityThreshold: configNumber(retrievalConfig, "similarityThreshold"),
-      topK: configNumber(retrievalConfig, "topK"),
-      embeddingRevision: configText(retrievalConfig, "embeddingRevision"),
-      pricingVersion: configText(analysisRow, "pricing_version"),
-      promptVersion: configText(analysisRow, "prompt_version"),
-      outputSchemaVersion: configText(analysisRow, "output_schema_version"),
-    },
+  const pageResult = await withRetrievalTimeout(
+    client.rpc<CandidatePairRow[]>("read_analysis_pair_batch", {
+      p_analysis_id: analysisId,
+      p_operation_id: operationId,
+      p_after_low: cursor?.lowChunkId ?? null,
+      p_after_high: cursor?.highChunkId ?? null,
+      p_limit: N,
+    }),
+    timeoutMs,
   );
-  if (fingerprint !== requestFingerprint) {
-    throw new AnalysisWorkerError("ESTIMATE_STALE", "Scope fingerprint diverged");
+  if (pageResult.error || pageResult.data === null || !Array.isArray(pageResult.data)) {
+    throw retrievalError(pageResult.error);
+  }
+  if (pageResult.data.length > N) {
+    throw new AnalysisWorkerError("RETRIEVAL_FAILED", "Retrieval page exceeded limit");
+  }
+
+  const pairs: AnalysisCandidatePair[] = [];
+  const pairCursors: AnalysisPairCursor[] = [];
+  let lastCursor = cursor;
+  for (const unknownRow of pageResult.data) {
+    const row = object(unknownRow) as CandidatePairRow | null;
+    if (!row) {
+      throw new AnalysisWorkerError("RETRIEVAL_FAILED", "Invalid pair row");
+    }
+    const pairCursor = toPairCursor(row);
+    if (!cursorAfter(lastCursor, pairCursor)) {
+      throw new AnalysisWorkerError("RETRIEVAL_FAILED", "Pair page is not ordered");
+    }
+    pairs.push(toPair(row));
+    pairCursors.push(pairCursor);
+    lastCursor = pairCursor;
+  }
+  const expectedPageSize = Math.min(N, candidatePairCount - processedPairs);
+  if (pairs.length !== expectedPageSize) {
+    throw new AnalysisWorkerError("ESTIMATE_STALE", "Retrieval page does not match snapshot");
   }
 
   return {
     analysisId,
     workspaceId,
-    sourceVersionIds,
-    comparisonVersionIds,
+    sourceVersionIds: [],
+    comparisonVersionIds: [],
     pairs,
+    pairCursors,
+    cursor,
     fingerprint,
-    chunkCount: chunkIds.size,
-    candidatePairCount: pairs.length,
+    chunkCount,
+    candidatePairCount,
   };
 }

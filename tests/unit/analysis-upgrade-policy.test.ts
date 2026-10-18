@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  filterFunctionConfigForStage,
   includeFunction,
   includeMigration,
   migrationStage,
@@ -43,6 +44,17 @@ const s204Names = [
 
 const s206Names = [
   "20261015221607_s2_06_analysis_leases.sql",
+  "20261017190000_s2_05_retrieval_snapshot.sql",
+  "20261017190100_s2_05_estimate_commands.sql",
+  "20261017190110_s2_05_estimate_json_validation_fix.sql",
+  "20261017190120_s2_05_empty_comparison_normalization.sql",
+  "20261017190130_s2_05_empty_comparison_array_fix.sql",
+  "20261017190200_s2_05_run_commands.sql",
+  "20261017190210_s2_05_analysis_estimate_timeouts.sql",
+  "20261017205245_s2_05_worker_handoff.sql",
+  "20261017230309_s2_05_analysis_recovery.sql",
+  "20261018021500_s2_05_materialized_candidate_snapshots.sql",
+  "20261018022500_s2_05_empty_comparison_candidate_snapshot.sql",
 ];
 
 const s203Names = [
@@ -83,6 +95,10 @@ describe("analysis migration upgrade stages", () => {
     const s203 = "supabase/migrations/20261011030000_s2_03_eligible_documents_projection.sql";
     const s204 = "supabase/migrations/20261012233545_s2_04_retrieval_estimation.sql";
     const s206 = "supabase/migrations/20261015221607_s2_06_analysis_leases.sql";
+    const s205Worker = "supabase/migrations/20261017205245_s2_05_worker_handoff.sql";
+    const s205Recovery = "supabase/migrations/20261017230309_s2_05_analysis_recovery.sql";
+    const s205CandidateSnapshots = "supabase/migrations/20261018021500_s2_05_materialized_candidate_snapshots.sql";
+    const s205EmptySnapshot = "supabase/migrations/20261018022500_s2_05_empty_comparison_candidate_snapshot.sql";
     expect(includeMigration(s1, "s1")).toBe(true);
     expect(includeMigration(s201, "s1")).toBe(false);
     expect(includeMigration(s1, "s2_01")).toBe(true);
@@ -96,6 +112,14 @@ describe("analysis migration upgrade stages", () => {
     expect(includeMigration(s204, "s2_04")).toBe(true);
     expect(includeMigration(s206, "s2_04")).toBe(false);
     expect(includeMigration(s206, "s2_06")).toBe(true);
+    expect(includeMigration(s205Recovery, "s2_04")).toBe(false);
+    expect(includeMigration(s205Recovery, "s2_06")).toBe(true);
+    expect(includeMigration(s205Worker, "s2_04")).toBe(false);
+    expect(includeMigration(s205Worker, "s2_06")).toBe(true);
+    expect(includeMigration(s205CandidateSnapshots, "s2_04")).toBe(false);
+    expect(includeMigration(s205CandidateSnapshots, "s2_06")).toBe(true);
+    expect(includeMigration(s205EmptySnapshot, "s2_04")).toBe(false);
+    expect(includeMigration(s205EmptySnapshot, "s2_06")).toBe(true);
   });
 
   it("normalizes Windows separators and rejects paths or names outside the inventory", () => {
@@ -128,5 +152,33 @@ describe("analysis function upgrade stages", () => {
     expect(() => includeFunction("supabase/functions/unknown/index.ts", "s1"))
       .toThrow("Unreviewed function in upgrade inventory.");
     expect(() => includeFunction("supabase/functions/embed/index.ts", "s3" as MigrationStage)).toThrow();
+  });
+});
+
+describe("analysis function config upgrade stages", () => {
+  it("omits function config for functions not included at the requested stage", () => {
+    const config = [
+      'project_id = "test"',
+      "",
+      "[functions.embed]",
+      "verify_jwt = false",
+      "",
+      "[functions.analyze]",
+      "verify_jwt = false",
+      "",
+      "[db]",
+      "port = 54322",
+    ].join("\r\n");
+    const expectedS1Config = [
+      'project_id = "test"',
+      "",
+      "[functions.embed]",
+      "verify_jwt = false",
+      "",
+      "[db]",
+      "port = 54322",
+    ].join("\r\n");
+    expect(filterFunctionConfigForStage(config, "s1")).toBe(expectedS1Config);
+    expect(filterFunctionConfigForStage(config, "s2_06")).toBe(config);
   });
 });

@@ -35,6 +35,19 @@ const s204Names = new Set([
 
 const s206Names = new Set([
   "20261015221607_s2_06_analysis_leases.sql",
+  // S2-05's persisted analysis/worker contracts are applied with the worker
+  // stage because they consume the S2-06 lease and claim primitives above.
+  "20261017190000_s2_05_retrieval_snapshot.sql",
+  "20261017190100_s2_05_estimate_commands.sql",
+  "20261017190110_s2_05_estimate_json_validation_fix.sql",
+  "20261017190120_s2_05_empty_comparison_normalization.sql",
+  "20261017190130_s2_05_empty_comparison_array_fix.sql",
+  "20261017190200_s2_05_run_commands.sql",
+  "20261017190210_s2_05_analysis_estimate_timeouts.sql",
+  "20261017205245_s2_05_worker_handoff.sql",
+  "20261017230309_s2_05_analysis_recovery.sql",
+  "20261018021500_s2_05_materialized_candidate_snapshots.sql",
+  "20261018022500_s2_05_empty_comparison_candidate_snapshot.sql",
 ]);
 
 const s203Names = new Set([
@@ -87,4 +100,22 @@ export function includeFunction(path, stage) {
     if (normalized.startsWith(prefix)) return stageOrder[owner] <= stageOrder[stage];
   }
   throw new Error("Unreviewed function in upgrade inventory.");
+}
+
+/**
+ * @param {string} config
+ * @param {"s1" | "s2_01" | "s2_02" | "s2_03" | "s2_04" | "s2_06"} stage
+ */
+export function filterFunctionConfigForStage(config, stage) {
+  if (!Object.hasOwn(stageOrder, stage)) throw new Error("Unknown upgrade stage.");
+  let includeSection = true;
+  return config.split(/(?<=\n)/).filter((line) => {
+    const header = line.match(/^\s*\[([^\]]+)\]\s*(?:#.*)?(?:\r?\n)?$/);
+    if (header) {
+      const functionSection = header[1].trim().match(/^functions\.([a-z0-9_-]+)$/i);
+      includeSection = !functionSection
+        || includeFunction(`supabase/functions/${functionSection[1]}/index.ts`, stage);
+    }
+    return includeSection;
+  }).join("");
 }

@@ -1,5 +1,6 @@
 import { FROZEN_RETRIEVAL_PARAMS } from "../retrieval.ts";
 import type {
+  AnalysisPairCursor,
   AIProvider,
   AnalysisConfiguration,
   AnalysisFailureCode,
@@ -10,8 +11,10 @@ import { parseClaimedRow } from "./claim.ts";
 import { loadAnalysisContext } from "./context.ts";
 import type { AnalysisFinalization } from "./finalization.ts";
 import type {
+  AnalysisBatchPersistence,
   AnalysisWorkerDb,
   ClaimedAnalysis,
+  CheckpointState,
 } from "./types.ts";
 import { AnalysisWorkerError } from "./types.ts";
 
@@ -19,7 +22,8 @@ export interface RunAnalysisJobArgs {
   client: AnalysisWorkerDb;
   provider: AIProvider;
   finalization: AnalysisFinalization;
-  analysisId: string;
+  persistence: AnalysisBatchPersistence;
+  analysisId: string | null;
 }
 
 function configText(record: Record<string, unknown>, field: string): string {
@@ -109,8 +113,12 @@ async function readPersistedConfiguration(
 }
 
 interface PersistedResume {
-  startIndex: number;
-  startedAt?: string;
+  processedPairs: number;
+  totalPairs: number | null;
+  findingsCount: number;
+  lastPairFingerprint: string | null;
+  cursor: AnalysisPairCursor | null;
+  startedAt: string;
 }
 
 /**
@@ -128,23 +136,65 @@ async function readPersistedResume(
     .eq("id", analysisId)
     .single<Record<string, unknown>>();
   if (result.error || result.data === null) {
-    return { startIndex: 0 };
+    throw new AnalysisWorkerError(
+      "INTERNAL_ERROR",
+      "Analysis checkpoint unavailable",
+    );
   }
   const checkpoint: unknown = result.data["checkpoint"];
   if (typeof checkpoint !== "object" || checkpoint === null) {
-    return { startIndex: 0 };
+    return {
+      processedPairs: 0,
+      totalPairs: null,
+      findingsCount: 0,
+      lastPairFingerprint: null,
+      cursor: null,
+      startedAt: new Date().toISOString(),
+    };
   }
   const record = checkpoint as Record<string, unknown>;
   const processed = record["processedPairs"];
+  const total = record["totalPairs"];
+  const findingsCount = record["findingsCount"];
   const startedAt = record["startedAt"];
+  const lastPairFingerprint = record["lastPairFingerprint"];
+  const rawCursor = record["cursor"];
+  const cursorRecord =
+    typeof rawCursor === "object" && rawCursor !== null
+      ? (rawCursor as Record<string, unknown>)
+      : null;
+  const cursor =
+    typeof cursorRecord?.["lowChunkId"] === "string" &&
+    typeof cursorRecord["highChunkId"] === "string"
+      ? {
+          lowChunkId: cursorRecord["lowChunkId"],
+          highChunkId: cursorRecord["highChunkId"],
+        }
+      : null;
+  const parsedProcessed =
+    typeof processed === "number" && Number.isInteger(processed) && processed >= 0
+      ? processed
+      : 0;
+  const legacyWithoutCursor = parsedProcessed > 0 && cursor === null;
   return {
-    startIndex:
-      typeof processed === "number" &&
-      Number.isInteger(processed) &&
-      processed >= 0
-        ? processed
-        : 0,
-    startedAt: typeof startedAt === "string" ? startedAt : undefined,
+    processedPairs: legacyWithoutCursor ? 0 : parsedProcessed,
+    totalPairs:
+      typeof total === "number" && Number.isInteger(total) && total >= 0
+        ? total
+        : null,
+    findingsCount:
+      legacyWithoutCursor ||
+      typeof findingsCount !== "number" ||
+      !Number.isInteger(findingsCount) ||
+      findingsCount < 0
+        ? 0
+        : findingsCount,
+    lastPairFingerprint:
+      legacyWithoutCursor || typeof lastPairFingerprint !== "string"
+        ? null
+        : lastPairFingerprint,
+    cursor: legacyWithoutCursor ? null : cursor,
+    startedAt: typeof startedAt === "string" ? startedAt : new Date().toISOString(),
   };
 }
 
@@ -169,10 +219,9 @@ async function settle(
 }
 
 /**
- * One invocation processes at most one batch (N pairs, spec §4.3) and
- * reports what the caller must do next. The loop lives in the caller
- * (self-fetch between batches, spec §4.2); the persisted checkpoint
- * written by each batch renew is what advances the next invocation.
+ * One invocation processes at most one bounded page (N pairs, spec §4.3)
+ * and reports what the caller must do next. The persisted keyset cursor
+ * written by each batch advances the next invocation.
  * Findings accumulate only in memory: the completed close carries this
  * invocation's batch findings. Cross-invocation accumulation without
  * loss requires S2-08 per-batch staging (RLS already hides findings of
@@ -195,7 +244,7 @@ export type RunAnalysisJobResult =
 export async function runAnalysisJob(
   args: RunAnalysisJobArgs,
 ): Promise<RunAnalysisJobResult> {
-  const { client, provider, finalization, analysisId } = args;
+  const { client, provider, finalization, persistence, analysisId } = args;
 
   let claimed: ClaimedAnalysis;
   try {
@@ -217,20 +266,35 @@ export async function runAnalysisJob(
   try {
     // NOTE: claimed.id, not the caller payload: a directed claim falls
     // back to the FIFO sweep (§4.2/§5.1) and may return another job.
-    const context = await loadAnalysisContext(claimed.id, client);
+    const resumed = await readPersistedResume(client, claimed.id);
+    const context = await loadAnalysisContext(
+      claimed.id,
+      claimed.operationId,
+      resumed.cursor,
+      resumed.processedPairs,
+      client,
+    );
     const configuration = await readPersistedConfiguration(
       client,
       claimed.id,
     );
-    const resumed = await readPersistedResume(client, claimed.id);
-    let startIndex = resumed.startIndex;
-    if (context.pairs.length > 0 && startIndex >= context.pairs.length) {
-      // Crash between the last renew and finalize: recompute from zero.
-      // S2-08 deduplicates findings intra-analysis by fingerprint.
-      startIndex = 0;
+    if (
+      resumed.totalPairs !== null &&
+      resumed.totalPairs !== context.candidatePairCount
+    ) {
+      throw new AnalysisWorkerError("ESTIMATE_STALE", "Checkpoint scope changed");
     }
-    if (startIndex >= context.pairs.length) {
-      // Genuinely empty analysis: valid completed close with no findings.
+    const checkpoint: CheckpointState = {
+      processedPairs: resumed.processedPairs,
+      totalPairs: context.candidatePairCount,
+      findingsCount: resumed.findingsCount,
+      lastPairFingerprint: resumed.lastPairFingerprint,
+      startedAt: resumed.startedAt,
+      cursor: resumed.cursor,
+    };
+    if (checkpoint.processedPairs >= context.candidatePairCount) {
+      // Empty scope or a previously persisted EOF: finalize without
+      // re-reading all candidate texts after a retry/crash.
       await settle(finalization, claimed, { kind: "completed", findings: [] });
       return { kind: "completed", claimedId: claimed.id };
     }
@@ -239,9 +303,9 @@ export async function runAnalysisJob(
       context,
       provider,
       client,
+      persistence,
       configuration,
-      startIndex,
-      startedAt: resumed.startedAt,
+      checkpoint,
     });
     if (result.outcome.kind === "failed") {
       if (result.outcome.code === "INTERNAL_ERROR")
@@ -254,7 +318,7 @@ export async function runAnalysisJob(
     }
     if (result.outcome.kind === "aborted")
       return { kind: "aborted", claimedId: claimed.id };
-    if (result.checkpoint.processedPairs < context.pairs.length) {
+    if (result.checkpoint.processedPairs < context.candidatePairCount) {
       return { kind: "has-more", claimedId: claimed.id };
     }
     await settle(finalization, claimed, {

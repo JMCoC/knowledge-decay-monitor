@@ -204,7 +204,9 @@ select throws_ok(format('select public.renew_analysis_lease(%L::uuid, %L::uuid, 
 -- (o) Renew rejects an attempt older than 30 minutes.
 update public.analyses
   set lease_expires_at = clock_timestamp() + interval '1 minute',
-      started_at = clock_timestamp() - interval '31 minutes'
+      started_at = clock_timestamp() - interval '31 minutes',
+      attempt_started_at = clock_timestamp() - interval '31 minutes',
+      attempt_deadline_at = clock_timestamp() - interval '1 minute'
   where id = pg_temp.analysis_fixture_id('renew_ok');
 select throws_ok(format('select public.renew_analysis_lease(%L::uuid, %L::uuid, %L::jsonb)',
     pg_temp.analysis_fixture_id('renew_ok'),
