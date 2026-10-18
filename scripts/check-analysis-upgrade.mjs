@@ -1,9 +1,9 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { includeFunction, includeMigration } from "./analysis-upgrade-policy.mjs";
+import { filterFunctionConfigForStage, includeFunction, includeMigration } from "./analysis-upgrade-policy.mjs";
 import { redactCliOutput } from "./cli-output-redaction.mjs";
 
 if (process.env.CI !== "true" || process.env.GITHUB_ACTIONS !== "true") {
@@ -278,7 +278,12 @@ function copyS1Workspace(temporaryRoot, stage) {
     const destination = resolve(supabaseRoot, relativeFile.slice("supabase/".length).split("/").join(sep));
     if (!destination.startsWith(`${supabaseRoot}${sep}`)) throw new Error("Unexpected Supabase copy destination.");
     mkdirSync(dirname(destination), { recursive: true });
-    copyFileSync(source, destination);
+    if (relativeFile === "supabase/config.toml") {
+      const config = readFileSync(source, "utf8");
+      writeFileSync(destination, filterFunctionConfigForStage(config, stage), "utf8");
+    } else {
+      copyFileSync(source, destination);
+    }
   }
   if (!trackedFiles.includes("supabase/config.toml") || !trackedFiles.includes("supabase/seed.sql")
       || !trackedFiles.includes("supabase/fixtures/upgrade/s1-seed.sql")) {

@@ -101,3 +101,21 @@ export function includeFunction(path, stage) {
   }
   throw new Error("Unreviewed function in upgrade inventory.");
 }
+
+/**
+ * @param {string} config
+ * @param {"s1" | "s2_01" | "s2_02" | "s2_03" | "s2_04" | "s2_06"} stage
+ */
+export function filterFunctionConfigForStage(config, stage) {
+  if (!Object.hasOwn(stageOrder, stage)) throw new Error("Unknown upgrade stage.");
+  let includeSection = true;
+  return config.split(/(?<=\n)/).filter((line) => {
+    const header = line.match(/^\s*\[([^\]]+)\]\s*(?:#.*)?(?:\r?\n)?$/);
+    if (header) {
+      const functionSection = header[1].trim().match(/^functions\.([a-z0-9_-]+)$/i);
+      includeSection = !functionSection
+        || includeFunction(`supabase/functions/${functionSection[1]}/index.ts`, stage);
+    }
+    return includeSection;
+  }).join("");
+}

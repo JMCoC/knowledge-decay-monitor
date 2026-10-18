@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  filterFunctionConfigForStage,
   includeFunction,
   includeMigration,
   migrationStage,
@@ -151,5 +152,33 @@ describe("analysis function upgrade stages", () => {
     expect(() => includeFunction("supabase/functions/unknown/index.ts", "s1"))
       .toThrow("Unreviewed function in upgrade inventory.");
     expect(() => includeFunction("supabase/functions/embed/index.ts", "s3" as MigrationStage)).toThrow();
+  });
+});
+
+describe("analysis function config upgrade stages", () => {
+  it("omits function config for functions not included at the requested stage", () => {
+    const config = [
+      'project_id = "test"',
+      "",
+      "[functions.embed]",
+      "verify_jwt = false",
+      "",
+      "[functions.analyze]",
+      "verify_jwt = false",
+      "",
+      "[db]",
+      "port = 54322",
+    ].join("\r\n");
+    const expectedS1Config = [
+      'project_id = "test"',
+      "",
+      "[functions.embed]",
+      "verify_jwt = false",
+      "",
+      "[db]",
+      "port = 54322",
+    ].join("\r\n");
+    expect(filterFunctionConfigForStage(config, "s1")).toBe(expectedS1Config);
+    expect(filterFunctionConfigForStage(config, "s2_06")).toBe(config);
   });
 });
