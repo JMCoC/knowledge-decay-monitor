@@ -925,6 +925,15 @@ No other files. In particular: no migrations, no `database.ts`, no `contracts.ts
 
   Do not leave the contradiction unresolved before the final smoke. If the decision is deferred, leave an explicit `TODO(Task 6): resolver §7.2 vs §7.3 (role enviado o no) antes del smoke final` in this step.
 
+- [ ] **Step 1c: Clarify “abort” in spec §8.3**
+
+  CLARIFICACIÓN SPEC §8.3 — "abortar" al superar 256 KiB significa
+  `reader.cancel()` (cierra el body del stream), no `request.abort()` sobre
+  la conexión HTTP. En `fetch` nativo cancelar el reader es suficiente;
+  abortar el `AbortSignal` implicaría matar el response entero y no es
+  necesario. Actualizar spec §8.3 con esta aclaración si aplica, o
+  dejar como nota en el runbook.
+
 - [ ] **Step 2: Update the 503 troubleshooting and env tables**
 
   - Section 4 row `503 {"error":"not ready"}`: after S2-07 the cause is missing provider credentials/base URLs or `createFinalization()`/`createBatchPersistence()` (S2-08), not `createProvider()` being unimplemented.
