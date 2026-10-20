@@ -230,6 +230,57 @@ describe("Cerebras provider transport", () => {
     });
     expect(aborted).toBe(true);
   });
+
+  it("times out while reading the Groq body and aborts the Groq request signal", async () => {
+    let calls = 0;
+    let aborted = false;
+    let groqInput = "";
+    const slowGroq: ProviderFetch = (input, init) => {
+      calls += 1;
+      if (calls === 1) {
+        return Promise.resolve(new Response(null, { status: 500 }));
+      }
+      groqInput = input;
+      const signal = init.signal;
+      const stream = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          return new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(() => {
+              controller.enqueue(
+                new TextEncoder().encode(JSON.stringify({ findings: [] })),
+              );
+              resolve();
+            }, 50);
+            signal?.addEventListener(
+              "abort",
+              () => {
+                aborted = true;
+                clearTimeout(timer);
+                reject(new DOMException("Aborted", "AbortError"));
+              },
+              { once: true },
+            );
+          });
+        },
+      });
+      return Promise.resolve(
+        new Response(stream, {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    };
+
+    const result = await analyze(slowGroq, 5);
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "PROVIDER_UNAVAILABLE" },
+    });
+    expect(aborted).toBe(true);
+    expect(calls).toBe(2);
+    expect(groqInput).toBe("https://groq.test/openai/v1/chat/completions");
+  });
 });
 
 describe("createProvider environment validation", () => {

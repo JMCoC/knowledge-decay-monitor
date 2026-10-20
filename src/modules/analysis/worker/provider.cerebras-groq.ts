@@ -41,6 +41,13 @@ export interface CerebrasGroqProviderOptions {
   env?: ProviderEnvironment;
 }
 
+interface ProviderAttemptSpec {
+  provider: string;
+  model: string;
+  baseUrl: string;
+  apiKey: string;
+}
+
 const INVALID_OUTPUT: AIProviderResult = {
   ok: false,
   error: { code: "INVALID_PROVIDER_OUTPUT" },
@@ -266,12 +273,11 @@ function extractContent(payload: unknown): string | null {
   return typeof content === "string" ? content : null;
 }
 
-async function callCerebras(
+async function callProvider(
   fetchFn: ProviderFetch,
-  env: ProviderEnvironment,
   timeoutMs: number,
+  spec: ProviderAttemptSpec,
   pair: AnalysisCandidatePair,
-  configuration: AnalysisConfiguration,
   callerSignal: AbortSignal | undefined,
 ): Promise<AIProviderResult> {
   if (callerSignal?.aborted) {
@@ -283,9 +289,9 @@ async function callCerebras(
     ? AbortSignal.any([callerSignal, timeoutSignal])
     : timeoutSignal;
 
-  const baseUrl = (env.CEREBRAS_BASE_URL ?? "").replace(/\/$/, "");
+  const baseUrl = spec.baseUrl.replace(/\/$/, "");
   const requestBody = JSON.stringify({
-    model: configuration.providers.primary.model,
+    model: spec.model,
     messages: [
       { role: "system", content: ANALYSIS_PROMPT_V1 },
       {
@@ -308,7 +314,7 @@ async function callCerebras(
     response = await fetchFn(`${baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
-        authorization: `Bearer ${env.CEREBRAS_API_KEY ?? ""}`,
+        authorization: `Bearer ${spec.apiKey}`,
         "content-type": "application/json",
         accept: "application/json",
       },
@@ -320,12 +326,19 @@ async function callCerebras(
     return abortToError(callerSignal);
   }
 
+  if (callerSignal?.aborted) {
+    return INTERNAL_ERROR;
+  }
+
   if (!response.ok) {
     await response.body?.cancel().catch(() => undefined);
     return abortToError(callerSignal);
   }
 
   const body = await readBoundedBody(response);
+  if (callerSignal?.aborted) {
+    return INTERNAL_ERROR;
+  }
   if (!body.ok) {
     if (body.kind === "too_large" || body.kind === "invalid") {
       return INVALID_OUTPUT;
@@ -358,12 +371,17 @@ async function callCerebras(
   }
 
   if (validated.data.findings.length === 0) {
-    return { ok: true, findings: [] };
+    return callerSignal?.aborted
+      ? INTERNAL_ERROR
+      : { ok: true, findings: [] };
   }
 
   const mapped = mapWireToInternalFindings(validated.data.findings, pair);
   if (!mapped.ok) {
     return INVALID_OUTPUT;
+  }
+  if (callerSignal?.aborted) {
+    return INTERNAL_ERROR;
   }
   return { ok: true, findings: mapped.findings };
 }
@@ -382,14 +400,61 @@ export function createCerebrasGroqProvider(
       } catch {
         return INTERNAL_ERROR;
       }
-      return callCerebras(
+
+      if (signal?.aborted) {
+        return INTERNAL_ERROR;
+      }
+
+      const cerebrasOutcome = await callProvider(
         options.fetchFn,
-        env,
         timeoutMs,
+        {
+          provider: configuration.providers.primary.provider,
+          model: configuration.providers.primary.model,
+          baseUrl: env.CEREBRAS_BASE_URL ?? "",
+          apiKey: env.CEREBRAS_API_KEY ?? "",
+        },
         pair,
-        configuration,
         signal,
       );
+
+      if (signal?.aborted) {
+        return INTERNAL_ERROR;
+      }
+      if (cerebrasOutcome.ok) {
+        return cerebrasOutcome;
+      }
+      if (cerebrasOutcome.error.code === "INTERNAL_ERROR") {
+        return INTERNAL_ERROR;
+      }
+
+      const groqOutcome = await callProvider(
+        options.fetchFn,
+        timeoutMs,
+        {
+          provider: configuration.providers.fallback.provider,
+          model: configuration.providers.fallback.model,
+          baseUrl: env.GROQ_BASE_URL ?? "",
+          apiKey: env.GROQ_API_KEY ?? "",
+        },
+        pair,
+        signal,
+      );
+
+      if (signal?.aborted) {
+        return INTERNAL_ERROR;
+      }
+      if (groqOutcome.ok) {
+        return groqOutcome;
+      }
+      if (groqOutcome.error.code === "INTERNAL_ERROR") {
+        return INTERNAL_ERROR;
+      }
+
+      const cerebrasInvalid =
+        cerebrasOutcome.error.code === "INVALID_PROVIDER_OUTPUT";
+      const groqInvalid = groqOutcome.error.code === "INVALID_PROVIDER_OUTPUT";
+      return cerebrasInvalid || groqInvalid ? INVALID_OUTPUT : UNAVAILABLE;
     },
   };
 }
