@@ -258,11 +258,22 @@ describe("runAnalysisJob", () => {
     expect(finalization.calls).toHaveLength(1);
   });
 
-  it("keeps missing production provider/finalization factories fail-loud", () => {
-    expect(() => createProvider()).toThrow("S2-07 not merged: AIProvider unavailable.");
-    expect(() => createFinalization()).toThrow(
-      "S2-08 not merged: AnalysisFinalization unavailable.",
-    );
+  it("builds a real provider and keeps the missing finalization fail-loud", () => {
+    vi.stubEnv("CEREBRAS_API_KEY", "test-cerebras-key");
+    vi.stubEnv("GROQ_API_KEY", "test-groq-key");
+    vi.stubEnv("CEREBRAS_BASE_URL", "https://cerebras.test/v1");
+    vi.stubEnv("GROQ_BASE_URL", "https://groq.test/openai/v1");
+    try {
+      const provider = createProvider();
+      expect(provider).not.toBeInstanceOf(Promise);
+      expect(typeof provider.analyzePair).toBe("function");
+      // TODO(S2-08): update to expect both factories ready once S2-08 merges.
+      expect(() => createFinalization()).toThrow(
+        "S2-08 not merged: AnalysisFinalization unavailable.",
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("returns quietly when no job is claimed and supports a sweep", async () => {

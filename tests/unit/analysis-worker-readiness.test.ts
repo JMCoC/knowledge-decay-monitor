@@ -27,7 +27,7 @@ const ENV: AnalyzeEnv = {
 };
 
 function throwingProvider(): never {
-  throw new Error("S2-07 not merged: AIProvider unavailable.");
+  throw new Error("provider unavailable");
 }
 
 function throwingFinalization(): never {
@@ -294,12 +294,46 @@ describe("analyze handler readiness and async acknowledgement", () => {
     expect(d.runJobFn).toHaveBeenCalledWith(expect.objectContaining({ persistence: expect.anything() }));
   });
 
-  it("keeps failing factories explicit", () => {
-    expect(() => createProvider()).toThrow("S2-07 not merged: AIProvider unavailable.");
-    expect(() => createFinalization()).toThrow("S2-08 not merged: AnalysisFinalization unavailable.");
-    expect(() => throwingPersistence()).toThrow(
-      "S2-08 not merged: analysis batch staging unavailable.",
-    );
+  it("builds a real provider and keeps S2-08 factories explicit", () => {
+    vi.stubEnv("CEREBRAS_API_KEY", "test-cerebras-key");
+    vi.stubEnv("GROQ_API_KEY", "test-groq-key");
+    vi.stubEnv("CEREBRAS_BASE_URL", "https://cerebras.test/v1");
+    vi.stubEnv("GROQ_BASE_URL", "https://groq.test/openai/v1");
+    try {
+      const provider = createProvider();
+      expect(provider).not.toBeInstanceOf(Promise);
+      expect(typeof provider.analyzePair).toBe("function");
+      // TODO(S2-08): update to expect both factories ready once S2-08 merges.
+      expect(() => createFinalization()).toThrow("S2-08 not merged: AnalysisFinalization unavailable.");
+      expect(() => throwingPersistence()).toThrow(
+        "S2-08 not merged: analysis batch staging unavailable.",
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("returns 503 without a claim when provider credentials are missing", async () => {
+    vi.stubEnv("CEREBRAS_API_KEY", "");
+    vi.stubEnv("GROQ_API_KEY", "");
+    vi.stubEnv("CEREBRAS_BASE_URL", "");
+    vi.stubEnv("GROQ_BASE_URL", "");
+    try {
+      const d = deps({
+        createProviderFn: createProvider,
+        createFinalizationFn: ready,
+        createBatchPersistenceFn: ready,
+      });
+      const response = await handleAnalyzeRequest(
+        post({ analysisId: "analysis-1" }, "test-token"),
+        ENV,
+        d,
+      );
+      expect(response.status).toBe(503);
+      expect(d.runJobFn).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("parses fake behavior without allowing unsupported values", async () => {

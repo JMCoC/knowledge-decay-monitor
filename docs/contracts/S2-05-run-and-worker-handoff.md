@@ -14,11 +14,13 @@ S2-05 crea o recupera una ejecución durable en PostgreSQL, sus versiones exacta
 y una reserva de créditos. La RPC deja el análisis en `queued`; no procesa
 documentos ni llama proveedores.
 
-El procesamiento continúa a cargo del worker en el repositorio separado
-`KDM/kdm-demo-worker`. Esta entrega no copia su código, cambia su configuración
-ni añade una cola o un endpoint de proveedor alternativo. La app dispara la
-Edge Function de análisis después del commit; la durabilidad se mantiene en el
-job almacenado en PostgreSQL.
+El procesamiento de análisis continúa a cargo del worker Edge Function de este
+repositorio (`supabase/functions/analyze/` + `src/modules/analysis/worker/`).
+El repo separado `KDM/kdm-demo-worker` es el worker histórico de ingesta Node;
+no procesa análisis. Esta entrega no copia el código del worker de ingesta,
+cambia su configuración, ni añade una cola o un endpoint de proveedor
+alternativo. La app dispara la Edge Function de análisis después del commit; la
+durabilidad se mantiene en el job almacenado en PostgreSQL.
 
 Las RPC de este contrato son privadas para el servidor de la aplicación. No
 constituyen endpoints para el navegador ni un API REST nuevo.
@@ -233,4 +235,5 @@ regla S2-04 de no persistir candidatos; la estimación no cambia.
 La cesión y la terminalización por deadline no liquidan créditos ni emiten
 eventos. Esa unidad atómica, junto con el staging durable de hallazgos, sigue
 siendo responsabilidad de S2-08. La migración de handoff no modifica el worker
-del repositorio separado `KDM/kdm-demo-worker`.
+de ingesta `KDM/kdm-demo-worker`; el worker de análisis vive en este
+repositorio.

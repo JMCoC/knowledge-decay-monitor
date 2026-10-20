@@ -11,12 +11,21 @@ import { createProvider } from "../../src/modules/analysis/worker/provider";
 import { FakeAnalysisFinalization } from "../../supabase/functions/analyze/_test_doubles/analysis-finalization.fake";
 
 describe("analysis seams", () => {
-  it("createProvider throws until S2-07 merges", () => {
-    expect(() => createProvider()).toThrow(
-      "S2-07 not merged: AIProvider unavailable.",
-    );
+  it("createProvider returns a real AIProvider", () => {
+    vi.stubEnv("CEREBRAS_API_KEY", "test-cerebras-key");
+    vi.stubEnv("GROQ_API_KEY", "test-groq-key");
+    vi.stubEnv("CEREBRAS_BASE_URL", "https://cerebras.test/v1");
+    vi.stubEnv("GROQ_BASE_URL", "https://groq.test/openai/v1");
+    try {
+      const provider = createProvider();
+      expect(provider).not.toBeInstanceOf(Promise);
+      expect(typeof provider.analyzePair).toBe("function");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
+  // TODO(S2-08): update to expect both factories ready once S2-08 merges.
   it("createFinalization throws until S2-08 merges", () => {
     expect(() => createFinalization()).toThrow(
       "S2-08 not merged: AnalysisFinalization unavailable.",
