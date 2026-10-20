@@ -475,8 +475,8 @@ No other files. In particular: no migrations, no `database.ts`, no `contracts.ts
   - quote absent from the corresponding side → `INVALID_PROVIDER_OUTPUT`;
   - quote from the other side → `INVALID_PROVIDER_OUTPUT`;
   - quote with leading/trailing spaces, double spaces, case change or Unicode normalization → `INVALID_PROVIDER_OUTPUT` (Review Focus #5);
-  - two findings with the same verbatim quote → invalid;
-  - `obsolescence` with equal `versionId` or equal `documentId` → invalid; with both different → valid;
+  - two quotes with the same text within a single finding → invalid (intra-finding dedup); the same verbatim quote across distinct findings is currently allowed (S2-08 will dedupe cross-analysis);
+  - `obsolescence` invalid only when both versionId AND documentId are equal; valid when either differs (spec §5.3.6 OR semantics);
   - `contradiction` is not subject to the obsolescence identity check;
   - 2xx body with missing `choices`, non-string content, non-JSON content, or a JSON string instead of an object → `INVALID_PROVIDER_OUTPUT`.
 
@@ -491,9 +491,9 @@ No other files. In particular: no migrations, no `database.ts`, no `contracts.ts
 - [ ] **Step 4: Implement validation and mapping**
 
   - Keep `wireSchema` strict with the code-point refinements from Task 1.
-  - After parse, collect all quotes; reject duplicates by exact string equality (no normalization).
+  - After parse, for each finding collect its quotes and reject duplicates within that finding by exact string equality (no normalization). Cross-finding dedup is S2-08.
   - For each finding, match each evidence side to `pair.source` or `pair.comparison`; `text.includes(quote)` must be exact. Do not trim the quote for this check.
-  - For `obsolescence`, reject when `source.versionId === comparison.versionId` or `source.documentId === comparison.documentId`.
+  - For `obsolescence`, reject only when BOTH `source.versionId === comparison.versionId` AND `source.documentId === comparison.documentId`. Accept when either differs (spec §5.3.6 OR semantics).
   - Map refs and null locations exactly as in the Interfaces block.
   - Return `INVALID_PROVIDER_OUTPUT` for every validation failure; never throw a raw validation error.
 

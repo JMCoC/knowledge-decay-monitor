@@ -3,6 +3,7 @@ import type {
   AIProviderResult,
   AnalysisCandidatePair,
   AnalysisConfiguration,
+  InternalFinding,
 } from "../../../types/analysis-internal.ts";
 import {
   CEREBRAS_PROVIDER,
@@ -16,6 +17,7 @@ import {
   buildAnalysisPromptV1,
 } from "../prompts/v1.ts";
 import { WIRE_JSON_SCHEMA, wireSchema } from "../prompts/v1-schema.ts";
+import type { WireFinding } from "../prompts/v1-schema.ts";
 
 const BODY_LIMIT_BYTES = 262_144;
 const VERSION_NONE = "none";
@@ -167,6 +169,91 @@ async function readBoundedBody(response: Response): Promise<BodyReadResult> {
   return { ok: true, text: new TextDecoder().decode(bytes) };
 }
 
+type MappedFindingsResult =
+  | { ok: true; findings: InternalFinding[] }
+  | { ok: false };
+
+function mapWireToInternalFindings(
+  wireFindings: WireFinding[],
+  pair: AnalysisCandidatePair,
+): MappedFindingsResult {
+  const findings: InternalFinding[] = [];
+  for (const wireFinding of wireFindings) {
+    // Spec §5.3.5: dedup intra-finding. Two entries with the same
+    // quote within a single finding are invalid (even across sides).
+    // Cross-finding dedup is S2-08 (fingerprint), not here.
+    const quotesInFinding = new Set<string>();
+    for (const entry of wireFinding.evidence) {
+      if (quotesInFinding.has(entry.quote)) {
+        return { ok: false };
+      }
+      quotesInFinding.add(entry.quote);
+    }
+    const sourceEvidence = wireFinding.evidence.find(
+      (entry) => entry.side === "source",
+    );
+    const comparisonEvidence = wireFinding.evidence.find(
+      (entry) => entry.side === "comparison",
+    );
+    if (!sourceEvidence || !comparisonEvidence) {
+      return { ok: false };
+    }
+
+    if (!pair.source.text.includes(sourceEvidence.quote)) {
+      return { ok: false };
+    }
+    if (!pair.comparison.text.includes(comparisonEvidence.quote)) {
+      return { ok: false };
+    }
+
+    // Spec §5.3.6: obsolescence is valid if versionId differs OR
+    // documentId differs. Reject only when BOTH are identical
+    // (same document AND same version = no obsolescence signal).
+    // The common case (same document, newer version) is the primary
+    // PRD §19 obsolescence scenario and must be accepted.
+    if (wireFinding.type === "obsolescence") {
+      const sameVersion =
+        pair.source.versionId === pair.comparison.versionId;
+      const sameDocument =
+        pair.source.documentId === pair.comparison.documentId;
+      if (sameVersion && sameDocument) {
+        return { ok: false };
+      }
+    }
+
+    findings.push({
+      type: wireFinding.type,
+      severity: wireFinding.severity,
+      confidence: wireFinding.confidence,
+      explanation: wireFinding.explanation,
+      evidence: [
+        {
+          documentId: pair.source.documentId,
+          versionId: pair.source.versionId,
+          chunkId: pair.source.chunkId,
+          role: "source",
+          snapshot: sourceEvidence.quote,
+          pageNumber: null,
+          section: null,
+          sectionHeading: null,
+        },
+        {
+          documentId: pair.comparison.documentId,
+          versionId: pair.comparison.versionId,
+          chunkId: pair.comparison.chunkId,
+          role: "comparison",
+          snapshot: comparisonEvidence.quote,
+          pageNumber: null,
+          section: null,
+          sectionHeading: null,
+        },
+      ],
+    });
+  }
+
+  return { ok: true, findings };
+}
+
 function extractContent(payload: unknown): string | null {
   if (!isRecord(payload) || !Array.isArray(payload.choices)) {
     return null;
@@ -274,8 +361,11 @@ async function callCerebras(
     return { ok: true, findings: [] };
   }
 
-  // TODO(Task 3): map non-empty wire findings to InternalFinding.
-  return INVALID_OUTPUT;
+  const mapped = mapWireToInternalFindings(validated.data.findings, pair);
+  if (!mapped.ok) {
+    return INVALID_OUTPUT;
+  }
+  return { ok: true, findings: mapped.findings };
 }
 
 export function createCerebrasGroqProvider(
