@@ -30,7 +30,7 @@ git diff --check
 
 **Strict TDD.** Every task writes failing tests first (red), implements minimally (green), then refactors. A task with tests written after the implementation is a failed task. No tests may be skipped.
 
-**Do not touch.** The closed S2-07 spec, `src/types/contracts.ts` (except no code change; only the S2-05 documentation correction), `src/modules/ingestion/**`, `src/modules/credits/**`, SQL migrations, generated database types, RLS, or files outside this plan's File Structure.
+**Do not touch.** The closed S2-07 spec (except the §7.2 role fix explicitly scheduled in Task 6 Step 1b), `src/types/contracts.ts` (except no code change; only the S2-05 documentation correction), `src/modules/ingestion/**`, `src/modules/credits/**`, SQL migrations, generated database types, RLS, or files outside this plan's File Structure.
 
 **Fakes never reach `src/`.** Test doubles stay in `supabase/functions/analyze/_test_doubles/` (not `tests/fakes/`). The existing `FakeAnalysisProvider` is preserved; no production barrel may resolve to a fake.
 
@@ -64,7 +64,7 @@ Five failure modes the spec implies that need explicit pinning. Each has a test 
 
 | File | Responsibility | Owner | Task |
 |---|---|---|---|
-| `docs/superpowers/specs/2026-10-20-s2-07-analysis-provider-spec.md` | closed source; never edited by this plan | team | — |
+| `docs/superpowers/specs/2026-10-20-s2-07-analysis-provider-spec.md` | closed source; only the Task 6 Step 1b §7.2 role fix | team | 6 |
 | `scripts/analysis-provider-smoke.ts` | manual 3-case real-provider smoke; no secrets/body logging | Diego | 0, 6 |
 | `package.json` | add `test:provider:real` script | Diego | 0 |
 | `src/modules/analysis/provider-config.ts` | Deno-safe canonical provider/model/timeout constants | Diego | 1 |
@@ -894,6 +894,9 @@ No other files. In particular: no migrations, no `database.ts`, no `contracts.ts
 - Modify: `docs/testing/s2-06-analysis-worker-runbook.md`
 - Modify: `docs/superpowers/specs/2026-10-15-s2-06-analysis-worker-spec.md` (§12.1 rows 13–16)
 - Modify: `docs/superpowers/plans/2026-10-20-s2-07-analysis-provider-plan.md` (Task 0 appendix final evidence)
+- Modify: `scripts/analysis-provider-smoke.ts` (Step 1b: send prompt v1)
+- Modify: `docs/superpowers/specs/2026-10-20-s2-07-analysis-provider-spec.md` (Step 1b: §7.2 role fix; approved exception to the closed-spec rule)
+- Modify: `src/modules/analysis/prompts/v1.ts` (Step 1b: align system prompt with §7.2 if role is removed)
 - Test: `pnpm run test:provider:real` plus the full gates.
 
 **Interfaces:**
@@ -909,6 +912,18 @@ No other files. In particular: no migrations, no `database.ts`, no `contracts.ts
   - evidence table columns: command, date, provider/model, `promptVersion`, `outputSchemaVersion`, duration, PASS/FAIL;
   - warning: never print keys, prompts, chunks or raw provider bodies;
   - note: the smoke is manual and never runs in CI.
+
+- [ ] **Step 1b: Make the smoke exercise prompt v1 and resolve the role ambiguity**
+
+  **Smoke prompt v1.** Modify `scripts/analysis-provider-smoke.ts` to use `ANALYSIS_PROMPT_V1` as the system message and `buildAnalysisPromptV1(pair)` as the user message, both imported from `src/modules/analysis/prompts/v1.ts`. Use a fixture pair with real texts, not `"alpha"`/`"beta"`. The current smoke sends local generic prompts and does not exercise prompt v1; this turns the smoke into a real validation of the prompt against Cerebras/Groq.
+
+  Document the expectation after the change: no `400`/`param=response_format`; `200` with a `findings` array, possibly empty. Keep `isFindingsResponse` honest about that expectation; do not require non-empty findings.
+
+  **Fix spec §7.2 vs §7.3 (role).** §7.2 says “Each excerpt includes its role”, but §7.3 does not send a role field. Choose one:
+  - (a) Recommended: remove “its role” from the §7.2 sentence. The `SOURCE`/`COMPARISON` labels already encode the role. Apply the same change to `ANALYSIS_PROMPT_V1` in `src/modules/analysis/prompts/v1.ts` and adjust any test that asserts the removed phrase.
+  - (b) Add `role: {{source.role}}` and `role: {{comparison.role}}` to the §7.3 template and to `buildAnalysisPromptV1`.
+
+  Do not leave the contradiction unresolved before the final smoke. If the decision is deferred, leave an explicit `TODO(Task 6): resolver §7.2 vs §7.3 (role enviado o no) antes del smoke final` in this step.
 
 - [ ] **Step 2: Update the 503 troubleshooting and env tables**
 

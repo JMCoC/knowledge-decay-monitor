@@ -110,6 +110,27 @@ describe("deno import extensions", () => {
     expect(violations).toEqual([]);
   });
 
+  it("covers provider constants, prompt v1 and wire schema with .ts imports", () => {
+    const moduleRoots = [
+      "src/modules/analysis/provider-config.ts",
+      "src/modules/analysis/prompts/v1.ts",
+      "src/modules/analysis/prompts/v1-schema.ts",
+    ].map((path) => join(REPO_ROOT, path));
+
+    const v1Root = join(REPO_ROOT, "src/modules/analysis/prompts/v1.ts");
+
+    for (const root of moduleRoots) {
+      const { files, violations } = collectGraph(root);
+      expect(files).toContain(root);
+      expect(violations).toEqual([]);
+      if (root === v1Root) {
+        expect(files).toContain(
+          join(REPO_ROOT, "src/types/analysis-internal.ts"),
+        );
+      }
+    }
+  });
+
   it("finds extensionless imports inside child modules", () => {
     const root = mkdtempSync(join(tmpdir(), "kdm-deno-graph-"));
     const allowedDir = join(root, "analyze");
