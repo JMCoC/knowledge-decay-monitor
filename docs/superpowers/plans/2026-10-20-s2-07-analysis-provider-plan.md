@@ -1008,3 +1008,18 @@ RESULT: PASS
 ```
 
 Ejecutado por Diego el 2026-10-20. Modelos `qwen-3.8-27b` y `openai/gpt-oss-20b` aceptados por sus proveedores. Task 1 autorizada.
+
+### Task 6 — smoke final con prompt v1 real
+
+Fecha: 2026-10-20
+Comando: `pnpm run test:provider:real`
+Exit code: `0`
+
+```text
+{"case":"both-valid","providers":[{"provider":"cerebras","model":"qwen-3.8-27b","status":200,"valid":true,"duration_ms":921},{"provider":"groq","model":"openai/gpt-oss-20b","status":200,"valid":true,"duration_ms":855}],"promptVersion":"s2-07-prompt-v1","outputSchemaVersion":"s2-07-findings-v1","result":"PASS"}
+{"case":"cerebras-invalid-groq-valid","providers":[{"provider":"cerebras","model":"qwen-3.8-27b","status":401,"valid":false,"duration_ms":128,"error_type":"invalid_request_error","error_code":"wrong_api_key","error_param":"api_key"},{"provider":"groq","model":"openai/gpt-oss-20b","status":200,"valid":true,"duration_ms":661}],"promptVersion":"s2-07-prompt-v1","outputSchemaVersion":"s2-07-findings-v1","result":"PASS"}
+{"case":"both-invalid","providers":[{"provider":"cerebras","model":"qwen-3.8-27b","status":401,"valid":false,"duration_ms":132,"error_type":"invalid_request_error","error_code":"wrong_api_key","error_param":"api_key"},{"provider":"groq","model":"openai/gpt-oss-20b","status":401,"valid":false,"duration_ms":361,"error_type":"invalid_request_error","error_code":"invalid_api_key"}],"promptVersion":"s2-07-prompt-v1","outputSchemaVersion":"s2-07-findings-v1","result":"PASS"}
+RESULT: PASS
+```
+
+Ejecutado con `ANALYSIS_PROMPT_V1` y `buildAnalysisPromptV1` (real prompt v1). Ambos providers aceptan el system prompt real.
