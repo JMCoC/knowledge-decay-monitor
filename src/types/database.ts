@@ -1238,6 +1238,14 @@ export type Database = {
         }
         Returns: string
       }
+      finalize_analysis_success: {
+        Args: {
+          p_analysis_id: string
+          p_operation_id: string
+          p_reported_findings_count: number
+        }
+        Returns: undefined
+      }
       finish_processing: {
         Args: { p_chunks: Json; p_operation_id: string; p_version_id: string }
         Returns: undefined
@@ -1315,6 +1323,17 @@ export type Database = {
           p_attempt_id: string
           p_object_absent: boolean
           p_version_id: string
+        }
+        Returns: boolean
+      }
+      persist_analysis_batch: {
+        Args: {
+          p_analysis_id: string
+          p_checkpoint: Json
+          p_expected_processed_pairs: number
+          p_findings: Json
+          p_has_more: boolean
+          p_operation_id: string
         }
         Returns: boolean
       }
