@@ -589,6 +589,24 @@ select is((select count(*)::integer from private.analysis_finding_staging
   'has_more=false stages the finding');
 select pg_temp.close_persist_fixture('persist_final');
 
+-- (k-4b) A fresh analysis has checkpoint NULL; the first batch must treat it
+-- as processedPairs=0, matching yield_analysis_batch.
+select pg_temp.persist_analysis_fixture('persist_null_initial');
+update public.analyses set checkpoint = null
+  where id = pg_temp.analysis_fixture_id('persist_null_initial');
+select is(public.persist_analysis_batch(
+    pg_temp.analysis_fixture_id('persist_null_initial'),
+    pg_temp.persist_op('persist_null_initial'), 0,
+    '{"processedPairs":1,"totalPairs":10,"findingsCount":1}'::jsonb,
+    jsonb_build_array(pg_temp.persist_finding(
+      'persist_null_initial', 'contradiction', 'Medium', 'null source', 'null comparison')),
+    false),
+  true, 'A NULL checkpoint accepts the first batch at expected cursor 0');
+select is((select checkpoint ->> 'processedPairs' from public.analyses
+    where id = pg_temp.analysis_fixture_id('persist_null_initial')), '1',
+  'A NULL checkpoint advances to the first batch cursor');
+select pg_temp.close_persist_fixture('persist_null_initial');
+
 -- (k-5) Malformed findings are rejected before any write.
 select pg_temp.persist_analysis_fixture('persist_malformed');
 select throws_ok(format(
