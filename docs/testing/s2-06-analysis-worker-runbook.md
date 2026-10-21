@@ -145,7 +145,7 @@ not move credits or emit events in v1 — TODO S2-08.
 | Symptom | Cause | Fix |
 |---|---|---|
 | `401 {"error":"unauthorized"}` | Missing/wrong `Authorization: Bearer` (spec §11 G2) | Use the exact `ANALYSIS_INTERNAL_TOKEN` value |
-| `503 {"error":"not ready"}` | `createProvider()`/`createFinalization()` throw (S2-07/S2-08 unmerged) or client init failed | Expected until S2-07/S2-08 merge; jobs stay `queued` |
+| `503 {"error":"not ready"}` | Missing/invalid provider credentials or base URLs, `createFinalization()`/`createBatchPersistence()` throw (S2-08), or client init failed | After S2-07, `createProvider()` is real: verify the four provider variables, then wait for S2-08; jobs stay `queued` |
 | `400 {"error":"invalid analysisId"}` | Missing/empty `analysisId` in body | Send `{ "analysisId": "<uuid>" }` |
 | `worker boot error: Module not found "..." ` (no `.ts`) | Relative import without extension in the Edge graph | Add `.ts` (rule 9 below); the guard test fails first |
 | `Env name cannot start with SUPABASE_, skipping` | `--env-file` values with reserved prefix are dropped | Use `ANALYSIS_*` names (section 5) |
@@ -161,6 +161,10 @@ not move credits or emit events in v1 — TODO S2-08.
 | `ANALYSIS_SUPABASE_SERVICE_ROLE_KEY` | local stack | DB fallback key |
 | `SUPABASE_URL` | **runtime-injected** (`http://kong:8000`) | Real DB connectivity inside workers |
 | `SUPABASE_SERVICE_ROLE_KEY` | **runtime-injected** | Real DB key inside workers |
+| `CEREBRAS_API_KEY` | Edge server-side, secret | Cerebras primary credential; never `NEXT_PUBLIC_*`, logs or commits |
+| `GROQ_API_KEY` | Edge server-side, secret | Groq fallback credential; never `NEXT_PUBLIC_*`, logs or commits |
+| `CEREBRAS_BASE_URL` | Edge server-side | Cerebras endpoint; production default `https://api.cerebras.ai/v1` |
+| `GROQ_BASE_URL` | Edge server-side | Groq endpoint; production default `https://api.groq.com/openai/v1` |
 | `ANALYSIS_FAKE_PROVIDER=1` | tests only | Enables the test doubles branch |
 | `ANALYSIS_FAKE_LATENCY_MS` / `_FAIL_AT_CALL_INDEX` / `_FAIL_CODE` / `_THROW_CODE` | tests only | Fake behavior (env defaults) |
 | Request body `_fake: {...}` | tests only, per request | Overrides env fake behavior; honored only with the gate open |
@@ -235,7 +239,7 @@ integration above demonstrates this with fake-provider behavior only.
 
 | # | Ítem | Dueño | Condición de cierre | Estado |
 |---|------|-------|---------------------|--------|
-| 1 | createProvider() real (S2-07) | S2-07 | Test de integración con proveedor real | Pendiente S2-07 |
+| 1 | createProvider() real (S2-07) | S2-07 | Test de integración con proveedor real | Implementado; smoke real PASS 2026-10-20 |
 | 2 | createFinalization() real (S2-08) | S2-08 | Test integración findings + ledger + eventos | Pendiente S2-08 |
 | 3 | Texto F3 con liberación ("Analysis failed. Your credits were released. Retry creates a new run.") | S2-08 | S2-08 merge | Pendiente S2-08 |
 | 4 | TODO(S2-08) en claim/complete/fail (liberación + evento) | S2-08 | S2-08 merge | Pendiente S2-08 |
@@ -248,3 +252,69 @@ integration above demonstrates this with fake-provider behavior only.
 Estado del ticket: completo pendiente de integración (G2=A). Cerrar
 sólo cuando S2-07 y S2-08 estén mergeados y sus tests de integración
 verdes.
+
+## 11. S2-07 — proveedor real y smoke
+
+S2-07 reemplaza el seam del proveedor por una implementación real
+Cerebras → Groq. El smoke es manual, opt-in y nunca corre en CI. Envía
+`ANALYSIS_PROMPT_V1` como system prompt, `buildAnalysisPromptV1(pair)`
+como user prompt y `WIRE_JSON_SCHEMA` como `response_format`; por eso
+valida el par prompt/schema real, no un prompt genérico.
+
+Variables requeridas (server-side; las keys son secretos):
+
+| Variable | Valor / origen |
+|---|---|
+| `CEREBRAS_API_KEY` | Secret del servidor; nunca `NEXT_PUBLIC_*`, logs ni commits |
+| `GROQ_API_KEY` | Secret del servidor; nunca `NEXT_PUBLIC_*`, logs ni commits |
+| `CEREBRAS_BASE_URL` | `https://api.cerebras.ai/v1` |
+| `GROQ_BASE_URL` | `https://api.groq.com/openai/v1` |
+
+Comando (desde la raíz; carga `.env.local` sin imprimir valores):
+
+```bash
+set -a; source .env.local; set +a
+pnpm run test:provider:real
+```
+
+Casos y exit codes:
+
+| Caso | Llamadas | Esperado |
+|---|---|---|
+| `both-valid` | Cerebras con key real; Groq con key real | Ambos `2xx` y JSON con array `findings` (puede estar vacío) |
+| `cerebras-invalid-groq-valid` | Cerebras con key corrupta (`-invalid-smoke`); Groq real | Cerebras non-`2xx`; Groq `2xx` y JSON válido |
+| `both-invalid` | Ambas keys corruptas | Ambos non-`2xx` |
+
+- Exit `0`: los tres casos coinciden con lo esperado (`RESULT: PASS`).
+- Exit `1`: una key real fue rechazada o una key inválida fue aceptada.
+- Exit `2`: falta configuración/env, URL inválida o error de red.
+
+Evidencia del smoke final (prompt v1 real):
+
+| Comando | Fecha | Caso | Provider | Model | promptVersion | outputSchemaVersion | Duración | Resultado |
+|---|---|---|---|---|---|---|---|---|
+| `pnpm run test:provider:real` | 2026-10-20 | `both-valid` | Cerebras | `qwen-3.8-27b` | `s2-07-prompt-v1` | `s2-07-findings-v1` | 921 ms | PASS |
+| `pnpm run test:provider:real` | 2026-10-20 | `both-valid` | Groq | `openai/gpt-oss-20b` | `s2-07-prompt-v1` | `s2-07-findings-v1` | 855 ms | PASS |
+| `pnpm run test:provider:real` | 2026-10-20 | `cerebras-invalid-groq-valid` | Cerebras | `qwen-3.8-27b` | `s2-07-prompt-v1` | `s2-07-findings-v1` | 128 ms | PASS (401 esperado) |
+| `pnpm run test:provider:real` | 2026-10-20 | `cerebras-invalid-groq-valid` | Groq | `openai/gpt-oss-20b` | `s2-07-prompt-v1` | `s2-07-findings-v1` | 661 ms | PASS |
+| `pnpm run test:provider:real` | 2026-10-20 | `both-invalid` | Cerebras | `qwen-3.8-27b` | `s2-07-prompt-v1` | `s2-07-findings-v1` | 132 ms | PASS (401 esperado) |
+| `pnpm run test:provider:real` | 2026-10-20 | `both-invalid` | Groq | `openai/gpt-oss-20b` | `s2-07-prompt-v1` | `s2-07-findings-v1` | 361 ms | PASS (401 esperado) |
+
+`RESULT: PASS`; exit code `0`. Un `400/param=response_format` habría
+significado que el system prompt v1 real + schema fueron rechazados.
+
+Nunca imprimir keys, `Authorization`, prompts, chunks, quotes ni bodies
+crudos de proveedores. El smoke sólo emite metadata de caso y duración.
+El límite de body de 256 KiB aborta la lectura con `reader.cancel()`, no
+abortando la conexión HTTP.
+
+## 12. Estado del ticket S2-07
+
+S2-07: **completo pendiente de integración S2-08**.
+
+- `createProvider()` real + validación de credenciales: implementado.
+- Fallback Cerebras → Groq: implementado.
+- Prompt v1 + schema: implementado.
+- Smoke real con prompt v1: PASS (2026-10-20).
+- Pendiente S2-08: `createFinalization()` y `createBatchPersistence()`.
+- Readiness sigue devolviendo 503 hasta que S2-08 mergee ambos factories.

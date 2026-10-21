@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildPairHashes } from "../../src/modules/analysis/retrieval";
 import { runBatch } from "../../src/modules/analysis/worker/batch";
@@ -137,6 +137,10 @@ function mockPersistence(
   return { persistence, inputs };
 }
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe("runBatch", () => {
   it("processes one bounded page sequentially and persists its next cursor", async () => {
     const provider = new FakeAnalysisProvider({ latencyMs: 5 });
@@ -229,6 +233,7 @@ describe("runBatch", () => {
   });
 
   it("aborts without persistence when its fenced heartbeat fails", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
     const { client } = mockClient(async () => ({
       data: null,
       error: { code: "22023", message: "lease lost" },
@@ -247,6 +252,7 @@ describe("runBatch", () => {
     });
     expect(result.outcome.kind).toBe("aborted");
     expect(persistence.persist).not.toHaveBeenCalled();
+    expect(log).not.toHaveBeenCalled();
   });
 
   it("clears lease timers when the provider returns a retryable failure", async () => {
@@ -273,6 +279,121 @@ describe("runBatch", () => {
     expect(persistence.persist).not.toHaveBeenCalled();
     await new Promise((resolve) => setTimeout(resolve, 25));
     expect(rpcCalls).toHaveLength(0);
+  });
+
+  it("emits one sanitized batch event when the provider returns a failure", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { client } = mockClient();
+    const { persistence } = mockPersistence();
+    const result = await runBatch({
+      claimed,
+      context: makeContext(2),
+      provider: new FakeAnalysisProvider({
+        failAtCallIndex: 0,
+        failCode: "INVALID_PROVIDER_OUTPUT",
+      }),
+      client,
+      persistence,
+      configuration,
+      checkpoint: makeCheckpoint(0, 2),
+      heartbeatIntervalMs: 0,
+      batchTimeoutMs: 0,
+    });
+
+    expect(result.outcome).toMatchObject({
+      kind: "failed",
+      code: "INVALID_PROVIDER_OUTPUT",
+    });
+    expect(persistence.persist).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledTimes(1);
+    const event = JSON.parse(String(log.mock.calls[0]?.[0])) as Record<
+      string,
+      unknown
+    >;
+    expect(Object.keys(event).sort()).toEqual(
+      [
+        "analysis_id",
+        "attempt_count",
+        "batch_index",
+        "code",
+        "correlation_id",
+        "duration_ms",
+        "module",
+        "operation",
+        "workspace_id",
+      ].sort(),
+    );
+    expect(event).toMatchObject({
+      module: "analysis",
+      operation: "batch",
+      code: "INVALID_PROVIDER_OUTPUT",
+      analysis_id: ANALYSIS_ID,
+      workspace_id: WORKSPACE_ID,
+      attempt_count: 1,
+      batch_index: 0,
+    });
+    expect(event["duration_ms"]).toEqual(expect.any(Number));
+    expect(event).not.toHaveProperty("provider");
+    expect(event).not.toHaveProperty("model");
+    expect(event).not.toHaveProperty("fallback_used");
+    expect(event).not.toHaveProperty("latency_ms");
+  });
+
+  it("emits one sanitized batch event when the provider throws", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { client } = mockClient();
+    const { persistence } = mockPersistence();
+    const result = await runBatch({
+      claimed,
+      context: makeContext(2),
+      provider: new FakeAnalysisProvider({
+        throwCode: "PROVIDER_UNAVAILABLE",
+      }),
+      client,
+      persistence,
+      configuration,
+      checkpoint: makeCheckpoint(0, 2),
+      heartbeatIntervalMs: 0,
+      batchTimeoutMs: 0,
+    });
+
+    expect(result.outcome).toMatchObject({
+      kind: "failed",
+      code: "PROVIDER_UNAVAILABLE",
+    });
+    expect(persistence.persist).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledTimes(1);
+    const event = JSON.parse(String(log.mock.calls[0]?.[0])) as Record<
+      string,
+      unknown
+    >;
+    expect(Object.keys(event).sort()).toEqual(
+      [
+        "analysis_id",
+        "attempt_count",
+        "batch_index",
+        "code",
+        "correlation_id",
+        "duration_ms",
+        "module",
+        "operation",
+        "workspace_id",
+      ].sort(),
+    );
+    expect(event).toMatchObject({
+      module: "analysis",
+      operation: "batch",
+      code: "PROVIDER_UNAVAILABLE",
+      analysis_id: ANALYSIS_ID,
+      workspace_id: WORKSPACE_ID,
+      attempt_count: 1,
+      batch_index: 0,
+    });
+    expect(event["duration_ms"]).toEqual(expect.any(Number));
+    expect(event).not.toHaveProperty("provider");
+    expect(event).not.toHaveProperty("model");
+    expect(event).not.toHaveProperty("fallback_used");
+    expect(event).not.toHaveProperty("latency_ms");
   });
 
   it("aborts a slow batch with TIMEOUT and clears the lease heartbeat", async () => {

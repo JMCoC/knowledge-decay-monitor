@@ -10,6 +10,7 @@ import type {
   RunBatchArgs,
 } from "./types.ts";
 import { AnalysisWorkerError } from "./types.ts";
+import { reportAnalysisFailure } from "./telemetry.ts";
 
 function pairFingerprint(
   sourceChunkId: string,
@@ -71,6 +72,7 @@ export async function runBatch(args: RunBatchArgs): Promise<BatchResult> {
     configuration,
     checkpoint: previous,
   } = args;
+  const batchStartedAt = Date.now();
   if (
     context.pairs.length !== context.pairCursors.length ||
     context.cursor?.lowChunkId !== previous.cursor?.lowChunkId ||
@@ -81,6 +83,21 @@ export async function runBatch(args: RunBatchArgs): Promise<BatchResult> {
   }
 
   const findings: InternalFinding[] = [];
+  const emitBatchFailure = (
+    code: AnalysisWorkerError["code"],
+    index: number,
+  ): void => {
+    reportAnalysisFailure({
+      module: "analysis",
+      operation: "batch",
+      code,
+      analysis_id: claimed.id,
+      workspace_id: claimed.workspaceId,
+      attempt_count: claimed.attemptCount,
+      batch_index: index,
+      duration_ms: Date.now() - batchStartedAt,
+    });
+  };
   const startIndex = previous.processedPairs;
   let processed = startIndex;
   let lastPairFingerprint = previous.lastPairFingerprint;
@@ -157,6 +174,7 @@ export async function runBatch(args: RunBatchArgs): Promise<BatchResult> {
         aborted,
       ]);
       if (!result.ok) {
+        emitBatchFailure(result.error.code, index);
         return failed(
           result.error.code,
           processed,
@@ -180,6 +198,7 @@ export async function runBatch(args: RunBatchArgs): Promise<BatchResult> {
         checkpoint: previous,
       };
     }
+    emitBatchFailure(code, processed);
     return failed(code, processed, findings, previous);
   } finally {
     stopTimers();
