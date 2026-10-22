@@ -315,7 +315,7 @@ Not in this slice: `s2_08_locks.test.sql`, `tests/support/analysis-edge.ts`, `te
 
 - [ ] Write/rewrite the five unit tests and the new integration test; `pnpm run test:unit` → red; `pnpm run test:integration` → red for the new file.
 - [ ] Implement `createBatchPersistence(client)` calling `persist_analysis_batch`, mapping the boolean/error result per §6.5.
-- [ ] Implement `createFinalization(client)` calling `finalize_analysis_success`; serialize `outcome.findings` to the RPC payload; derive `p_reported_findings_count = findings.length`; map SQLSTATE per §6.5; keep `AnalysisFinalization.finalize()` unchanged.
+- [ ] Implement `createFinalization(client)` calling `finalize_analysis_success` with reported = `input.outcome.findings.length`. Only the count goes to the RPC (`p_reported_findings_count`); the findings themselves travel through staging via `createBatchPersistence`. Map SQLSTATE per §6.5; keep `AnalysisFinalization.finalize()` unchanged.
 - [ ] Change the handler seam signature + call sites (`:52`, `:229`, `:299`); keep the local-test branch (`createTestFinalization` / `FakeAnalysisBatchPersistence`) untouched — it is 8b.
 - [ ] `pnpm run test:unit` → green; `pnpm run typecheck` → green; `pnpm run lint` → green.
 - [ ] `pnpm run test:integration` → green (new file; existing integration files unchanged and still green).
@@ -372,7 +372,7 @@ Run 8a-1 and 8a-2 in parallel (no shared files beyond the migration, which 8a-2 
   current `claim_analysis` (which still lacks the S2-08 terminal
   settle + event — see spec S2-08 §12.1 row 17 "terminales pre-S2-08").
 - This is the pre-8b transitional state, not a regression. `settle`
-  in `process-analysis.ts:201-215` swallows the throw; the worker
+  in `process-analysis.ts:201-219` swallows the throw; the worker
   does not terminalize on its own.
 - 8b closes this with `private.finalize_failed_analysis`.
 
