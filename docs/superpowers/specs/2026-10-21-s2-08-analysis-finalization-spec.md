@@ -584,6 +584,7 @@ No se duplica la tabla §12.1 de S2-06 (`docs/superpowers/specs/2026-10-15-s2-06
 |---|---|---|---|---|
 | 17 | Terminales pre-S2-08 sin cierre coherente: `failed` sin `Released`/evento y `completed` sin `Consumed`/evento/findings/`analysis_status` | S2-08 (documenta) | Backfill solicitado o auditoría histórica | Ledger/eventos/`analysis_status` históricos incompletos |
 | 18 | Reprocesamiento de la misma versión no resetea `analysis_status` | Ingestion / ticket futuro | Se permita reprocesar una versión `analyzed` o cambien sus chunks | Versión `analyzed` con contenido distinto |
+| 19 | `persist_analysis_batch` duplicada en migración original + correctiva (`20261021181000`). Cambios futuros deben tocar ambas o consolidar. | S2-08b / plataforma | Próximo cambio a `persist_analysis_batch` | Drift entre migraciones |
 
 **Actualizadas:** fila 13 (`provider_used`/`model_used`) y fila 16 (telemetría de proveedor efectivo) pasan a dueño S2-10/S2-11 si S2-08 no las implementa (`docs/superpowers/specs/2026-10-15-s2-06-analysis-worker-spec.md:326`, `:329`).
 **Cerradas por S2-08:** filas 5, 6, 7 y 8 (`docs/superpowers/specs/2026-10-15-s2-06-analysis-worker-spec.md:318-321`).
