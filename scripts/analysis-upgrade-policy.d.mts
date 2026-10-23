@@ -1,4 +1,4 @@
-export type MigrationStage = "s1" | "s2_01" | "s2_02" | "s2_03" | "s2_04" | "s2_06" | "s2_08a";
+export type MigrationStage = "s1" | "s2_01" | "s2_02" | "s2_03" | "s2_04" | "s2_06" | "s2_08a" | "s2_08b";
 
 export function migrationStage(path: string): MigrationStage;
 export function includeMigration(path: string, stage: MigrationStage): boolean;
