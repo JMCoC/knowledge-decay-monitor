@@ -585,6 +585,7 @@ No se duplica la tabla §12.1 de S2-06 (`docs/superpowers/specs/2026-10-15-s2-06
 | 17 | Terminales pre-S2-08 sin cierre coherente: `failed` sin `Released`/evento y `completed` sin `Consumed`/evento/findings/`analysis_status` | S2-08 (documenta) | Backfill solicitado o auditoría histórica | Ledger/eventos/`analysis_status` históricos incompletos |
 | 18 | Reprocesamiento de la misma versión no resetea `analysis_status` | Ingestion / ticket futuro | Se permita reprocesar una versión `analyzed` o cambien sus chunks | Versión `analyzed` con contenido distinto |
 | 19 | `persist_analysis_batch` duplicada en migración original + correctiva (`20261021181000`). Cambios futuros deben tocar ambas o consolidar. | S2-08b / plataforma | Próximo cambio a `persist_analysis_batch` | Drift entre migraciones |
+| 20 | Analysis upgrade inventory es un allowlist manual (`analysis-upgrade-policy.mjs`). Cada migración nueva requiere: set, `stageOrder`, rama en `migrationStage`, unión en `.d.mts`, JSDoc, y tests. | Plataforma | Próximo CI fix por inventory | 1-2hs por slice; riesgo de CI rojo si se olvida |
 
 **Actualizadas:** fila 13 (`provider_used`/`model_used`) y fila 16 (telemetría de proveedor efectivo) pasan a dueño S2-10/S2-11 si S2-08 no las implementa (`docs/superpowers/specs/2026-10-15-s2-06-analysis-worker-spec.md:326`, `:329`).
 **Cerradas por S2-08:** filas 5, 6, 7 y 8 (`docs/superpowers/specs/2026-10-15-s2-06-analysis-worker-spec.md:318-321`).
@@ -606,6 +607,190 @@ No se duplica la tabla §12.1 de S2-06 (`docs/superpowers/specs/2026-10-15-s2-06
 | Flake de `test:integration` ya conocido | Media | Monitorear; no atribuir a S2-08 sin evidencia (`docs/superpowers/specs/2026-10-15-s2-06-analysis-worker-spec.md:324`) |
 | `claim_analysis` con sweep de análisis bajo 45 s | Media | Timeout 45 s (techo) + dos fases + tests de carga |
 | Trigger de cleanup `AFTER UPDATE OF status` puede borrar staging antes de diagnóstico forense | Baja | Si se necesita preservar staging, revisar si el trigger debe ser condicional (solo failed) o deshabilitarse en entornos de diagnóstico |
+
+---
+
+## 13. Apéndice — decisiones para S2-08b
+
+Esta sección corrige contradicciones/vacíos de §7-§9 detectados al
+preparar el plan de 8b. Es aditivo, no cambia §7-§9.
+
+### 13.1 Helper finalize_failed_analysis — modos y estados
+
+(Corrección a §7.1 paso 3, que decía `status <> 'processing' → false`.)
+
+Firma actualizada:
+
+```sql
+private.finalize_failed_analysis(
+  p_analysis_id uuid,
+  p_operation_id uuid,
+  p_error_code public.analysis_failure_code,
+  p_enforce_operation boolean
+) returns text
+-- 'failed' | 'superseded' (alineado con fail_analysis, que
+-- retorna 'queued'|'failed'|'superseded')
+```
+
+El helper tiene dos modos:
+
+- **p_enforce_operation = true** (invocado por `fail_analysis` directo):
+  - Requiere `status='processing'`, `operation_id = p_operation_id`,
+    `lease_expires_at > now`, `attempt_deadline_at > now`,
+    `analysis_deadline_at > now`.
+  - Cualquier desajuste → `return 'superseded'` sin efectos.
+
+- **p_enforce_operation = false** (invocado por los sweeps de
+  `claim_analysis`):
+  - Acepta `status IN ('processing', 'queued')`.
+  - NO re-valida la condición terminal (`attempt_count >= 3`, deadlines
+    vencidos, etc.) — el caller ya decidió bajo advisory + `SKIP LOCKED`.
+  - El helper solo ejecuta la transacción atómica.
+
+Pseudocódigo:
+
+```text
+if p_enforce_operation then
+  if v.status <> 'processing'
+     or v.operation_id is distinct from p_operation_id
+     or v.lease_expires_at <= ts
+     or v.attempt_deadline_at <= ts
+     or v.analysis_deadline_at <= ts then
+    return 'superseded';
+  end if;
+else
+  if v.status not in ('processing', 'queued') then
+    return 'superseded';
+  end if;
+end if;
+```
+
+Los retornos del helper son `text`: `return 'failed'` / `return 'superseded'`.
+
+### 13.2 Orden canónico de locks
+
+(Corrección a §8.4 fase 2.)
+
+Cualquier camino que toque ledger (`finalize`, `fail`, sweeps de `claim`,
+`create_analysis_run`) toma los locks en este orden:
+
+1. `pg_advisory_xact_lock(hashtextextended(workspace_id::text, 0))`
+2. `SELECT ... FROM public.workspaces WHERE id = workspace_id FOR UPDATE`
+3. `SELECT ... FROM public.analyses WHERE id = analysis_id FOR UPDATE`
+
+El caller NO pre-bloquea el análisis. El helper es self-contained: hace
+los 3 locks internamente. Si el caller ya tomó el advisory, PG permite
+re-adquirirlo (mismo lock, reentrante).
+
+Fase 2 del sweep de `claim_analysis`:
+
+1. Iterar candidatos de la fase 1 (`SELECT` sin locks).
+2. Llamar helper (hace los 3 locks).
+3. Si retorna `'superseded'` → skip (otro worker lo tomó).
+4. Si retorna `'failed'` → continuar.
+
+Precondición para no deadlockear: TODOS los caminos usan este orden.
+Se verifica con:
+
+- Review estático del plan (cada task declara el orden).
+- Test de integración TS con 2 sesiones concurrentes (ver 13.5).
+
+### 13.3 complete_analysis — trap P0001, no revocación
+
+(Corrección a §11.1 y §6.)
+
+`complete_analysis` se reemplaza por un trap que lanza `P0001` con grant
+conservado:
+
+```sql
+create or replace function public.complete_analysis(...) returns void
+language plpgsql security definer set search_path = '' as $$
+begin
+  raise exception 'complete_analysis is deprecated, use finalize_analysis_success'
+    using errcode = 'P0001';
+end;
+$$;
+```
+
+NO se revoca el grant de `service_role`. Justificación:
+
+- `42501` (permission denied) es un error de infra.
+- `P0001` es intencional (deprecated) y el mapping §6.5 lo convierte a
+  `PERSISTENCE_FAILED` retryable.
+- El worker nunca lo llama (usa `finalize_analysis_success`).
+
+Test `s2_08_finalization.test.sql:618-640` se actualiza en 8b-10 a
+`throws_ok(..., 'P0001', ...)`.
+
+### 13.4 Idempotencia del helper — tabla de casos
+
+(Corrección a §7.1 paso 2.)
+
+| Caso | Estado | Token | Settlement | Acción |
+|---|---|---|---|---|
+| A | processing | match + lease OK | ninguno | Normal: UPDATE failed + Released + evento + cleanup → `'failed'` |
+| B | processing | mismatch | — | `'superseded'` |
+| C | processing | match pero lease/deadline vencido | — | `'superseded'` |
+| D | failed | match | Released + evento + sin staging | No-op → `'failed'` (idempotente) |
+| E | failed | match | Released + evento + staging pendiente | Cleanup staging → `'failed'` |
+| F | failed | match | Consumed (inconsistente) | raise `P0001` (no silenciar corrupción) |
+| G | failed | match | Released ausente | Settle Released + evento + cleanup → `'failed'` |
+| H | failed | mismatch | — | `'superseded'` |
+| I | completed | cualquier | — | `'superseded'` |
+| J | queued | `p_enforce_operation=true` | — | `'superseded'` |
+| K | queued | `p_enforce_operation=false` | caller confirmó terminal | Normal: UPDATE failed + Released + evento + cleanup → `'failed'` |
+| L | no existe | — | — | `'superseded'` |
+
+Reglas:
+
+- Solo completa cuando `status='failed'` + token match (o estado
+  terminal ya consistente).
+- `Consumed` en `failed` → `P0001` (no silenciar).
+- Re-ejecutar sobre `failed` consistente → no-op.
+- Completar lo que falte si el estado es `failed` con settlement/evento
+  parciales.
+
+### 13.5 Test de deadlock — 2 sesiones TS, no dblink
+
+(Corrección a §8.5.)
+
+El test de deadlock NO usa `dblink`. Usa el patrón `openLocalSqlSession`
+del repo (`tests/integration/analysis-recovery.test.ts`).
+
+Test en `tests/integration/analysis-lock-order.test.ts`:
+
+1. Fixture: análisis A + B en el mismo workspace.
+2. Session 1: `BEGIN; advisory(ws); FOR UPDATE workspaces;` (pausa)
+3. Session 2: `BEGIN; advisory(ws)` — debe BLOQUEAR
+4. Session 1: `FOR UPDATE analyses; COMMIT`
+5. Session 2: procede sin deadlock; `COMMIT`
+6. Assert: ambas sesiones completan; no deadlock; no timeout.
+
+El `skip` actual en `020_s2_06_analysis_leases.test.sql:414` ("dblink no
+disponible") se mantiene; el test TS lo reemplaza.
+
+### 13.6 §12.1 fila 20 — inventory manual
+
+| # | Ítem | Dueño | Reapertura | Impacto |
+|---|---|---|---|---|
+| 20 | Analysis upgrade inventory es un allowlist manual (`analysis-upgrade-policy.mjs`). Cada migración nueva requiere: set, `stageOrder`, rama en `migrationStage`, unión en `.d.mts`, JSDoc, y tests. | Plataforma | Próximo CI fix por inventory | 1-2hs por slice; riesgo de CI rojo si se olvida |
+
+### 13.7 Tests pgTAP existentes a migrar (Gap 4)
+
+Los tests identificados por el agente se migran dentro de las tasks
+de 8b:
+
+| Test | Task | Cambio |
+|---|---|---|
+| `020:94-117` (terminal `claim_analysis` sweep) | 8b-7 | Agregar `Reserved` + esperar `Released` + evento |
+| `020:304-332` (terminal `fail_analysis`) | 8b-8 | Agregar `Reserved` + esperar `Released` + evento |
+| `020:334-354` (terminal `fail_analysis`, `fail_nr`) | 8b-8 | Add `Reserved`; expect `Released` + event |
+| `024:206-230` (continuación vencida terminal `claim`) | 8b-7 | Agregar `Reserved` + esperar `Released` + evento |
+| `020:220-251` (`complete_analysis` success) | 8b-10 | Migrar a `finalize_analysis_success` con staging |
+| `020:356-374` (`complete` sobre fila viva) | 8b-10 | Migrar a `finalize_analysis_success` |
+| `s2_08_finalization.test.sql:618-640` (`complete_analysis` disponible) | 8b-10 | Cambiar a `throws_ok(..., 'P0001', ...)` |
+
+Regla: si un test rompe y NO está en esta lista, PARÁ y reportá.
 
 ---
 
