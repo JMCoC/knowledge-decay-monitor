@@ -2,6 +2,7 @@ import type {
   AnalysisFailureCode,
   InternalFinding,
 } from "../../../types/analysis-internal.ts";
+import type { AnalysisWorkerDb } from "./types.ts";
 
 /**
  * Frozen seam between the worker (S2-06) and the finalization owner
@@ -21,10 +22,57 @@ export interface AnalysisFinalization {
   }): Promise<{ ok: true } | { ok: false; code: string }>;
 }
 
+function sqlStateOf(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null) return undefined;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" ? code : undefined;
+}
+
+function seamCode(error: unknown): string {
+  const code = sqlStateOf(error);
+  if (code === "22023") return "superseded";
+  if (
+    code === "P0001" ||
+    code === "P2002" ||
+    code === "P2003" ||
+    code === "55P03" ||
+    code === "57014"
+  ) {
+    return "PERSISTENCE_FAILED";
+  }
+  return "INTERNAL_ERROR";
+}
+
 /**
- * Real finalization factory, unavailable until S2-08 merges (spec §7).
- * Same fail-loud contract as createProvider: never resolve to a fake.
+ * Real finalization factory for the S2-08a success transaction. Failure
+ * finalization belongs to S2-08b; failing loud here leaves the job
+ * processing instead of closing it as completed.
  */
-export function createFinalization(): AnalysisFinalization {
-  throw new Error("S2-08 not merged: AnalysisFinalization unavailable.");
+export function createFinalization(
+  client: AnalysisWorkerDb,
+): AnalysisFinalization {
+  if (!client) throw new Error("AnalysisWorkerDb is required");
+
+  return {
+    async finalize({ analysisId, operationId, outcome }) {
+      if (outcome.kind !== "completed") {
+        throw new Error(
+          "S2-08b: analysis failure finalization is not available.",
+        );
+      }
+      try {
+        const result = await client.rpc("finalize_analysis_success", {
+          p_analysis_id: analysisId,
+          p_operation_id: operationId,
+          p_reported_findings_count: outcome.findings.length,
+        });
+        if (result.error) {
+          return { ok: false, code: seamCode(result.error) };
+        }
+        return { ok: true };
+      } catch (error: unknown) {
+        return { ok: false, code: seamCode(error) };
+      }
+    },
+  };
 }

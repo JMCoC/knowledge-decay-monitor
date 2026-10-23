@@ -115,6 +115,7 @@ describe("deno import extensions", () => {
       "src/modules/analysis/provider-config.ts",
       "src/modules/analysis/prompts/v1.ts",
       "src/modules/analysis/prompts/v1-schema.ts",
+      "src/modules/analysis/worker/fingerprint.ts",
     ].map((path) => join(REPO_ROOT, path));
 
     const v1Root = join(REPO_ROOT, "src/modules/analysis/prompts/v1.ts");

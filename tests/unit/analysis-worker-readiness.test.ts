@@ -35,7 +35,7 @@ function throwingFinalization(): never {
 }
 
 function throwingPersistence(): AnalysisBatchPersistence {
-  return createBatchPersistence({ rpc: vi.fn() } as never);
+  throw new Error("S2-08 not merged: analysis batch staging unavailable.");
 }
 
 function ready() {
@@ -294,7 +294,7 @@ describe("analyze handler readiness and async acknowledgement", () => {
     expect(d.runJobFn).toHaveBeenCalledWith(expect.objectContaining({ persistence: expect.anything() }));
   });
 
-  it("builds a real provider and keeps S2-08 factories explicit", () => {
+  it("builds a real provider and both factories with a stub client", () => {
     vi.stubEnv("CEREBRAS_API_KEY", "test-cerebras-key");
     vi.stubEnv("GROQ_API_KEY", "test-groq-key");
     vi.stubEnv("CEREBRAS_BASE_URL", "https://cerebras.test/v1");
@@ -303,11 +303,9 @@ describe("analyze handler readiness and async acknowledgement", () => {
       const provider = createProvider();
       expect(provider).not.toBeInstanceOf(Promise);
       expect(typeof provider.analyzePair).toBe("function");
-      // TODO(S2-08): update to expect both factories ready once S2-08 merges.
-      expect(() => createFinalization()).toThrow("S2-08 not merged: AnalysisFinalization unavailable.");
-      expect(() => throwingPersistence()).toThrow(
-        "S2-08 not merged: analysis batch staging unavailable.",
-      );
+      const client = { rpc: vi.fn() } as unknown as AnalysisWorkerDb;
+      expect(() => createFinalization(client)).not.toThrow();
+      expect(() => createBatchPersistence(client)).not.toThrow();
     } finally {
       vi.unstubAllEnvs();
     }

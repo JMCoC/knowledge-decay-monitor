@@ -25,24 +25,37 @@ describe("analysis seams", () => {
     }
   });
 
-  // TODO(S2-08): update to expect both factories ready once S2-08 merges.
-  it("createFinalization throws until S2-08 merges", () => {
-    expect(() => createFinalization()).toThrow(
-      "S2-08 not merged: AnalysisFinalization unavailable.",
-    );
+  it("builds both factories with an injected client", () => {
+    const client = { rpc: vi.fn() } as never;
+    expect(() => createFinalization(client)).not.toThrow();
+    expect(() => createBatchPersistence(client)).not.toThrow();
   });
 
-  it("createBatchPersistence throws until S2-08 staging merges", () => {
-    expect(() => createBatchPersistence({ rpc: vi.fn() } as never)).toThrow(
-      "S2-08 not merged: analysis batch staging unavailable.",
-    );
-  });
+  it.each([undefined, null])(
+    "createFinalization requires an AnalysisWorkerDb (%s)",
+    (client) => {
+      expect(() => createFinalization(client as never)).toThrow(
+        "AnalysisWorkerDb is required",
+      );
+    },
+  );
 
-  it("factories throw even with production resolution", () => {
+  it.each([undefined, null])(
+    "createBatchPersistence requires an AnalysisWorkerDb (%s)",
+    (client) => {
+      expect(() => createBatchPersistence(client as never)).toThrow(
+        "AnalysisWorkerDb is required",
+      );
+    },
+  );
+
+  it("still fails loud without provider configuration", () => {
     vi.stubEnv("NODE_ENV", "production");
     try {
       expect(() => createProvider()).toThrow();
-      expect(() => createFinalization()).toThrow();
+      expect(() => createFinalization(undefined as never)).toThrow(
+        "AnalysisWorkerDb is required",
+      );
     } finally {
       vi.unstubAllEnvs();
     }
