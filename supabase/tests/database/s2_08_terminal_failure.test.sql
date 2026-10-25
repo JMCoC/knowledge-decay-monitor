@@ -4,8 +4,8 @@ set search_path = public, extensions;
 \ir analysis-fixtures.psql
 select no_plan();
 
--- Direct coverage for private.finalize_failed_analysis (S2-08b, 8b-6).
--- No claim_analysis/fail_analysis calls: those are migrated in 8b-7/8b-8.
+-- Direct coverage for private.finalize_failed_analysis (S2-08b, 8b-6) and
+-- claim_analysis terminal wiring (8b-7). fail_analysis remains 8b-8.
 create function pg_temp.terminal_fixture(
   p_name text,
   p_status public.analysis_job_status,
@@ -730,6 +730,270 @@ select is(
   'Rollback: no event is inserted'
 );
 select pg_temp.terminal_cleanup(pg_temp.analysis_fixture_id('terminal_rollback'));
+
+-- Claim wiring (S2-08b, 8b-7): the sweep must delegate terminal rows to the
+-- helper and keep the reclaim path on SKIP LOCKED.
+select ok(
+  exists (
+    select 1
+    from pg_catalog.pg_proc p
+    join pg_catalog.pg_namespace n on n.oid = p.pronamespace
+    cross join lateral unnest(coalesce(p.proconfig, '{}'::text[])) as cfg
+    where n.nspname = 'public'
+      and p.proname = 'claim_analysis'
+      and p.pronargs = 1
+      and cfg = 'statement_timeout=45s'
+  ),
+  'Claim: statement_timeout is the 45 second ceiling'
+);
+select ok(
+  exists (
+    select 1
+    from pg_catalog.pg_proc p
+    join pg_catalog.pg_namespace n on n.oid = p.pronamespace
+    cross join lateral unnest(coalesce(p.proconfig, '{}'::text[])) as cfg
+    where n.nspname = 'public'
+      and p.proname = 'claim_analysis'
+      and p.pronargs = 1
+      and cfg = 'lock_timeout=1s'
+  ),
+  'Claim: lock_timeout remains one second'
+);
+
+-- Directed claim of an expired third attempt terminalizes through the helper.
+select pg_temp.terminal_fixture(
+  'claim_terminal_third', 'processing', '00000000-0000-4000-8000-000000000020');
+update public.analyses
+   set attempt_count = 3,
+       lease_expires_at = clock_timestamp() - interval '1 second'
+ where id = pg_temp.analysis_fixture_id('claim_terminal_third');
+select pg_temp.terminal_reserved(pg_temp.analysis_fixture_id('claim_terminal_third'));
+select pg_temp.terminal_staging(
+  pg_temp.analysis_fixture_id('claim_terminal_third'),
+  '00000000-0000-4000-8000-000000000020');
+select is(
+  (select count(*)::integer
+   from public.claim_analysis(pg_temp.analysis_fixture_id('claim_terminal_third'))),
+  0,
+  'Claim: an expired third attempt returns no work'
+);
+select is(
+  (select status::text from public.analyses
+   where id = pg_temp.analysis_fixture_id('claim_terminal_third')),
+  'failed',
+  'Claim: an expired third attempt becomes failed'
+);
+select is(
+  (select error_code::text from public.analyses
+   where id = pg_temp.analysis_fixture_id('claim_terminal_third')),
+  'ATTEMPTS_EXHAUSTED',
+  'Claim: an expired third attempt uses ATTEMPTS_EXHAUSTED'
+);
+select is(
+  (select count(*)::integer from public.credit_ledger
+   where analysis_id = pg_temp.analysis_fixture_id('claim_terminal_third')),
+  2,
+  'Claim: the third-attempt reservation is released exactly once'
+);
+select is(
+  (select count(*)::integer from public.credit_ledger
+   where analysis_id = pg_temp.analysis_fixture_id('claim_terminal_third')
+     and event_type = 'Released'),
+  1,
+  'Claim: the third-attempt release is persisted'
+);
+select is(
+  (select count(*)::integer from public.notification_events
+   where analysis_id = pg_temp.analysis_fixture_id('claim_terminal_third')
+     and type = 'analysis_failed'),
+  1,
+  'Claim: the third-attempt failure event is emitted'
+);
+select is(
+  (select count(*)::integer from private.analysis_finding_staging
+   where analysis_id = pg_temp.analysis_fixture_id('claim_terminal_third')),
+  0,
+  'Claim: third-attempt staging is cleaned'
+);
+select is(
+  (select operation_id from public.analyses
+   where id = pg_temp.analysis_fixture_id('claim_terminal_third')),
+  '00000000-0000-4000-8000-000000000020'::uuid,
+  'Claim: the terminal acknowledgement token is preserved'
+);
+select pg_temp.terminal_cleanup(pg_temp.analysis_fixture_id('claim_terminal_third'));
+
+-- Sweep of an expired queued continuation terminalizes through the helper.
+select pg_temp.terminal_fixture(
+  'claim_terminal_continuation', 'queued', null);
+update public.analyses
+   set attempt_count = 1,
+       continuation_pending = true,
+       attempt_deadline_at = clock_timestamp() - interval '1 second',
+       analysis_deadline_at = clock_timestamp() + interval '90 minutes'
+ where id = pg_temp.analysis_fixture_id('claim_terminal_continuation');
+select pg_temp.terminal_reserved(pg_temp.analysis_fixture_id('claim_terminal_continuation'));
+select pg_temp.terminal_staging(
+  pg_temp.analysis_fixture_id('claim_terminal_continuation'),
+  '00000000-0000-4000-8000-000000000021');
+select is(
+  (select count(*)::integer from public.claim_analysis(null)),
+  0,
+  'Claim: an expired continuation returns no work'
+);
+select is(
+  (select status::text from public.analyses
+   where id = pg_temp.analysis_fixture_id('claim_terminal_continuation')),
+  'failed',
+  'Claim: an expired continuation becomes failed'
+);
+select is(
+  (select error_code::text from public.analyses
+   where id = pg_temp.analysis_fixture_id('claim_terminal_continuation')),
+  'TIMEOUT',
+  'Claim: an expired continuation uses TIMEOUT'
+);
+select is(
+  (select count(*)::integer from public.credit_ledger
+   where analysis_id = pg_temp.analysis_fixture_id('claim_terminal_continuation')),
+  2,
+  'Claim: the continuation reservation is released exactly once'
+);
+select is(
+  (select count(*)::integer from public.credit_ledger
+   where analysis_id = pg_temp.analysis_fixture_id('claim_terminal_continuation')
+     and event_type = 'Released'),
+  1,
+  'Claim: the continuation release is persisted'
+);
+select is(
+  (select count(*)::integer from public.notification_events
+   where analysis_id = pg_temp.analysis_fixture_id('claim_terminal_continuation')
+     and type = 'analysis_failed'),
+  1,
+  'Claim: the continuation failure event is emitted'
+);
+select is(
+  (select count(*)::integer from private.analysis_finding_staging
+   where analysis_id = pg_temp.analysis_fixture_id('claim_terminal_continuation')),
+  0,
+  'Claim: continuation staging is cleaned'
+);
+select pg_temp.terminal_cleanup(pg_temp.analysis_fixture_id('claim_terminal_continuation'));
+
+-- A queued retry with attempts left is reclaimed, not terminalized.
+select pg_temp.terminal_fixture(
+  'claim_retry_reclaim', 'queued', null);
+update public.analyses
+   set attempt_count = 1,
+       next_attempt_at = clock_timestamp() - interval '1 second',
+       analysis_deadline_at = clock_timestamp() + interval '90 minutes'
+ where id = pg_temp.analysis_fixture_id('claim_retry_reclaim');
+select pg_temp.terminal_reserved(pg_temp.analysis_fixture_id('claim_retry_reclaim'));
+select is(
+  (select id from public.claim_analysis(null)),
+  pg_temp.analysis_fixture_id('claim_retry_reclaim'),
+  'Claim: a retry with attempts left is reclaimed'
+);
+select is(
+  (select status::text from public.analyses
+   where id = pg_temp.analysis_fixture_id('claim_retry_reclaim')),
+  'processing',
+  'Claim: the retry moves to processing'
+);
+select is(
+  (select attempt_count from public.analyses
+   where id = pg_temp.analysis_fixture_id('claim_retry_reclaim')),
+  2,
+  'Claim: the retry consumes the next attempt'
+);
+select ok(
+  (select operation_id is not null from public.analyses
+   where id = pg_temp.analysis_fixture_id('claim_retry_reclaim')),
+  'Claim: the retry mints a fresh operation token'
+);
+select is(
+  (select count(*)::integer from public.credit_ledger
+   where analysis_id = pg_temp.analysis_fixture_id('claim_retry_reclaim')),
+  1,
+  'Claim: the retry keeps its reservation'
+);
+select is(
+  (select count(*)::integer from public.notification_events
+   where analysis_id = pg_temp.analysis_fixture_id('claim_retry_reclaim')),
+  0,
+  'Claim: the retry emits no failure event'
+);
+select pg_temp.terminal_cleanup(pg_temp.analysis_fixture_id('claim_retry_reclaim'));
+
+-- A live queued candidate is claimed normally.
+select pg_temp.terminal_fixture(
+  'claim_live_queued', 'queued', null);
+select is(
+  (select id from public.claim_analysis(null)),
+  pg_temp.analysis_fixture_id('claim_live_queued'),
+  'Claim: a live queued candidate is reclaimed'
+);
+select is(
+  (select status::text from public.analyses
+   where id = pg_temp.analysis_fixture_id('claim_live_queued')),
+  'processing',
+  'Claim: a live queued candidate moves to processing'
+);
+select is(
+  (select attempt_count from public.analyses
+   where id = pg_temp.analysis_fixture_id('claim_live_queued')),
+  1,
+  'Claim: a live queued candidate starts attempt 1'
+);
+select is(
+  (select count(*)::integer from public.notification_events
+   where analysis_id = pg_temp.analysis_fixture_id('claim_live_queued')),
+  0,
+  'Claim: a live claim emits no failure event'
+);
+select pg_temp.terminal_cleanup(pg_temp.analysis_fixture_id('claim_live_queued'));
+
+-- A processing candidate with an expired lease is reclaimed normally.
+select pg_temp.terminal_fixture(
+  'claim_processing_reclaim', 'processing', '00000000-0000-4000-8000-000000000022');
+update public.analyses
+   set attempt_count = 1,
+       lease_expires_at = clock_timestamp() - interval '1 second',
+       attempt_deadline_at = clock_timestamp() + interval '30 minutes',
+       analysis_deadline_at = clock_timestamp() + interval '90 minutes'
+ where id = pg_temp.analysis_fixture_id('claim_processing_reclaim');
+select is(
+  (select id from public.claim_analysis(null)),
+  pg_temp.analysis_fixture_id('claim_processing_reclaim'),
+  'Claim: a processing lease expiry is reclaimed'
+);
+select is(
+  (select attempt_count from public.analyses
+   where id = pg_temp.analysis_fixture_id('claim_processing_reclaim')),
+  2,
+  'Claim: a processing lease expiry starts a new attempt'
+);
+select ok(
+  (select operation_id is distinct from '00000000-0000-4000-8000-000000000022'::uuid
+   from public.analyses where id = pg_temp.analysis_fixture_id('claim_processing_reclaim')),
+  'Claim: a processing reclaim rotates the operation token'
+);
+select is(
+  (select count(*)::integer from public.credit_ledger
+   where analysis_id = pg_temp.analysis_fixture_id('claim_processing_reclaim')),
+  0,
+  'Claim: a processing reclaim does not touch the ledger'
+);
+select is(
+  (select count(*)::integer from public.notification_events
+   where analysis_id = pg_temp.analysis_fixture_id('claim_processing_reclaim')),
+  0,
+  'Claim: a processing reclaim emits no failure event'
+);
+select pg_temp.terminal_cleanup(pg_temp.analysis_fixture_id('claim_processing_reclaim'));
+
+select skip('Second-session SKIP LOCKED claim needs dblink (no repo precedent); method: hold a directed claim open in session A, claim via dblink in session B, assert disjoint rows', 1);
 
 -- Privileges: helper is callable only by service_role.
 select ok(

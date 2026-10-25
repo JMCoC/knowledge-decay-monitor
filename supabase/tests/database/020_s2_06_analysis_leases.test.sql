@@ -98,6 +98,9 @@ insert into pg_temp.analysis_fixture_ids(name, analysis_id) values
 update public.analyses
   set lease_expires_at = now() - interval '1 minute', attempt_count = 3
   where id = pg_temp.analysis_fixture_id('claim_terminal');
+insert into public.credit_ledger(workspace_id, event_type, amount, analysis_id)
+select workspace_id, 'Reserved', 3, id
+from public.analyses where id = pg_temp.analysis_fixture_id('claim_terminal');
 select is((select count(*)::integer from public.claim_analysis(null)), 0,
   'An expired third attempt is never reclaimed');
 select is((select status::text from public.analyses
@@ -110,8 +113,19 @@ select ok((select finished_at is not null from public.analyses
   where id = pg_temp.analysis_fixture_id('claim_terminal')),
   'Terminal marking stamps finished_at');
 select is((select count(*)::integer from public.credit_ledger
-  where analysis_id = pg_temp.analysis_fixture_id('claim_terminal')), 0,
-  'Terminal marking releases no credits (TODO S2-08)');
+  where analysis_id = pg_temp.analysis_fixture_id('claim_terminal')), 2,
+  'Terminal marking keeps the reservation and adds a release');
+select is((select count(*)::integer from public.credit_ledger
+  where analysis_id = pg_temp.analysis_fixture_id('claim_terminal') and event_type = 'Released'), 1,
+  'Terminal marking releases the reservation exactly once');
+select is((select count(*)::integer from public.notification_events
+  where analysis_id = pg_temp.analysis_fixture_id('claim_terminal')
+    and type = 'analysis_failed'), 1,
+  'Terminal marking emits one failure event');
+delete from public.notification_events
+  where analysis_id = pg_temp.analysis_fixture_id('claim_terminal');
+delete from public.credit_ledger
+  where analysis_id = pg_temp.analysis_fixture_id('claim_terminal');
 delete from public.analysis_documents
   where analysis_id = pg_temp.analysis_fixture_id('claim_terminal');
 delete from public.analyses where id = pg_temp.analysis_fixture_id('claim_terminal');
