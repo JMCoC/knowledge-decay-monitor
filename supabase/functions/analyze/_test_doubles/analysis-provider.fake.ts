@@ -39,6 +39,119 @@ const FAILURE_CODES: ReadonlySet<string> = new Set([
   "INTERNAL_ERROR",
 ]);
 
+const FINDING_TYPES: ReadonlySet<string> = new Set([
+  "contradiction",
+  "obsolescence",
+]);
+
+const FINDING_SEVERITIES: ReadonlySet<string> = new Set([
+  "High",
+  "Medium",
+  "Low",
+]);
+
+function cloneFinding(finding: InternalFinding): InternalFinding {
+  return {
+    ...finding,
+    evidence: finding.evidence.map((entry) => ({ ...entry })),
+  };
+}
+
+function parseEvidenceSafe(
+  value: unknown,
+): InternalFinding["evidence"][number] | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const {
+    documentId,
+    versionId,
+    chunkId,
+    role,
+    snapshot,
+    pageNumber,
+    section,
+    sectionHeading,
+  } = record;
+  if (typeof documentId !== "string" || documentId.length === 0) {
+    return undefined;
+  }
+  if (typeof versionId !== "string" || versionId.length === 0) {
+    return undefined;
+  }
+  if (typeof chunkId !== "string" || chunkId.length === 0) {
+    return undefined;
+  }
+  if (role !== "source" && role !== "comparison") return undefined;
+  if (typeof snapshot !== "string" || snapshot.length === 0) {
+    return undefined;
+  }
+  if (pageNumber !== null && typeof pageNumber !== "number") {
+    return undefined;
+  }
+  if (section !== null && typeof section !== "string") return undefined;
+  if (sectionHeading !== null && typeof sectionHeading !== "string") {
+    return undefined;
+  }
+  return {
+    documentId,
+    versionId,
+    chunkId,
+    role,
+    snapshot,
+    pageNumber: pageNumber as number | null,
+    section: section as string | null,
+    sectionHeading: sectionHeading as string | null,
+  };
+}
+
+function parseFindingSafe(value: unknown): InternalFinding | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const { type, severity, confidence, explanation, evidence } = record;
+  if (typeof type !== "string" || !FINDING_TYPES.has(type)) {
+    return undefined;
+  }
+  if (typeof severity !== "string" || !FINDING_SEVERITIES.has(severity)) {
+    return undefined;
+  }
+  if (
+    typeof confidence !== "number" ||
+    !Number.isFinite(confidence) ||
+    confidence < 0 ||
+    confidence > 1
+  ) {
+    return undefined;
+  }
+  if (typeof explanation !== "string") return undefined;
+  if (!Array.isArray(evidence) || evidence.length !== 2) return undefined;
+
+  const parsedEvidence: InternalFinding["evidence"] = [];
+  for (const entry of evidence) {
+    const parsed = parseEvidenceSafe(entry);
+    if (parsed === undefined) return undefined;
+    parsedEvidence.push(parsed);
+  }
+  const sourceCount = parsedEvidence.filter(
+    (entry) => entry.role === "source",
+  ).length;
+  const comparisonCount = parsedEvidence.filter(
+    (entry) => entry.role === "comparison",
+  ).length;
+  if (sourceCount !== 1 || comparisonCount !== 1) return undefined;
+
+  return {
+    type: type as InternalFinding["type"],
+    severity: severity as InternalFinding["severity"],
+    confidence,
+    explanation,
+    evidence: parsedEvidence,
+  };
+}
+
 function parseIntSafe(value: string | undefined): number | undefined {
   if (typeof value !== "string" || value.trim() === "") return undefined;
   const parsed = Number(value);
@@ -65,6 +178,7 @@ export function createFakeProvider(
 ): AIProvider {
   return new FakeAnalysisProvider({
     latencyMs: overrides.latencyMs ?? parseIntSafe(env.analysisFakeLatencyMs),
+    findings: overrides.findings?.map(cloneFinding),
     failAtCallIndex:
       overrides.failAtCallIndex ?? parseIntSafe(env.analysisFakeFailAtCallIndex),
     failCode: overrides.failCode ?? parseFailCodeSafe(env.analysisFakeFailCode),
@@ -103,6 +217,11 @@ export function parseFakeBehaviorSafe(
   if (typeof record["throwCode"] === "string") {
     const code = parseFailCodeSafe(record["throwCode"]);
     if (code !== undefined) behavior.throwCode = code;
+  }
+  if (Array.isArray(record["findings"])) {
+    behavior.findings = record["findings"]
+      .map(parseFindingSafe)
+      .filter((finding): finding is InternalFinding => finding !== undefined);
   }
   return behavior;
 }
@@ -148,7 +267,7 @@ export class FakeAnalysisProvider implements AIProvider {
       if (failAtCallIndex !== undefined && index === failAtCallIndex) {
         return { ok: false, error: { code: failCode } };
       }
-      return { ok: true, findings };
+      return { ok: true, findings: findings.map(cloneFinding) };
     } finally {
       this.active -= 1;
     }
