@@ -454,9 +454,16 @@ describe("FAKE-PROVIDER analysis worker integration", () => {
       expect(row.attempt_count).toBe(3);
       expect(await scopedCredits(service, job.analysisId)).toEqual([
         { event_type: "Reserved", amount: row.fixed_cost },
+        { event_type: "Released", amount: row.fixed_cost },
       ]);
       expect(await scopedCount(service, "findings", job.analysisId)).toBe(0);
-      expect(await scopedCount(service, "notification_events", job.analysisId)).toBe(0);
+      const { count: failureEvents, error: failureEventsError } = await service
+        .from("notification_events")
+        .select("id", { count: "exact", head: true })
+        .eq("analysis_id", job.analysisId)
+        .eq("type", "analysis_failed");
+      expect(failureEventsError).toBeNull();
+      expect(failureEvents).toBe(1);
     } finally {
       await job.dispose();
     }

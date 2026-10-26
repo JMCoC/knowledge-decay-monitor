@@ -324,6 +324,9 @@ update public.analyses set attempt_count = 3
 insert into pg_temp.worker_ops(analysis_name, operation_id)
   select 'fail_r3', operation_id from public.analyses
   where id = pg_temp.analysis_fixture_id('fail_r3');
+insert into public.credit_ledger(workspace_id, event_type, amount, analysis_id)
+select workspace_id, 'Reserved', 3, id
+from public.analyses where id = pg_temp.analysis_fixture_id('fail_r3');
 select is((select public.fail_analysis(
     pg_temp.analysis_fixture_id('fail_r3'),
     (select operation_id from pg_temp.worker_ops where analysis_name = 'fail_r3'),
@@ -336,11 +339,20 @@ select ok((select finished_at is not null and lease_expires_at is null from publ
   where id = pg_temp.analysis_fixture_id('fail_r3')),
   'A terminal failure stamps finished_at and clears the lease');
 select is((select count(*)::integer from public.credit_ledger
-  where analysis_id = pg_temp.analysis_fixture_id('fail_r3')), 0,
-  'A terminal failure moves no credits (TODO S2-08)');
+  where analysis_id = pg_temp.analysis_fixture_id('fail_r3')), 2,
+  'A terminal failure keeps the reservation and adds a release');
+select is((select count(*)::integer from public.credit_ledger
+  where analysis_id = pg_temp.analysis_fixture_id('fail_r3')
+    and event_type = 'Released'), 1,
+  'A terminal failure releases the reservation exactly once');
 select is((select count(*)::integer from public.notification_events
-  where analysis_id = pg_temp.analysis_fixture_id('fail_r3')), 0,
-  'A terminal failure emits no events (TODO S2-08)');
+  where analysis_id = pg_temp.analysis_fixture_id('fail_r3')
+    and type = 'analysis_failed'), 1,
+  'A terminal failure emits one failure event');
+delete from public.notification_events
+  where analysis_id = pg_temp.analysis_fixture_id('fail_r3');
+delete from public.credit_ledger
+  where analysis_id = pg_temp.analysis_fixture_id('fail_r3');
 delete from public.analysis_documents
   where analysis_id = pg_temp.analysis_fixture_id('fail_r3');
 delete from public.analyses where id = pg_temp.analysis_fixture_id('fail_r3');
@@ -352,6 +364,9 @@ insert into pg_temp.analysis_fixture_ids(name, analysis_id) values
 insert into pg_temp.worker_ops(analysis_name, operation_id)
   select 'fail_nr', operation_id from public.analyses
   where id = pg_temp.analysis_fixture_id('fail_nr');
+insert into public.credit_ledger(workspace_id, event_type, amount, analysis_id)
+select workspace_id, 'Reserved', 3, id
+from public.analyses where id = pg_temp.analysis_fixture_id('fail_nr');
 select is((select public.fail_analysis(
     pg_temp.analysis_fixture_id('fail_nr'),
     (select operation_id from pg_temp.worker_ops where analysis_name = 'fail_nr'),
@@ -361,8 +376,20 @@ select is((select error_code::text from public.analyses
   where id = pg_temp.analysis_fixture_id('fail_nr')), 'ESTIMATE_STALE',
   'A fast failure keeps ESTIMATE_STALE');
 select is((select count(*)::integer from public.credit_ledger
-  where analysis_id = pg_temp.analysis_fixture_id('fail_nr')), 0,
-  'A fast failure moves no credits (TODO S2-08)');
+  where analysis_id = pg_temp.analysis_fixture_id('fail_nr')), 2,
+  'A fast failure keeps the reservation and adds a release');
+select is((select count(*)::integer from public.credit_ledger
+  where analysis_id = pg_temp.analysis_fixture_id('fail_nr')
+    and event_type = 'Released'), 1,
+  'A fast failure releases the reservation exactly once');
+select is((select count(*)::integer from public.notification_events
+  where analysis_id = pg_temp.analysis_fixture_id('fail_nr')
+    and type = 'analysis_failed'), 1,
+  'A fast failure emits one failure event');
+delete from public.notification_events
+  where analysis_id = pg_temp.analysis_fixture_id('fail_nr');
+delete from public.credit_ledger
+  where analysis_id = pg_temp.analysis_fixture_id('fail_nr');
 delete from public.analysis_documents
   where analysis_id = pg_temp.analysis_fixture_id('fail_nr');
 delete from public.analyses where id = pg_temp.analysis_fixture_id('fail_nr');

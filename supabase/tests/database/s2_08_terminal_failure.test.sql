@@ -5,7 +5,8 @@ set search_path = public, extensions;
 select no_plan();
 
 -- Direct coverage for private.finalize_failed_analysis (S2-08b, 8b-6) and
--- claim_analysis terminal wiring (8b-7). fail_analysis remains 8b-8.
+-- claim_analysis terminal wiring (8b-7). fail_analysis wiring landed in
+-- 8b-8; covered below.
 create function pg_temp.terminal_fixture(
   p_name text,
   p_status public.analysis_job_status,
@@ -994,6 +995,399 @@ select is(
 select pg_temp.terminal_cleanup(pg_temp.analysis_fixture_id('claim_processing_reclaim'));
 
 select skip('Second-session SKIP LOCKED claim needs dblink (no repo precedent); method: hold a directed claim open in session A, claim via dblink in session B, assert disjoint rows', 1);
+
+-- Fail wiring (S2-08b, 8b-8): fail_analysis takes the workspace advisory
+-- before row locks and delegates terminal paths to the helper. The helper is
+-- called with p_enforce_operation=false because fail_analysis already fenced
+-- the operation and preserves legacy coalesced deadlines.
+select ok(
+  exists (
+    select 1
+    from pg_catalog.pg_proc p
+    join pg_catalog.pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public'
+      and p.proname = 'fail_analysis'
+      and p.pronargs = 4
+      and position('pg_advisory_xact_lock' in p.prosrc) > 0
+      and position('pg_advisory_xact_lock' in p.prosrc)
+          < position('from public.workspaces' in p.prosrc)
+      and position('pg_advisory_xact_lock' in p.prosrc)
+          < position('for update' in p.prosrc)
+  ),
+  'Fail: workspace advisory precedes workspace and analysis locks'
+);
+select ok(
+  not exists (
+    select 1
+    from pg_catalog.pg_proc p
+    join pg_catalog.pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public'
+      and p.proname = 'fail_analysis'
+      and p.pronargs = 4
+      and position('26061501' in p.prosrc) > 0
+  ),
+  'Fail: the global advisory is removed'
+);
+
+-- An expired deadline terminalizes through the helper.
+select pg_temp.terminal_fixture(
+  'fail_deadline', 'processing', '00000000-0000-4000-8000-000000000030');
+update public.analyses
+   set analysis_deadline_at = clock_timestamp() - interval '1 second'
+ where id = pg_temp.analysis_fixture_id('fail_deadline');
+select pg_temp.terminal_reserved(pg_temp.analysis_fixture_id('fail_deadline'));
+select pg_temp.terminal_staging(
+  pg_temp.analysis_fixture_id('fail_deadline'),
+  '00000000-0000-4000-8000-000000000030');
+select is(
+  (select public.fail_analysis(
+    pg_temp.analysis_fixture_id('fail_deadline'),
+    '00000000-0000-4000-8000-000000000030',
+    true, 'TIMEOUT'::public.analysis_failure_code)),
+  'failed',
+  'Fail: an expired analysis deadline closes the analysis'
+);
+select is(
+  (select status::text from public.analyses
+   where id = pg_temp.analysis_fixture_id('fail_deadline')),
+  'failed',
+  'Fail: an expired analysis deadline sets failed'
+);
+select is(
+  (select error_code::text from public.analyses
+   where id = pg_temp.analysis_fixture_id('fail_deadline')),
+  'TIMEOUT',
+  'Fail: an expired analysis deadline uses TIMEOUT'
+);
+select is(
+  (select count(*)::integer from public.credit_ledger
+   where analysis_id = pg_temp.analysis_fixture_id('fail_deadline')),
+  2,
+  'Fail: an expired analysis deadline keeps the reservation and adds a release'
+);
+select is(
+  (select count(*)::integer from public.credit_ledger
+   where analysis_id = pg_temp.analysis_fixture_id('fail_deadline')
+     and event_type = 'Released'),
+  1,
+  'Fail: an expired analysis deadline releases exactly once'
+);
+select is(
+  (select count(*)::integer from public.notification_events
+   where analysis_id = pg_temp.analysis_fixture_id('fail_deadline')
+     and type = 'analysis_failed'),
+  1,
+  'Fail: an expired analysis deadline emits one failure event'
+);
+select is(
+  (select count(*)::integer from private.analysis_finding_staging
+   where analysis_id = pg_temp.analysis_fixture_id('fail_deadline'))
+  + (select count(*)::integer from private.analysis_finding_evidence_staging
+     where analysis_id = pg_temp.analysis_fixture_id('fail_deadline')),
+  0,
+  'Fail: an expired analysis deadline cleans staging'
+);
+select is(
+  (select operation_id from public.analyses
+   where id = pg_temp.analysis_fixture_id('fail_deadline')),
+  '00000000-0000-4000-8000-000000000030'::uuid,
+  'Fail: the terminal acknowledgement token is preserved'
+);
+select pg_temp.terminal_cleanup(pg_temp.analysis_fixture_id('fail_deadline'));
+
+-- An expired attempt deadline also terminalizes through the helper.
+select pg_temp.terminal_fixture(
+  'fail_attempt_deadline', 'processing', '00000000-0000-4000-8000-000000000037');
+update public.analyses
+   set attempt_deadline_at = clock_timestamp() - interval '1 second'
+ where id = pg_temp.analysis_fixture_id('fail_attempt_deadline');
+select pg_temp.terminal_reserved(pg_temp.analysis_fixture_id('fail_attempt_deadline'));
+select pg_temp.terminal_staging(
+  pg_temp.analysis_fixture_id('fail_attempt_deadline'),
+  '00000000-0000-4000-8000-000000000037');
+select is(
+  (select public.fail_analysis(
+    pg_temp.analysis_fixture_id('fail_attempt_deadline'),
+    '00000000-0000-4000-8000-000000000037',
+    true, 'TIMEOUT'::public.analysis_failure_code)),
+  'failed',
+  'Fail: an expired attempt deadline closes the analysis'
+);
+select is(
+  (select error_code::text from public.analyses
+   where id = pg_temp.analysis_fixture_id('fail_attempt_deadline')),
+  'TIMEOUT',
+  'Fail: an expired attempt deadline uses TIMEOUT'
+);
+select is(
+  (select count(*)::integer from public.credit_ledger
+   where analysis_id = pg_temp.analysis_fixture_id('fail_attempt_deadline')),
+  2,
+  'Fail: an expired attempt deadline releases the reservation'
+);
+select is(
+  (select count(*)::integer from public.notification_events
+   where analysis_id = pg_temp.analysis_fixture_id('fail_attempt_deadline')
+     and type = 'analysis_failed'),
+  1,
+  'Fail: an expired attempt deadline emits one failure event'
+);
+select pg_temp.terminal_cleanup(pg_temp.analysis_fixture_id('fail_attempt_deadline'));
+
+-- A non-retryable terminal failure delegates to the helper.
+select pg_temp.terminal_fixture(
+  'fail_nonretryable', 'processing', '00000000-0000-4000-8000-000000000031');
+select pg_temp.terminal_reserved(pg_temp.analysis_fixture_id('fail_nonretryable'));
+select pg_temp.terminal_staging(
+  pg_temp.analysis_fixture_id('fail_nonretryable'),
+  '00000000-0000-4000-8000-000000000031');
+select is(
+  (select public.fail_analysis(
+    pg_temp.analysis_fixture_id('fail_nonretryable'),
+    '00000000-0000-4000-8000-000000000031',
+    false, 'ESTIMATE_STALE'::public.analysis_failure_code)),
+  'failed',
+  'Fail: a non-retryable code closes the analysis'
+);
+select is(
+  (select count(*)::integer from public.credit_ledger
+   where analysis_id = pg_temp.analysis_fixture_id('fail_nonretryable')),
+  2,
+  'Fail: a non-retryable code keeps the reservation and adds a release'
+);
+select is(
+  (select count(*)::integer from public.notification_events
+   where analysis_id = pg_temp.analysis_fixture_id('fail_nonretryable')
+     and type = 'analysis_failed'),
+  1,
+  'Fail: a non-retryable code emits one failure event'
+);
+select is(
+  (select count(*)::integer from private.analysis_finding_staging
+   where analysis_id = pg_temp.analysis_fixture_id('fail_nonretryable'))
+  + (select count(*)::integer from private.analysis_finding_evidence_staging
+     where analysis_id = pg_temp.analysis_fixture_id('fail_nonretryable')),
+  0,
+  'Fail: a non-retryable code cleans staging'
+);
+select pg_temp.terminal_cleanup(pg_temp.analysis_fixture_id('fail_nonretryable'));
+
+-- A retryable failure at attempt 3 delegates to the helper.
+select pg_temp.terminal_fixture(
+  'fail_attempt3', 'processing', '00000000-0000-4000-8000-000000000032');
+update public.analyses set attempt_count = 3
+ where id = pg_temp.analysis_fixture_id('fail_attempt3');
+select pg_temp.terminal_reserved(pg_temp.analysis_fixture_id('fail_attempt3'));
+select pg_temp.terminal_staging(
+  pg_temp.analysis_fixture_id('fail_attempt3'),
+  '00000000-0000-4000-8000-000000000032');
+select is(
+  (select public.fail_analysis(
+    pg_temp.analysis_fixture_id('fail_attempt3'),
+    '00000000-0000-4000-8000-000000000032',
+    true, 'PROVIDER_UNAVAILABLE'::public.analysis_failure_code)),
+  'failed',
+  'Fail: a retryable code at attempt 3 closes the analysis'
+);
+select is(
+  (select count(*)::integer from public.credit_ledger
+   where analysis_id = pg_temp.analysis_fixture_id('fail_attempt3')),
+  2,
+  'Fail: attempt 3 keeps the reservation and adds a release'
+);
+select is(
+  (select count(*)::integer from public.notification_events
+   where analysis_id = pg_temp.analysis_fixture_id('fail_attempt3')
+     and type = 'analysis_failed'),
+  1,
+  'Fail: attempt 3 emits one failure event'
+);
+select is(
+  (select count(*)::integer from private.analysis_finding_staging
+   where analysis_id = pg_temp.analysis_fixture_id('fail_attempt3'))
+  + (select count(*)::integer from private.analysis_finding_evidence_staging
+     where analysis_id = pg_temp.analysis_fixture_id('fail_attempt3')),
+  0,
+  'Fail: attempt 3 cleans staging'
+);
+select pg_temp.terminal_cleanup(pg_temp.analysis_fixture_id('fail_attempt3'));
+
+-- A retryable failure with attempts left keeps the queued reservation.
+select pg_temp.terminal_fixture(
+  'fail_retryable', 'processing', '00000000-0000-4000-8000-000000000033');
+update public.analyses set attempt_count = 1
+ where id = pg_temp.analysis_fixture_id('fail_retryable');
+select pg_temp.terminal_reserved(pg_temp.analysis_fixture_id('fail_retryable'));
+select pg_temp.terminal_staging(
+  pg_temp.analysis_fixture_id('fail_retryable'),
+  '00000000-0000-4000-8000-000000000033');
+select is(
+  (select public.fail_analysis(
+    pg_temp.analysis_fixture_id('fail_retryable'),
+    '00000000-0000-4000-8000-000000000033',
+    true, 'PROVIDER_UNAVAILABLE'::public.analysis_failure_code)),
+  'queued',
+  'Fail: a retryable failure with attempts left requeues'
+);
+select is(
+  (select status::text from public.analyses
+   where id = pg_temp.analysis_fixture_id('fail_retryable')),
+  'queued',
+  'Fail: a retryable failure keeps the job queued'
+);
+select is(
+  (select operation_id from public.analyses
+   where id = pg_temp.analysis_fixture_id('fail_retryable')),
+  null::uuid,
+  'Fail: a retryable failure clears the operation token'
+);
+select ok(
+  (select lease_expires_at is null and continuation_pending = false
+   from public.analyses
+   where id = pg_temp.analysis_fixture_id('fail_retryable')),
+  'Fail: a retryable failure clears lease and continuation'
+);
+select is(
+  (select count(*)::integer from public.credit_ledger
+   where analysis_id = pg_temp.analysis_fixture_id('fail_retryable')),
+  1,
+  'Fail: a retryable failure keeps the reservation'
+);
+select is(
+  (select count(*)::integer from public.notification_events
+   where analysis_id = pg_temp.analysis_fixture_id('fail_retryable')),
+  0,
+  'Fail: a retryable failure emits no event'
+);
+select is(
+  (select count(*)::integer from private.analysis_finding_staging
+   where analysis_id = pg_temp.analysis_fixture_id('fail_retryable')),
+  1,
+  'Fail: a retryable failure does not clean staging'
+);
+select ok(
+  (select next_attempt_at between clock_timestamp() + interval '25 seconds'
+      and clock_timestamp() + interval '35 seconds'
+   from public.analyses
+   where id = pg_temp.analysis_fixture_id('fail_retryable')),
+  'Fail: a retryable failure keeps the 30 second backoff'
+);
+select pg_temp.terminal_cleanup(pg_temp.analysis_fixture_id('fail_retryable'));
+
+-- A foreign token is superseded without writes.
+select pg_temp.terminal_fixture(
+  'fail_mismatch', 'processing', '00000000-0000-4000-8000-000000000034');
+select pg_temp.terminal_reserved(pg_temp.analysis_fixture_id('fail_mismatch'));
+select pg_temp.terminal_staging(
+  pg_temp.analysis_fixture_id('fail_mismatch'),
+  '00000000-0000-4000-8000-000000000034');
+select is(
+  (select public.fail_analysis(
+    pg_temp.analysis_fixture_id('fail_mismatch'),
+    '00000000-0000-4000-8000-000000000035',
+    true, 'PROVIDER_UNAVAILABLE'::public.analysis_failure_code)),
+  'superseded',
+  'Fail: a foreign token is superseded'
+);
+select is(
+  (select status::text from public.analyses
+   where id = pg_temp.analysis_fixture_id('fail_mismatch')),
+  'processing',
+  'Fail: a foreign token leaves the status unchanged'
+);
+select is(
+  (select operation_id from public.analyses
+   where id = pg_temp.analysis_fixture_id('fail_mismatch')),
+  '00000000-0000-4000-8000-000000000034'::uuid,
+  'Fail: a foreign token leaves the operation unchanged'
+);
+select is(
+  (select count(*)::integer from public.credit_ledger
+   where analysis_id = pg_temp.analysis_fixture_id('fail_mismatch')),
+  1,
+  'Fail: a foreign token leaves the ledger unchanged'
+);
+select is(
+  (select count(*)::integer from public.notification_events
+   where analysis_id = pg_temp.analysis_fixture_id('fail_mismatch')),
+  0,
+  'Fail: a foreign token emits no event'
+);
+select is(
+  (select count(*)::integer from private.analysis_finding_staging
+   where analysis_id = pg_temp.analysis_fixture_id('fail_mismatch')),
+  1,
+  'Fail: a foreign token leaves staging unchanged'
+);
+select pg_temp.terminal_cleanup(pg_temp.analysis_fixture_id('fail_mismatch'));
+
+-- An expired lease is superseded without writes.
+select pg_temp.terminal_fixture(
+  'fail_lease', 'processing', '00000000-0000-4000-8000-000000000036');
+update public.analyses
+   set lease_expires_at = clock_timestamp() - interval '1 second'
+ where id = pg_temp.analysis_fixture_id('fail_lease');
+select pg_temp.terminal_reserved(pg_temp.analysis_fixture_id('fail_lease'));
+select is(
+  (select public.fail_analysis(
+    pg_temp.analysis_fixture_id('fail_lease'),
+    '00000000-0000-4000-8000-000000000036',
+    true, 'TIMEOUT'::public.analysis_failure_code)),
+  'superseded',
+  'Fail: an expired lease is superseded'
+);
+select is(
+  (select status::text from public.analyses
+   where id = pg_temp.analysis_fixture_id('fail_lease')),
+  'processing',
+  'Fail: an expired lease leaves the status unchanged'
+);
+select is(
+  (select count(*)::integer from public.credit_ledger
+   where analysis_id = pg_temp.analysis_fixture_id('fail_lease')),
+  1,
+  'Fail: an expired lease leaves the ledger unchanged'
+);
+select is(
+  (select count(*)::integer from public.notification_events
+   where analysis_id = pg_temp.analysis_fixture_id('fail_lease')),
+  0,
+  'Fail: an expired lease emits no event'
+);
+select pg_temp.terminal_cleanup(pg_temp.analysis_fixture_id('fail_lease'));
+
+-- A non-processing row is superseded without writes.
+select pg_temp.terminal_fixture('fail_completed', 'completed', null);
+select is(
+  (select public.fail_analysis(
+    pg_temp.analysis_fixture_id('fail_completed'),
+    null,
+    true, 'INTERNAL_ERROR'::public.analysis_failure_code)),
+  'superseded',
+  'Fail: a completed analysis is superseded'
+);
+select is(
+  (select status::text from public.analyses
+   where id = pg_temp.analysis_fixture_id('fail_completed')),
+  'completed',
+  'Fail: a completed analysis keeps its status'
+);
+select is(
+  (select count(*)::integer from public.credit_ledger
+   where analysis_id = pg_temp.analysis_fixture_id('fail_completed')),
+  0,
+  'Fail: a completed analysis has no ledger writes'
+);
+select pg_temp.terminal_cleanup(pg_temp.analysis_fixture_id('fail_completed'));
+
+-- An unknown id is superseded.
+select is(
+  (select public.fail_analysis(
+    gen_random_uuid(), gen_random_uuid(), true,
+    'INTERNAL_ERROR'::public.analysis_failure_code)),
+  'superseded',
+  'Fail: an unknown analysis id is superseded'
+);
 
 -- Privileges: helper is callable only by service_role.
 select ok(

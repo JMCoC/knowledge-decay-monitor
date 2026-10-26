@@ -382,3 +382,113 @@ begin
   end loop;
 end;
 $$;
+
+-- S2-08b part 3 of 5 (8b-8). fail_analysis takes the workspace advisory
+-- before row locks and delegates terminal paths to the helper.
+-- Spec: docs/superpowers/specs/2026-10-21-s2-08-analysis-finalization-spec.md
+-- §7.2, §13.1, §13.2.
+--
+-- The helper runs with p_enforce_operation=false. fail_analysis already
+-- checked the status, token and lease, and it preserves the legacy coalesced
+-- deadlines. Re-enforcing them in the helper would reject legacy NULL or
+-- expired deadlines before the coalesced deadline check can terminalize them.
+-- §13.1 y plan 283-286 prescriben p_enforce_operation=true; false es
+-- intencional aquí porque fail_analysis ya hizo fencing (status, token,
+-- lease) y los deadlines legacy pueden ser NULL o estar vencidos, casos
+-- que el helper true rechazaría como superseded.
+
+create or replace function public.fail_analysis(
+  p_analysis_id uuid,
+  p_operation_id uuid,
+  p_retryable boolean,
+  p_error_code public.analysis_failure_code
+)
+returns text
+language plpgsql security definer set search_path = ''
+set lock_timeout = '1s' set statement_timeout = '2s' as $$
+declare
+  j public.analyses%rowtype;
+  v_workspace_id uuid;
+  ts timestamptz;
+  v_attempt_deadline_at timestamptz;
+  v_analysis_deadline_at timestamptz;
+begin
+  select a.workspace_id into v_workspace_id
+  from public.analyses a
+  where a.id = p_analysis_id;
+  if v_workspace_id is null then
+    return 'superseded';
+  end if;
+
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended(v_workspace_id::text, 0)
+  );
+
+  perform 1
+  from public.workspaces w
+  where w.id = v_workspace_id
+  for update;
+  if not found then
+    return 'superseded';
+  end if;
+
+  select * into j
+  from public.analyses a
+  where a.id = p_analysis_id
+  for update;
+  if not found
+     or j.status <> 'processing'
+     or j.operation_id is distinct from p_operation_id then
+    return 'superseded';
+  end if;
+
+  ts := pg_catalog.clock_timestamp();
+  if j.lease_expires_at is null or j.lease_expires_at <= ts then
+    return 'superseded';
+  end if;
+
+  v_analysis_deadline_at := coalesce(
+    j.analysis_deadline_at,
+    coalesce(j.started_at, j.created_at) + interval '90 minutes'
+  );
+  v_attempt_deadline_at := coalesce(
+    j.attempt_deadline_at,
+    least(
+      coalesce(j.attempt_started_at, j.started_at, ts) + interval '30 minutes',
+      v_analysis_deadline_at
+    )
+  );
+
+  if v_analysis_deadline_at <= ts or v_attempt_deadline_at <= ts then
+    return private.finalize_failed_analysis(
+      p_analysis_id, p_operation_id, 'TIMEOUT', false
+    );
+  end if;
+
+  if p_retryable and j.attempt_count < 3 then
+    update public.analyses
+       set status = 'queued',
+           operation_id = null,
+           lease_expires_at = null,
+           continuation_pending = false,
+           next_attempt_at = ts + case
+             when j.attempt_count = 1 then interval '30 seconds'
+             else interval '2 minutes' end,
+           error_code = p_error_code,
+           updated_at = ts
+     where id = j.id;
+    return 'queued';
+  end if;
+
+  return private.finalize_failed_analysis(
+    p_analysis_id, p_operation_id, p_error_code, false
+  );
+end;
+$$;
+
+revoke all on function public.fail_analysis(
+  uuid, uuid, boolean, public.analysis_failure_code
+) from public, anon, authenticated;
+grant execute on function public.fail_analysis(
+  uuid, uuid, boolean, public.analysis_failure_code
+) to service_role;
