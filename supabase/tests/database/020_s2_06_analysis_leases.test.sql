@@ -231,35 +231,57 @@ delete from public.analysis_documents
   where analysis_id = pg_temp.analysis_fixture_id('renew_ok');
 delete from public.analyses where id = pg_temp.analysis_fixture_id('renew_ok');
 
--- (p) Valid complete marks the job completed.
+-- (p) Valid finalize marks the job completed and consumes the reservation.
 insert into pg_temp.analysis_fixture_ids(name, analysis_id) values
   ('complete_ok', pg_temp.create_analysis_fixture(
     'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', '10000000-0000-4000-8000-000000000004', 'processing', 1));
 insert into pg_temp.worker_ops(analysis_name, operation_id)
   select 'complete_ok', operation_id from public.analyses
   where id = pg_temp.analysis_fixture_id('complete_ok');
-select lives_ok(format('select public.complete_analysis(%L::uuid, %L::uuid)',
+insert into public.credit_ledger(workspace_id, event_type, amount, analysis_id)
+select workspace_id, 'Reserved', 3, id
+from public.analyses where id = pg_temp.analysis_fixture_id('complete_ok');
+update public.analyses
+  set attempt_deadline_at = clock_timestamp() + interval '30 minutes',
+      analysis_deadline_at = clock_timestamp() + interval '90 minutes'
+  where id = pg_temp.analysis_fixture_id('complete_ok');
+select lives_ok(format('select public.finalize_analysis_success(%L::uuid, %L::uuid, %s)',
     pg_temp.analysis_fixture_id('complete_ok'),
-    (select operation_id from pg_temp.worker_ops where analysis_name = 'complete_ok')),
-  'A valid complete marks the job completed');
+    (select operation_id from pg_temp.worker_ops where analysis_name = 'complete_ok'),
+    0),
+  'A valid finalize marks the job completed');
 select is((select status::text from public.analyses
   where id = pg_temp.analysis_fixture_id('complete_ok')), 'completed',
   'A completed job stays completed');
 select ok((select finished_at is not null from public.analyses
   where id = pg_temp.analysis_fixture_id('complete_ok')),
-  'A complete stamps finished_at');
+  'A finalize stamps finished_at');
+select is((select count(*)::integer from public.credit_ledger
+  where analysis_id = pg_temp.analysis_fixture_id('complete_ok')
+    and event_type = 'Consumed'), 1,
+  'A valid finalize consumes the reservation exactly once');
 
--- (q) Repeating the same complete is a no-op.
-select lives_ok(format('select public.complete_analysis(%L::uuid, %L::uuid)',
+-- (q) Repeating the same finalize is a no-op.
+select lives_ok(format('select public.finalize_analysis_success(%L::uuid, %L::uuid, %s)',
     pg_temp.analysis_fixture_id('complete_ok'),
-    (select operation_id from pg_temp.worker_ops where analysis_name = 'complete_ok')),
-  'Repeating a complete is an idempotent no-op');
+    (select operation_id from pg_temp.worker_ops where analysis_name = 'complete_ok'),
+    0),
+  'Repeating a finalize is an idempotent no-op');
+select is((select count(*)::integer from public.credit_ledger
+  where analysis_id = pg_temp.analysis_fixture_id('complete_ok')
+    and event_type = 'Consumed'), 1,
+  'Repeating a finalize does not consume twice');
 
--- (r) Complete with a foreign operation_id raises.
-select throws_ok(format('select public.complete_analysis(%L::uuid, %L::uuid)',
+-- (r) Finalize with a foreign operation_id raises.
+select throws_ok(format('select public.finalize_analysis_success(%L::uuid, %L::uuid, %s)',
     pg_temp.analysis_fixture_id('complete_ok'),
-    '00000000-0000-0000-0000-000000000000'),
-  '22023', null, 'A complete with a foreign operation_id is fenced');
+    '00000000-0000-0000-0000-000000000000',
+    0),
+  '22023', null, 'A finalize with a foreign operation_id is fenced');
+delete from public.notification_events
+  where analysis_id = pg_temp.analysis_fixture_id('complete_ok');
+delete from public.credit_ledger
+  where analysis_id = pg_temp.analysis_fixture_id('complete_ok');
 delete from public.analysis_documents
   where analysis_id = pg_temp.analysis_fixture_id('complete_ok');
 delete from public.analyses where id = pg_temp.analysis_fixture_id('complete_ok');
@@ -406,10 +428,29 @@ select is((select public.fail_analysis(
     '00000000-0000-0000-0000-000000000000', true,
     'PROVIDER_UNAVAILABLE'::public.analysis_failure_code)), 'superseded',
   'A failure from a foreign worker is superseded');
-select lives_ok(format('select public.complete_analysis(%L::uuid, %L::uuid)',
+insert into public.credit_ledger(workspace_id, event_type, amount, analysis_id)
+select workspace_id, 'Reserved', 3, id
+from public.analyses where id = pg_temp.analysis_fixture_id('fail_wrongop');
+update public.analyses
+  set attempt_deadline_at = clock_timestamp() + interval '30 minutes',
+      analysis_deadline_at = clock_timestamp() + interval '90 minutes'
+  where id = pg_temp.analysis_fixture_id('fail_wrongop');
+select lives_ok(format('select public.finalize_analysis_success(%L::uuid, %L::uuid, %s)',
     pg_temp.analysis_fixture_id('fail_wrongop'),
-    (select operation_id from pg_temp.worker_ops where analysis_name = 'fail_wrongop')),
+    (select operation_id from pg_temp.worker_ops where analysis_name = 'fail_wrongop'),
+    0),
   'The fenced row stays live for its owner');
+select is((select status::text from public.analyses
+  where id = pg_temp.analysis_fixture_id('fail_wrongop')), 'completed',
+  'The owner can finalize the fenced row');
+select is((select count(*)::integer from public.credit_ledger
+  where analysis_id = pg_temp.analysis_fixture_id('fail_wrongop')
+    and event_type = 'Consumed'), 1,
+  'The owner finalize consumes the reservation');
+delete from public.notification_events
+  where analysis_id = pg_temp.analysis_fixture_id('fail_wrongop');
+delete from public.credit_ledger
+  where analysis_id = pg_temp.analysis_fixture_id('fail_wrongop');
 delete from public.analysis_documents
   where analysis_id = pg_temp.analysis_fixture_id('fail_wrongop');
 delete from public.analyses where id = pg_temp.analysis_fixture_id('fail_wrongop');

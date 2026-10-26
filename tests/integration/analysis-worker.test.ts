@@ -125,7 +125,15 @@ async function scopedCredits(service: Service, analysisId: string) {
     .from("credit_ledger")
     .select("event_type,amount")
     .eq("analysis_id", analysisId)
-    .order("created_at");
+    .order("created_at")
+    // Tiebreaker: Reserved and Released/Consumed can share created_at
+    // when the fixture inserts them in one transaction
+    // (transaction_timestamp() is constant within a tx). Ascending
+    // event_type follows the enum declaration order
+    // (Promotional, Reserved, Consumed, Released), so Reserved precedes
+    // both Released and Consumed. Promotional is not inserted for an
+    // analysis. Revisit if the enum order changes in a future migration.
+    .order("event_type", { ascending: true });
   expect(error).toBeNull();
   return data ?? [];
 }
@@ -276,9 +284,10 @@ describe("FAKE-PROVIDER analysis worker integration", () => {
       expect(row.operation_id).toBeTruthy();
       expect(await scopedCredits(service, job.analysisId)).toEqual([
         { event_type: "Reserved", amount: row.fixed_cost },
+        { event_type: "Consumed", amount: row.fixed_cost },
       ]);
       expect(await scopedCount(service, "findings", job.analysisId)).toBe(0);
-      expect(await scopedCount(service, "notification_events", job.analysisId)).toBe(0);
+      expect(await scopedCount(service, "notification_events", job.analysisId)).toBe(1);
     } finally {
       await job.dispose();
     }
@@ -325,6 +334,7 @@ describe("FAKE-PROVIDER analysis worker integration", () => {
       expect(row.attempt_count).toBe(2);
       expect(await scopedCredits(service, job.analysisId)).toEqual([
         { event_type: "Reserved", amount: row.fixed_cost },
+        { event_type: "Consumed", amount: row.fixed_cost },
       ]);
     } finally {
       await job.dispose();
@@ -360,6 +370,7 @@ describe("FAKE-PROVIDER analysis worker integration", () => {
       expect((await readCheckpoint(service, job.analysisId))?.cursor).not.toBeNull();
       expect(await scopedCredits(service, job.analysisId)).toEqual([
         { event_type: "Reserved", amount: row.fixed_cost },
+        { event_type: "Consumed", amount: row.fixed_cost },
       ]);
     } finally {
       await job.dispose();
@@ -387,9 +398,10 @@ describe("FAKE-PROVIDER analysis worker integration", () => {
       if (!staleOperation || !liveOperation) {
         throw new Error("Local claim fixture did not return an operation.");
       }
-      const stale = await service.rpc("complete_analysis", {
+      const stale = await service.rpc("finalize_analysis_success", {
         p_analysis_id: job.analysisId,
         p_operation_id: staleOperation,
+        p_reported_findings_count: 0,
       });
       expect(stale.error?.code).toBe("22023");
       const row = await readAnalysis(service, job.analysisId);

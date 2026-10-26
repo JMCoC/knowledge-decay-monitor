@@ -775,3 +775,19 @@ begin
   return query select v_analysis_id, 'queued'::public.analysis_job_status, p_retry_of_analysis_id;
 end;
 $$;
+
+create or replace function public.complete_analysis(
+  p_analysis_id uuid,
+  p_operation_id uuid
+) returns void
+language plpgsql security definer set search_path = '' as $$
+begin
+  raise exception 'complete_analysis is deprecated, use finalize_analysis_success'
+    using errcode = 'P0001';
+end;
+$$;
+
+revoke all on function public.complete_analysis(uuid, uuid)
+  from public, anon, authenticated;
+grant execute on function public.complete_analysis(uuid, uuid)
+  to service_role;

@@ -615,8 +615,8 @@ select is((select count(*)::int from public.notification_events
     where analysis_id = pg_temp.analysis_fixture_id('fin_trigger')),
   0, 'The safety trigger does not emit events');
 
--- Signature and grants. complete_analysis is intentionally untouched in 8a;
--- its revocation belongs to S2-08b (spec §1, plan §35).
+-- Signature and grants. complete_analysis is a deprecated trap as of S2-08b;
+-- its grant stays with service_role (spec §13.3).
 select has_function('public', 'finalize_analysis_success',
   array['uuid', 'uuid', 'integer'],
   'finalize_analysis_success has the specified signature');
@@ -634,10 +634,24 @@ select ok(not has_function_privilege('public',
   'PUBLIC cannot execute finalize_analysis_success');
 select has_function('public', 'complete_analysis',
   array['uuid', 'uuid'],
-  'complete_analysis remains available; its revocation is S2-08b');
+  'complete_analysis remains defined as a deprecated trap');
 select ok(has_function_privilege('service_role',
     'public.complete_analysis(uuid,uuid)', 'EXECUTE'),
   'service_role retains execute on complete_analysis');
+select ok(not has_function_privilege('anon',
+    'public.complete_analysis(uuid,uuid)', 'EXECUTE'),
+  'anon cannot execute complete_analysis');
+select ok(not has_function_privilege('authenticated',
+    'public.complete_analysis(uuid,uuid)', 'EXECUTE'),
+  'authenticated cannot execute complete_analysis');
+select ok(not has_function_privilege('public',
+    'public.complete_analysis(uuid,uuid)', 'EXECUTE'),
+  'PUBLIC cannot execute complete_analysis');
+select throws_ok(
+  format('select public.complete_analysis(%L, %L)',
+    gen_random_uuid(), gen_random_uuid()),
+  'P0001', 'complete_analysis is deprecated, use finalize_analysis_success',
+  'complete_analysis is deprecated and raises P0001');
 
 select * from finish();
 rollback;
