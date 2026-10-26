@@ -49,7 +49,9 @@ export interface AnalyzeEnv {
 
 export interface AnalyzeHandlerDeps {
   createProviderFn: () => AIProvider;
-  createFinalizationFn: () => AnalysisFinalization;
+  createFinalizationFn: (
+    client: AnalysisWorkerDb,
+  ) => AnalysisFinalization;
   createBatchPersistenceFn: (
     client: AnalysisWorkerDb,
   ) => AnalysisBatchPersistence;
@@ -226,7 +228,7 @@ export async function handleAnalyzeRequest(
       persistence = new FakeAnalysisBatchPersistence(client);
     } else {
       provider = deps.createProviderFn();
-      finalization = deps.createFinalizationFn();
+      finalization = deps.createFinalizationFn(client);
       persistence = deps.createBatchPersistenceFn(client);
     }
   } catch {

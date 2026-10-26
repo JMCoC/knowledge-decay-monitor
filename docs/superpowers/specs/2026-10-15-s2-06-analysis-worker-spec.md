@@ -327,6 +327,7 @@ S2-06 queda "completo pendiente de integración" (G2=A; cerrar solo con fakes co
 | 14 | Discrepancia `tests/fakes` vs `_test_doubles`; no se mueven archivos | S2-07 | Limpieza de dobles | Confusión documental |
 | 15 | Smoke real opt-in, no CI; 429 real no inducible | S2-07 | Cambio de proveedor o CI real | Fallback 429 no verificado en CI |
 | 16 | Telemetría del proveedor efectivo por intento; requiere evento de éxito | S2-08 | S2-08 o posterior | No se sabe qué proveedor sirvió cada par |
+| — | Filas 17-19 de esta sección viven en `docs/superpowers/specs/2026-10-21-s2-08-analysis-finalization-spec.md` §12.1 (S2-08 declara que no duplica la tabla de S2-06). | — | — | — |
 
 ### 12.2 Decisiones diferidas ("decidido no decidir hasta X; criterio = Y")
 
