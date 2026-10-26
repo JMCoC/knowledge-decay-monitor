@@ -83,7 +83,7 @@ The helper is self-contained and performs all three. The caller must not pre-loc
 
 `020:334-354` is the second terminal-failure block in the same `fail_analysis` path; it is included because the helper makes it fail otherwise. If any other test breaks, STOP and report. Do not “fix” it silently.
 
-**No dblink.** The deadlock coverage is TypeScript with `openLocalSqlSession`; do not install or use `dblink`. Keep the existing `020:414` skip.
+**No dblink.** The deadlock coverage is TypeScript with `openLocalSqlSession`; do not install or use `dblink`. Keep the existing `020:496` and `s2_08:997` skips.
 
 **No secrets / no raw data.** Never log tokens, prompts, chunks, snapshots, signed URLs or raw provider responses. Telemetry stays on the S2-06 allowlist.
 
@@ -470,7 +470,76 @@ Ownership follows the Day-Zero matrix. **Dev 2 (Diego)** owns the worker/Edge be
 
 ## Hotfix log
 
-_Empty at plan start. Record every corrective migration, test-only correction, or deviation here with trigger, fix, coverage, and red-first evidence._
+Estados: `resuelta` = cerrada por el commit indicado; `diferida` = deuda
+con dueño posterior; `decisión pendiente` = requiere decisión explícita.
+Las líneas se citan contra `HEAD` `648bf02`.
+
+| Tarea | Decisión / deuda | Estado | Commit |
+|---|---|---|---|
+| 8b-6 | Helper terminal autocontenido: advisory por workspace → `FOR UPDATE workspaces` → `FOR UPDATE analyses`; el caller no pre-bloquea. | resuelta | `a07710e` |
+| 8b-6 | `p_enforce_operation=true/false`; la rama `failed` corre antes del fencing; token distinto → `superseded`; `Consumed` en failed → `P0001`; conserva `operation_id`; sin `statement_timeout` propio; grant solo `service_role`. | resuelta | `a07710e` |
+| 8b-6 | Idempotencia: evento `analysis_failed` filtrado por `recipient_id`; `DELETE` de staging es no-op por el trigger de 8a-1; nota de interpretación §13.4 persistida. | resuelta | `a07710e` |
+| 8b-6 | Inventario de migración: `s208bNames`, `stageOrder.s2_08b=7`, rama `migrationStage`, uniones JSDoc y unit test. | resuelta | `a07710e` |
+| 8b-6 | Caso C dividido en C1/C2/C3 para que cada deadline dispare aislado (N1); N3 informativo sin fix. | resuelta | `a07710e` |
+| 8b-7 | `claim_analysis` con `statement_timeout=45s` y `lock_timeout=1s`. | resuelta | `50fc041` |
+| 8b-7 | Sweep en dos fases: descubrimiento sin lock (dirigido primero, FIFO, `LIMIT 25`) y locks por candidato advisory → workspace → analysis. | resuelta | `50fc041` |
+| 8b-7 | Fase 1 incluye terminales `processing`/`queued` (divergencia intencional del pseudocódigo `attempt_count < 3` del plan) para que el helper liquide ledger y evento. | resuelta | `50fc041` |
+| 8b-7 | Filas terminales y guard post-reclaim delegan en `finalize_failed_analysis(..., false)`; reclaim con `FOR UPDATE ... SKIP LOCKED`; `lock_not_available` se captura por candidato. | resuelta | `50fc041` |
+| 8b-7 | La cobertura de segunda sesión para `SKIP LOCKED` sigue omitida por falta de `dblink`; método documentado. Líneas reales: `020:496`, `s2_08:997`. Dueño: 12.D; el test TS cubre §13.5, el skip dblink se mantiene. | diferida | `50fc041` |
+| 8b-8 | `fail_analysis` adopta el orden canónico; se elimina el advisory global `26061501` de `fail_analysis` y queda solo en `claim_analysis`. | resuelta | `0c677bb` |
+| 8b-8 | Rutas terminales delegan en el helper con `false`; comentario inline documenta la divergencia vs §13.1/plan 283-286; firma, grants y `operation_id` terminal preservados. | resuelta | `0c677bb` |
+| 8b-8 | Ruta retryable intacta: `queued`, reserva `Reserved`, sin evento ni cleanup, backoff 30s/2min, `operation_id=null`, `lease_expires_at=null`, `continuation_pending=false`. | resuelta | `0c677bb` |
+| 8b-8 | Scope 3→4: `analysis-worker.test.ts` afirmaba el contrato terminal previo; ahora espera `Reserved + Released` y un `analysis_failed`. | resuelta | `0c677bb` |
+| 8b-8 | `p_enforce_operation=true` no tiene caller de producción; decidir en 12.C si se elimina o se conecta a un caller real. | decisión pendiente | `0c677bb`, `8270fe8` |
+| 8b-9 | `create_analysis_run` toma advisory por workspace antes del row lock; cuerpo, firma, settings y ACL sin cambios salvo `create or replace` + advisory; cuerpo token-idéntico a `20261017190200_s2_05_run_commands.sql:23+`. | resuelta | `63bdb78` |
+| 8b-9 | Nuevo `analysis-lock-order.test.ts` con 4 casos: fix de advisory, no bloqueo entre workspaces, serialización contra helper terminal y preservación de run/replay. | resuelta | `63bdb78` |
+| 8b-9 | La secuencia literal §13.5 no quedó cubierta en 8b-9; se difirió a 8b-12 y se cerró en 12.A. | resuelta | `63bdb78`, `648bf02` |
+| 8b-9 | "serializes against a terminal helper" se renombró: es regresión de serialización, no prueba de deadlock. | resuelta | `63bdb78` |
+| 8b-10 | `complete_analysis` pasa a trampa `P0001`; firma y grants preservados; sin locks ni timeouts legacy. | resuelta | `8270fe8` |
+| 8b-10 | Shim de éxito migra a `finalize_analysis_success` con `p_reported_findings_count`; mapeo `P0001/P2002/P2003/55P03/57014` → `PERSISTENCE_FAILED`, `22023` → `superseded`, resto → `INTERNAL_ERROR`; fallo sigue en `fail_analysis`; el RPC es dueño de las escrituras. | resuelta | `8270fe8` |
+| 8b-10 | Bug previo: `complete_analysis` era no-op y dejaba la reserva `Reserved` para siempre; los tests ahora exigen `Reserved + Consumed`. | resuelta | `8270fe8` |
+| 8b-10 | Tiebreaker `created_at ASC, event_type ASC` sigue el orden del enum (`Promotional, Reserved, Consumed, Released`), no alfabético; `DESC` invertiría `Reserved` y los terminales. Se aplicó a `scopedCredits` de `analysis-worker.test.ts` y a 3 queries de `analysis-recovery`. | resuelta | `8270fe8` |
+| 8b-10 | Scope 6→8 por expectativas de integración afectadas y unit test del shim. | resuelta | `8270fe8` |
+| 8b-10 | Deuda `analysis-finalization.test.ts:255,332` (orden solo por `created_at`) se cerró en 12.A; en `HEAD` las líneas reales son `:262-263` y `:347-348`. | resuelta | `8270fe8`, `648bf02` |
+| 8b-10 | `seamCode` del shim duplica `src/modules/analysis/worker/finalization.ts:29-45`; riesgo de drift, no bloqueante; revisar en 12.C/12.D. | diferida | `8270fe8` |
+| 8b-10 | §13.5 literal seguía pendiente; se cerró en 12.A. | resuelta | `8270fe8`, `648bf02` |
+| 8b-11 | Flags independientes `ANALYSIS_FAKE_FINALIZATION` y `ANALYSIS_FAKE_PERSISTENCE`; `effective(X)=baseGate && raw_X !== "0"`; valores no-`"0"` (incluido ausente) heredan fake, no fail-closed; `PROVIDER=0` cierra el base gate y deja los tres reales; componentes independientes; hosted nunca fake. | resuelta | `699c9f4` |
+| 8b-11 | `_fake.findings` acepta la forma `InternalFinding`: type/severity/confidence 0..1/explanation/evidence[] con exactamente un `source` y un `comparison`; malformados se descartan en silencio; deep copy a la entrada y a la salida. | resuelta | `699c9f4` |
+| 8b-11 | Harness borra los dos flags nuevos del env hijo; overrides de readiness tipados `Partial<AnalyzeEnv>`; test de todos-malformados afirma `[]`, no `?? []`. | resuelta | `699c9f4` |
+| 8b-11 | Un cron local residual `kdm-analysis-recovery` contaminó una corrida intermedia; se desprogramó en la DB local, sin cambios de migración; la cifra final es de una corrida secuencial limpia. | resuelta | `699c9f4` |
+| 12.A | §13.5 literal como regresión: sesión 1 toma advisory/workspace, sesión 2 bloquea en `create_analysis_run`, sesión 1 toma `analyses FOR UPDATE` y commit; se afirman locks de advisory (`Lock`) y ausencia de `40P01`. No es RED: no hay baseline rojo sin revertir el advisory de 8b-9. | resuelta | `648bf02` |
+| 12.A | Paráfrasis del prompt resuelta al literal: el orden "sesión 1 toma analyses primero" invertiría la secuencia y podría producir `40P01`; el literal no. | resuelta | `648bf02` |
+| 12.A | Se usa `create_analysis_run` para la sesión 2 en vez de un advisory directo; ambos bloquean en advisory; ejercita el camino de producción y el advisory es incondicional tras `profiles FOR SHARE`, antes de `FOR UPDATE`/idempotencia. | resuelta | `648bf02` |
+| 12.A | Tiebreaker `event_type ASC` tras `created_at` en las dos expectativas de `analysis-finalization.test.ts` (~:255/~:337; en `HEAD` `:262-263`/`:347-348`); mismo orden del enum, no alfabético. | resuelta | `648bf02` |
+| 12.A | Sweep C: las queries de ledger de `analysis-worker.test.ts` y `analysis-recovery.test.ts` ya tienen ambos órdenes; las restantes sin `ORDER BY` son single-row/RLS/count y no comparan secuencias; no hay tercer archivo. | resuelta | `648bf02` |
+| 12.A | Flake de orden en `analysis-worker.test.ts:371`: falló en intentos 1-3 (posible contaminación de Auth/run previo), pasó focalizado y en el intento 4 (30/70); los tests tocados por 12.A pasaron en todos; investigar en 12.D si reaparece. | diferida | `648bf02` |
+| 12.A | La referencia "skip §13.5 en `020:414`" no existe en `HEAD`; §13.5 se cubre en `analysis-lock-order.test.ts:207-283`. El skip real es el de dblink en `020:496` y `s2_08:997`. | resuelta | `648bf02` |
+| 12.C | Types regeneration (`pnpm exec supabase gen types`) y decisión sobre `p_enforce_operation` | Pendiente | — |
+| 12.D | `pnpm build`, E2E si aplica, investigar flake `analysis-worker.test.ts:371` si reaparece | Pendiente | — |
+| 12.E | `git push` de 8b-6..12.D a origin | Pendiente | — |
+
+### Deudas consolidadas
+
+Las filas históricas `plan:493`, `:496`, `:503`, `:504`, `:505`, `:510`, `:513`, `:515` y `:516` se mantienen como historial; esta tabla consolida su estado actual y referencia los hashes.
+
+| Deuda | Historial (plan:línea o tarea) | Estado actual | Dueño / siguiente paso |
+|---|---|---|---|
+| §13.5 deadlock test literal | 8b-9 (deuda), 12.A (regresión); `plan:496`, `plan:505`, `plan:510`, `plan:516`; `63bdb78`, `648bf02` | Resuelta en 12.A (`analysis-lock-order.test.ts:207-283`) | Cierre definitivo; skip en `020:496` y `s2_08:997` se mantiene |
+| Tiebreaker ledger (`created_at` + `event_type ASC`) | 8b-10 (deuda), 12.A (fix); `plan:503`, `plan:513`; `8270fe8`, `648bf02` | Resuelta en 12.A (`analysis-finalization.test.ts:262-263`, `:347-348`) | Cierre |
+| Flake `analysis-worker.test.ts:371` | 12.A (intento 3); `plan:515`; `648bf02` | Diferida | 12.D: investigar con fixture del run si reaparece |
+| `p_enforce_operation=true` sin caller | 8b-8 (decisión abierta); `plan:493`; `0c677bb`, `8270fe8` | Diferida | 12.C: mantener API, documentar como deuda permanente |
+| `seamCode` duplicado (shim vs `src/modules/analysis/worker/finalization.ts:31-44`) | 8b-10 (nota); `plan:504`; `8270fe8` | Diferida | Riesgo bajo, no cierra en S2-08b |
+
+### Final gate counts
+
+Últimos gates de 12.A (`648bf02`):
+
+- `test:db`: 29 files / 1197 tests PASS.
+- `test:integration`: 30 files / 70 tests PASS (4th attempt; attempts 1-3 flaked, ver flake arriba).
+- `test:unit`: 102 files / 870 tests PASS.
+- `typecheck`: exit 0.
+- `lint`: 0 errors / 3 pre-existing warnings.
+- `git diff --check`: clean.
 
 ---
 

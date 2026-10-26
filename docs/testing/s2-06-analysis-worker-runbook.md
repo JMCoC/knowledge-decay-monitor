@@ -22,6 +22,9 @@ ANALYSIS_SUPABASE_URL=http://127.0.0.1:54321
 ANALYSIS_SUPABASE_SERVICE_ROLE_KEY=<local service_role key>
 ANALYSIS_INTERNAL_TOKEN=<random uuid>
 ANALYSIS_FAKE_PROVIDER=1
+# Optional; absent inherits the fake while the base gate is open.
+ANALYSIS_FAKE_FINALIZATION=1
+ANALYSIS_FAKE_PERSISTENCE=1
 ANALYSIS_FAKE_LATENCY_MS=400
 ```
 
@@ -82,6 +85,22 @@ that a killed worker is reclaimed only after its real lease expires. It uses
 local fake-provider behavior; it does not prove hosted scheduling or real
 provider/finalization acceptance.
 
+Before an integration run, confirm that no residual local recovery job is
+installed. A `kdm-analysis-recovery` job left by an earlier failed run can
+contaminate the next suite; this happened during 8b-11. Disable/unschedule it
+only in the disposable local database, never against shared or hosted data:
+
+```sql
+select jobid, jobname, active
+from cron.job where jobname = 'kdm-analysis-recovery';
+
+select public.configure_analysis_recovery(false);
+-- Only if the query above returns a row:
+select cron.unschedule((
+  select jobid from cron.job where jobname = 'kdm-analysis-recovery'
+));
+```
+
 To inspect local scheduler state without exposing Vault values:
 
 ```sql
@@ -137,8 +156,40 @@ workspace slot and does not use backoff. A recoverable error clears the marker
 and applies the existing 30-second / 2-minute retry backoff; an expired
 continuation is terminal `failed/TIMEOUT`, not another attempt. The first
 claim starts a 30-minute attempt deadline and a 90-minute total deadline;
-renewal and continuation never extend either one. Terminal marking still does
-not move credits or emit events in v1 — TODO S2-08.
+renewal and continuation never extend either one. Terminal marking now
+settles the reservation and emits `analysis_failed` through
+`private.finalize_failed_analysis`; `complete_analysis` is a deprecated
+`P0001` trap. See the S2-08b contract below.
+
+### S2-08b contract (claim, fail, create, finalize)
+
+- `claim_analysis`: `statement_timeout=45s`, `lock_timeout=1s`; global
+  advisory `26061501`; two-phase sweep (unlocked discovery, directed-first
+  then FIFO, `LIMIT 25`, then per-candidate advisory → workspace, followed
+  by an unlocked analysis read; the helper or reclaim branch takes the
+  analysis row lock). Phase 1 includes terminal `processing`/`queued` rows
+  so the helper can settle them; terminal rows delegate to
+  `finalize_failed_analysis(..., false)`. Reclaim uses
+  `FOR UPDATE ... SKIP LOCKED`; `lock_not_available` is caught per candidate.
+- `fail_analysis`: read workspace without lock, advisory by workspace,
+  `FOR UPDATE workspaces`, `FOR UPDATE analyses`; no global advisory.
+  Terminal paths (expired deadline, non-retryable, attempt 3) delegate to
+  the helper with `false`; retryable path (`attempt_count < 3`) stays
+  `queued`, keeps the reservation `Reserved`, emits no event, runs no
+  cleanup, backs off 30s/2min, and clears `operation_id`, lease and
+  continuation. Signature, grants and terminal `operation_id` are preserved.
+- `create_analysis_run`: takes the workspace advisory before the workspace
+  row lock; apart from `create or replace` and the advisory, body,
+  signature, settings and ACL are unchanged.
+- `private.finalize_failed_analysis`: advisory → workspace → analysis;
+  `p_enforce_operation=true` means strict fencing (`NULL` token rejected),
+  `false` means the caller already fenced (sweep or legacy deadlines).
+  It preserves `operation_id`, clears lease/next-attempt/continuation,
+  settles `Released`, emits `analysis_failed`, and cleans staging.
+  `Consumed` on a failed row raises `P0001`; never silent cleanup.
+- `complete_analysis` is deprecated: it raises `P0001` and acquires no
+  locks. Success goes through `finalize_analysis_success`; failure through
+  `fail_analysis`.
 
 ## 4. Troubleshooting
 
@@ -151,6 +202,7 @@ not move credits or emit events in v1 — TODO S2-08.
 | `Env name cannot start with SUPABASE_, skipping` | `--env-file` values with reserved prefix are dropped | Use `ANALYSIS_*` names (section 5) |
 | `No such container: supabase_edge_runtime_*` loops | Runtime container removed out-of-band | Never `docker rm` it; restart the serve and let the CLI own it |
 | Kong `401 UNAUTHORIZED_*` on every request | Transient Kong config churn after stack restart | Wait ~30s / re-run; requests must carry `Authorization` |
+| `analysis-worker.test.ts:371` ledger order failure | Known flake: `Reserved`/`Consumed` share `created_at`, and a previous failed run can leave stale Auth/cron fixtures | Re-run the test; inspect `credit_ledger` for the analysis and confirm `(created_at ASC, event_type ASC)`; reset local Auth/cron fixtures if the full suite failed earlier |
 
 ## 5. Variables de entorno
 
@@ -165,9 +217,19 @@ not move credits or emit events in v1 — TODO S2-08.
 | `GROQ_API_KEY` | Edge server-side, secret | Groq fallback credential; never `NEXT_PUBLIC_*`, logs or commits |
 | `CEREBRAS_BASE_URL` | Edge server-side | Cerebras endpoint; production default `https://api.cerebras.ai/v1` |
 | `GROQ_BASE_URL` | Edge server-side | Groq endpoint; production default `https://api.groq.com/openai/v1` |
-| `ANALYSIS_FAKE_PROVIDER=1` | tests only | Enables the test doubles branch |
+| `ANALYSIS_FAKE_PROVIDER=1` | tests only | Base gate; `0` closes it and leaves provider, finalization and persistence real |
+| `ANALYSIS_FAKE_FINALIZATION` | tests only | `0` forces the real finalization; any other value (including absent) inherits the test finalization while the base gate is open |
+| `ANALYSIS_FAKE_PERSISTENCE` | tests only | `0` forces real batch persistence; any other value (including absent) inherits the test persistence while the base gate is open |
 | `ANALYSIS_FAKE_LATENCY_MS` / `_FAIL_AT_CALL_INDEX` / `_FAIL_CODE` / `_THROW_CODE` | tests only | Fake behavior (env defaults) |
-| Request body `_fake: {...}` | tests only, per request | Overrides env fake behavior; honored only with the gate open |
+| Request body `_fake: {...}` | tests only, per request | Overrides env fake behavior; honored only with the gate open; `_fake.findings` accepts the `InternalFinding` wire shape |
+
+`_fake.findings` uses `InternalFinding`: `type`, `severity`, `confidence`
+(0..1), `explanation`, and exactly two `evidence` entries — one
+`role:"source"` and one `role:"comparison"`. Each evidence entry needs
+`documentId`, `versionId`, `chunkId`, `role` and `snapshot`; `pageNumber`,
+`section` and `sectionHeading` are required but nullable (`null` or the
+corresponding value). Malformed findings or evidence are dropped silently
+(no throw, no log). The fake deep-copies findings on input and output.
 
 `SUPABASE_*` values in `--env-file` are silently skipped (reserved
 prefix); never rely on setting them from files.
@@ -178,15 +240,21 @@ variable or reuse `INGESTION_INTERNAL_TOKEN`.
 
 ## 6. Gate isLocalTestEnv: modelo de amenaza
 
-The fake provider and the v1 test finalization load only when ALL hold:
-(a) `ANALYSIS_FAKE_PROVIDER === "1"`, (b) `ANALYSIS_SUPABASE_URL`
-parses to loopback, (c) runtime `SUPABASE_URL` is NOT hosted
-(`*.supabase.co` / `*.supabase.in` fail closed). Rationale: env-write
-already equals project compromise, but the hosted check removes the
-remaining hole where a loopback-looking harness URL could be spoofed
-next to a production runtime URL. Unit-pinned in
-`tests/unit/analysis-worker-readiness.test.ts` (flag/url matrix +
-hosted-spoof case). Production will never satisfy (b)+(c) together.
+The base gate (a)+(b)+(c) is unchanged: (a) `ANALYSIS_FAKE_PROVIDER === "1"`,
+(b) `ANALYSIS_SUPABASE_URL` parses to loopback, (c) runtime `SUPABASE_URL`
+is NOT hosted (`*.supabase.co` / `*.supabase.in` fail closed). With the
+base gate open, finalization and persistence are selected independently:
+`effective(X) = baseGate && raw_X !== "0"`. `"0"` forces the real
+component; any other value (undefined, empty, `"true"`, `"yes"`, `"on"`,
+etc.) inherits the fake in local tests — this is intentionally not
+fail-closed. `ANALYSIS_FAKE_PROVIDER=0` closes the base gate, so provider,
+finalization and persistence all use the real path. Hosted never enables a
+fake for any flag combination. Rationale: env-write already equals project
+compromise, but the hosted check removes the remaining hole where a
+loopback-looking harness URL could be spoofed next to a production runtime
+URL. Unit-pinned in `tests/unit/analysis-worker-readiness.test.ts`
+(flag/url matrix + hosted-spoof case). Production will never satisfy
+(b)+(c) together.
 
 ## 7. Ventana de sweep medida
 
@@ -206,9 +274,17 @@ integration above demonstrates this with fake-provider behavior only.
 
 ## 8. Deuda (S2-08 y bundle Edge)
 
-- TODO(S2-08): `complete/fail_analysis` move no credits and emit no
-  events in v1 (spec §12.1 filas 5–7). The `failed`/`completed`
-  statuses are real; the ledger, findings and notifications are not.
+- Resuelto en S2-08b: `fail_analysis` and `finalize_analysis_success`
+  settle the ledger and emit events; `complete_analysis` is a `P0001`
+  trap. The old "no credits / no events" TODO no longer applies.
+- Deuda diferida 12.C: `p_enforce_operation=true` no tiene caller de
+  producción; se mantiene por API y solo lo usan tests directos.
+- Deuda diferida 12.C/12.D: `seamCode` del shim duplica
+  `src/modules/analysis/worker/finalization.ts:31-44`; riesgo bajo, no
+  cierra en S2-08b.
+- Aceptado en S2-08b: el skip de §13.5 en `020:496` y `s2_08:997` se
+  mantiene; la cobertura real es el test TS en
+  `analysis-lock-order.test.ts:207-283`.
 - TODO(S2-08): findings cross-invocation are lost until S2-08 staging
   (spec §12.1 fila 8): the `completed` close of the last invocation
   carries only its own batch findings. RLS already hides findings of
@@ -242,12 +318,15 @@ integration above demonstrates this with fake-provider behavior only.
 | 1 | createProvider() real (S2-07) | S2-07 | Test de integración con proveedor real | Implementado; smoke real PASS 2026-10-20 |
 | 2 | createFinalization() real (S2-08) | S2-08 | Test integración findings + ledger + eventos | Pendiente S2-08 |
 | 3 | Texto F3 con liberación ("Analysis failed. Your credits were released. Retry creates a new run.") | S2-08 | S2-08 merge | Pendiente S2-08 |
-| 4 | TODO(S2-08) en claim/complete/fail (liberación + evento) | S2-08 | S2-08 merge | Pendiente S2-08 |
+| 4 | TODO(S2-08) en claim/complete/fail (liberación + evento) | S2-08 | S2-08 merge | Resuelto S2-08b |
 | 5 | Retry bloquea otro run activo; `AnalysisSnapshot.canRetry` refleja estado/ledger/slot | S2-05 / S2-09 | SQL Retry y contrato de lectura S2-09 | RPC S2-05 implementada y probada localmente; proyección `canRetry` pendiente S2-09 |
 | 6 | Slot único retiene workspace ≤90min | S2-06 | Documentado (fila 1 §12.1) | Documentado |
 | 7 | Sentry remoto del worker | S2-08 | Fila 3 §12.1 | Documentado (stdout-only v1) |
 | 8 | Bundle deployable incluye _test_doubles | Task 7 | Fila 10 §12.1 | Documentado (opción A) |
 | 9 | Flake test:integration | S2-06 / CI | Fila 11 §12.1 | Bajo observación |
+| 10 | `p_enforce_operation=true` sin caller de producción | 12.C | Mantener API; documentar deuda permanente | Deuda diferida |
+| 11 | `seamCode` duplicado (shim vs `src/modules/analysis/worker/finalization.ts:31-44`) | 12.C/12.D | Riesgo bajo; no cierra en S2-08b | Deuda diferida |
+| 12 | Skip §13.5 en `020:496` y `s2_08:997`; cobertura TS en `analysis-lock-order.test.ts:207-283` | 12.A/12.D | Cobertura TS real; skip dblink se mantiene | Aceptado en S2-08b |
 
 Estado del ticket: completo pendiente de integración (G2=A). Cerrar
 sólo cuando S2-07 y S2-08 estén mergeados y sus tests de integración
