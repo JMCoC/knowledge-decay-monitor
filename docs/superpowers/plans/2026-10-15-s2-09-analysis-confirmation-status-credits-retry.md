@@ -1,6 +1,6 @@
 # Plan S2-09 — Confirmación, estados de análisis, créditos y Retry Analysis
 
-> Estado: implementación parcial realizada en `feature/analysis-confirmation-status-credits-retry`. S2-05 y S2-06 están integrados en este checkout; cierre sigue pendiente de S2-08 y S2-10.
+> Estado: implementación parcial realizada en `feature/analysis-confirmation-status-credits-retry`. S2-05, S2-06 y S2-08 están integrados en este checkout; cierre sigue pendiente de S2-10 y de la validación UI/E2E completa.
 
 ## Objetivo
 
@@ -13,7 +13,7 @@ Completar el flujo de producto desde el selector S2-03: mostrar la estimación p
 - S2-03 tiene `/analysis/run` y la estimación real de S2-04. El botón de continuación aún es un `window.alert` de placeholder en `src/modules/analysis/ui/run-analysis-view.tsx`.
 - `src/modules/credits/queries.ts` ya expone `getCreditSnapshot` (para cualquier rol miembro del workspace) y `listCreditLedger` (Admin/QA Lead). No hay todavía página Billing / Credits ni enlace en `AppShell`.
 - Los contratos `AnalysisApi` y `AnalysisSnapshot` describen Run, Retry, lectura por ID y lectura del activo; el barrel público de `src/modules/analysis` todavía no exporta esas operaciones reales.
-- S2-05 ya aporta Run/Retry, idempotencia y reserva atómica; S2-06 aporta worker/transiciones. El worker deja explícito que settlement/release pertenece a S2-08. No existe ruta de resultados de S2-10 en este checkout.
+- S2-05 aporta Run/Retry, idempotencia y reserva atómica; S2-06 aporta worker/transiciones; S2-08 aporta liquidación/liberación terminal y publicación de findings. No existe ruta de resultados de S2-10 en este checkout.
 - No se prevé migración de S2-09: usar las APIs públicas y la persistencia propiedad de los tickets previos. Cualquier necesidad de esquema o contrato compartido requiere coordinación explícita.
 
 ## Límites de arquitectura y seguridad
@@ -41,7 +41,7 @@ Antes de cerrar S2-09 deben estar integrados y revisados:
 
 - **S2-05:** `runAnalysis`, `retryAnalysis`, persistencia de idempotencia, recuperación ante respuesta perdida, conflictos y reserva atómica.
 - **S2-06/S2-08:** transiciones persistidas, snapshot de estado y timestamps; fallo terminal con release confirmado y `canRetry` coherente.
-- **S2-10:** ruta pública/contrato de resultados por `analysisId` y estado vacío cuando no existan findings.
+- **S2-10:** ruta pública/contrato de resultados por `analysisId` y estado vacío cuando no existan findings. S2-08 ya publica findings, pero S2-10 no está integrado en este checkout.
 - **S2-02:** las consultas públicas de snapshot/ledger ya existen aquí; confirmar que el esquema/rpc integrado coincide con su contrato y sus permisos Member/Admin/QA.
 
 Se puede avanzar en paralelo con la página Credits, estados visuales, tests de presentación y wiring de S2-03/S2-04, pero la aceptación final debe probar los contratos reales de extremo a extremo. Si una dependencia aún no está mergeada, marcar los pasos de integración como bloqueados por esa dependencia, no reemplazarla con mocks.
@@ -79,7 +79,7 @@ Se puede avanzar en paralelo con la página Credits, estados visuales, tests de 
 - Renderizar `Queued`, `Processing`, `Completed` o `Failed` exclusivamente desde snapshots persistidos, con coste, iniciador, timestamps y scope exacto.
 - Para estados activos, aplicar polling acotado con backoff; detener al terminar, al límite o al perder la sesión, y ofrecer refresh manual. No interpretar errores de red como transiciones de estado.
 - Probar autorización de Admin/QA, Member y tenant cruzado en la lectura directa por ID.
-- **Implementado:** acción protegida por rol y lectura de vistas con sesión/RLS; ruta por ID, recuperación activa al entrar en Run Analysis, refresh manual y polling acotado. `canRetry` permanece `false` hasta S2-08. **Pendiente:** backoff y pruebas RLS multirol/tenant.
+- **Implementado:** acción protegida por rol y lectura de vistas con sesión/RLS; ruta por ID, recuperación activa al entrar en Run Analysis, refresh manual y polling acotado. `canRetry` se deriva de un evento `Released` visible al actor con importe igual al coste persistido. **Pendiente:** backoff y pruebas UI/RLS multirol/tenant.
 
 ### 5. Resultado completado y fallo/retry
 
@@ -87,6 +87,7 @@ Se puede avanzar en paralelo con la página Credits, estados visuales, tests de 
 - En `failed`, releer estado y saldo tras confirmación backend de release; nunca inferir release a partir de un error HTTP.
 - Habilitar Retry solo con permiso y elegibilidad reportados por backend. Reestimar las versiones exactas del run fallido, presentar el coste nuevo y requerir otra confirmación.
 - Ejecutar retry con `failedAnalysisId` y una nueva clave idempotente. Mostrar saldo insuficiente, conflicto por otro run activo, scope no elegible o estimación vencida sin sobrescribir el run fallido ni generar cargos no confirmados.
+- **Implementado:** cuando S2-08 confirma la liberación, la vista reestima el scope exacto, pide confirmación del nuevo coste y llama a S2-05 con una clave idempotente nueva; conserva la clave opaca para recuperar una respuesta perdida.
 
 ### 6. Cobertura de calidad y aceptación
 
@@ -118,13 +119,15 @@ El ticket se considera completo cuando las diez filas de aceptación están veri
 ## Evidencia de esta implementación
 
 - `pnpm typecheck`: pasó. Next mostró un aviso ya existente de hook de navegación de Sentry.
-- ESLint dirigido a todos los archivos cambiados: pasó. `pnpm lint` global continúa fallando por un `<a>` preexistente a `/analysis/run/` en `src/app/(workspace)/repository/page.tsx`; también muestra 3 warnings en tests existentes.
-- `tests/unit/run-analysis-view.test.ts`: pasó (2 tests) tras configurar el mock de `next/navigation`.
-- `pnpm test:unit`: 653 tests pasaron y 2 fallaron. El test del selector falló inicialmente por falta del mock (corregido y luego pasó aislado); `ingestion-chunking.test.ts` excedió su timeout de 5 s al parsear fixtures reales. No se modificó ese test fuera de alcance.
+- `pnpm lint`: pasó con 0 errores y 3 warnings preexistentes en dos tests de ingesta.
+- `pnpm test:unit`: 869 tests pasaron y 1 falló; `ingestion-chunking.test.ts` excedió su timeout de 5 s al parsear fixtures reales.
+- `pnpm test:db`: pasó, 29 archivos y 1.197 pruebas SQL. Antes se aplicaron las migraciones locales pendientes de S2-05/S2-06/S2-08; no hubo reset ni conexión remota.
+- Integración dirigida (`analysis-run`, `analysis-finalization`, `analysis-isolation`, `credits-access`): pasó, 4 archivos y 9 pruebas.
+- Suite de integración completa: no terminó ni emitió resultados tras varios minutos y fue detenida; el conjunto dirigido sí pasó.
 - `git diff --check`: sin errores de whitespace.
-- No se ejecutaron `test:db`, integración local ni Playwright: no hubo cambio de esquema y el entorno actual de integración no fue parte de esta implementación.
+- No hay escenarios Playwright para el flujo S2-09; no se ejecutó E2E.
 
-Por tanto, esta entrega implementa el segmento independiente de S2-09, pero el ticket **no está cerrado**: faltan S2-08/S2-10 y sus pruebas integradas; además debe resolverse/revalidarse el timeout del parser para obtener una suite unitaria verde.
+Por tanto, esta entrega integra ya S2-08 y su Retry, pero el ticket **no está cerrado**: falta S2-10 y su ruta de findings, pruebas UI/E2E completas y resolver/revalidar el timeout del parser para obtener una suite unitaria verde.
 
 ## Nota sobre herramientas solicitadas
 

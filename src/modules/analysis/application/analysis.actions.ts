@@ -45,6 +45,16 @@ async function readAnalysisSnapshot(analysisId?: string): Promise<ActionResult<A
     if (scopeError || !scope) return reportInternalFailure("selection", "We couldn't load this analysis.");
     const sources = scope.filter((row) => row.role === "source");
     const comparisons = scope.filter((row) => row.role === "comparison");
+    let canRetry = false;
+    if (run.status === "failed") {
+      const { data: release, error: releaseError } = await client.from("credit_ledger")
+        .select("amount")
+        .eq("analysis_id", run.id)
+        .eq("event_type", "Released")
+        .maybeSingle();
+      if (releaseError) return reportInternalFailure("selection", "We couldn't verify credit release for this analysis.");
+      canRetry = release?.amount === run.fixed_cost;
+    }
     const toItems = (rows: typeof scope) => rows.flatMap((row) => {
       if (!row.document_id || !row.version_id || row.version_number === null || !row.document_name || !row.document_category) return [];
       return [{ documentId: row.document_id, versionId: row.version_id, versionNumber: row.version_number,
@@ -57,10 +67,9 @@ async function readAnalysisSnapshot(analysisId?: string): Promise<ActionResult<A
       sources: toItems(sources), comparisons: toItems(comparisons), createdAt: run.created_at,
       startedAt: run.started_at, finishedAt: run.finished_at, retryOfAnalysisId: run.retry_of_analysis_id,
       error: run.public_error_code === "ANALYSIS_FAILED"
-        ? { code: "ANALYSIS_FAILED", message: "This analysis failed. Credit release and retry availability will appear when recovery is complete." }
+        ? { code: "ANALYSIS_FAILED", message: "This analysis failed." }
         : null,
-      // S2-08 owns terminal credit release; do not enable retries before it is confirmed.
-      canRetry: false,
+      canRetry,
     };
     return { ok: true, data: result };
   } catch (error) {

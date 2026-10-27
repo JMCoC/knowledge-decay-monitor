@@ -1,14 +1,81 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import type { AnalysisSnapshot } from "@/types/contracts";
-import { getAnalysisAction } from "../application/analysis.actions";
+import type { AnalysisEstimate, AnalysisSnapshot } from "@/types/contracts";
+import { estimateAnalysisAction, getAnalysisAction } from "../application/analysis.actions";
+import { retryAnalysis } from "../application/run-actions";
+import { useRouter } from "next/navigation";
 
 export function AnalysisStatusView({ initial }: { initial: AnalysisSnapshot }) {
+  const router = useRouter();
   const [snapshot, setSnapshot] = useState(initial);
   const [message, setMessage] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [retryEstimate, setRetryEstimate] = useState<AnalysisEstimate | null>(null);
+  const [isEstimatingRetry, setIsEstimatingRetry] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [retryConfirmation, setRetryConfirmation] = useState(false);
+  const retryKey = useRef<string | null>(null);
+
+  async function estimateRetry() {
+    setMessage(null);
+    setIsEstimatingRetry(true);
+    try {
+      const result = await estimateAnalysisAction({
+        sourceVersionIds: snapshot.sources.map((item) => item.versionId),
+        comparisonVersionIds: snapshot.comparisons.map((item) => item.versionId),
+      });
+      if (!result.ok) {
+        setMessage(result.error.message);
+        return;
+      }
+      setRetryEstimate(result.data);
+      setRetryConfirmation(true);
+    } catch {
+      setMessage("We couldn't estimate this retry. Please try again.");
+    } finally {
+      setIsEstimatingRetry(false);
+    }
+  }
+
+  async function confirmRetry() {
+    if (!retryEstimate || !snapshot.canRetry) return;
+    retryKey.current ??= crypto.randomUUID();
+    try {
+      window.sessionStorage.setItem("pending-analysis-retry", JSON.stringify({
+        failedAnalysisId: snapshot.analysisId,
+        estimateRef: retryEstimate.estimateRef,
+        idempotencyKey: retryKey.current,
+      }));
+    } catch { /* Keep the retry key in memory if storage is unavailable. */ }
+    setIsRetrying(true);
+    setMessage(null);
+    try {
+      const result = await retryAnalysis({
+        failedAnalysisId: snapshot.analysisId,
+        estimateRef: retryEstimate.estimateRef,
+        idempotencyKey: retryKey.current,
+      });
+      if (!result.ok) {
+        setMessage(result.error.message);
+        setRetryKey(null);
+        try { window.sessionStorage.removeItem("pending-analysis-retry"); } catch { /* Storage may be unavailable. */ }
+        if (result.error.code === "ESTIMATE_EXPIRED" || result.error.code === "ESTIMATE_STALE") setRetryEstimate(null);
+        return;
+      }
+      try { window.sessionStorage.removeItem("pending-analysis-retry"); } catch { /* Storage may be unavailable. */ }
+      router.push(`/analysis/${result.data.analysisId}`);
+    } catch {
+      setMessage("We couldn't confirm whether the retry started. Retry this confirmation to safely recover it.");
+    } finally {
+      setIsRetrying(false);
+    }
+  }
+
+  function setRetryKey(value: string | null) {
+    retryKey.current = value;
+  }
 
   async function refreshStatus() {
     setIsRefreshing(true);
@@ -26,7 +93,25 @@ export function AnalysisStatusView({ initial }: { initial: AnalysisSnapshot }) {
   }
 
   useEffect(() => {
-    if (initial.status === "completed" || initial.status === "failed") return;
+    if (initial.status === "failed") {
+      let active = true;
+      try {
+        const raw = window.sessionStorage.getItem("pending-analysis-retry");
+        const pending = raw ? JSON.parse(raw) as { failedAnalysisId?: unknown; estimateRef?: unknown; idempotencyKey?: unknown } : null;
+        if (pending?.failedAnalysisId === initial.analysisId && typeof pending.estimateRef === "string" && typeof pending.idempotencyKey === "string") {
+          void retryAnalysis({ failedAnalysisId: initial.analysisId, estimateRef: pending.estimateRef, idempotencyKey: pending.idempotencyKey }).then((result) => {
+            if (active && result.ok) {
+              window.sessionStorage.removeItem("pending-analysis-retry");
+              router.replace(`/analysis/${result.data.analysisId}`);
+            } else if (active && !result.ok) {
+              window.sessionStorage.removeItem("pending-analysis-retry");
+            }
+          }).catch(() => undefined);
+        }
+      } catch { /* Session storage may be disabled or contain invalid data. */ }
+      return () => { active = false; };
+    }
+    if (initial.status === "completed") return;
     let active = true;
     let attempts = 0;
     const timer = window.setInterval(async () => {
@@ -47,7 +132,7 @@ export function AnalysisStatusView({ initial }: { initial: AnalysisSnapshot }) {
       if (attempts >= 60) window.clearInterval(timer);
     }, 2000);
     return () => { active = false; window.clearInterval(timer); };
-  }, [initial.analysisId, initial.status]);
+  }, [initial.analysisId, initial.status, router]);
 
   const label = snapshot.status === "queued" ? "Queued" : snapshot.status === "processing" ? "Processing" : snapshot.status === "completed" ? "Completed" : "Failed";
   return (
@@ -66,7 +151,8 @@ export function AnalysisStatusView({ initial }: { initial: AnalysisSnapshot }) {
       {snapshot.status === "failed" ? <p role="alert" className="mt-5 rounded-lg bg-amber-50 p-4 text-sm text-amber-950">{snapshot.error?.message ?? "The analysis failed."}</p> : null}
       {snapshot.status === "completed" ? <p className="mt-5 rounded-lg bg-emerald-50 p-4 text-sm text-emerald-950">Analysis completed. Findings will be available when the findings experience is delivered.</p> : null}
       {message ? <p role="status" className="mt-3 text-sm text-slate-600">{message}</p> : null}
-      {snapshot.status === "failed" ? <p className="mt-4 text-sm text-slate-600">Retry becomes available after the failed reservation has been released and verified.</p> : null}
+      {snapshot.status === "failed" ? (snapshot.canRetry ? <button type="button" disabled={isEstimatingRetry || isRetrying} onClick={() => void estimateRetry()} className="mt-4 rounded-lg bg-cyan-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{isEstimatingRetry ? "Estimating retry…" : "Retry Analysis"}</button> : <p className="mt-4 text-sm text-slate-600">Retry is unavailable until the failed reservation has been released.</p>) : null}
+      {retryConfirmation && retryEstimate ? <div role="dialog" aria-modal="true" aria-labelledby="retry-confirmation-title" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4"><section className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl"><h2 id="retry-confirmation-title" className="text-lg font-semibold">Confirm analysis retry</h2><p className="mt-3 text-sm text-slate-700">Estimated cost: {retryEstimate.fixedCost} credits</p><div className="mt-6 flex justify-end gap-3"><button type="button" disabled={isRetrying} onClick={() => setRetryConfirmation(false)} className="rounded-lg border border-slate-300 px-4 py-2 text-sm">Cancel</button><button type="button" disabled={isRetrying} onClick={() => void confirmRetry()} className="rounded-lg bg-cyan-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{isRetrying ? "Starting…" : "Confirm and retry"}</button></div></section></div> : null}
       <Link className="mt-6 inline-block text-sm font-semibold text-cyan-800 underline" href="/analysis/run">Back to Run Analysis</Link>
     </div>
   );
