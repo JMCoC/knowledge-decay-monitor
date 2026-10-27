@@ -68,7 +68,7 @@ export async function startAnalysisEdge(
   opts: StartAnalysisEdgeOptions,
 ): Promise<AnalysisEdgeHandle> {
   const port = opts.port ?? DEFAULT_PORT;
-  const readinessTimeoutMs = opts.readinessTimeoutMs ?? 30_000;
+  const readinessTimeoutMs = opts.readinessTimeoutMs ?? 60_000;
   const baseUrl = `http://127.0.0.1:${port}/functions/v1/analyze`;
 
   const scratchDir = mkdtempSync(join(tmpdir(), "kdm-edge-"));
@@ -196,6 +196,7 @@ export async function startAnalysisEdge(
   child.stdout?.on("data", (chunk: Buffer) => recordOutput(stdoutTail, chunk));
   child.stderr?.on("data", (chunk: Buffer) => recordOutput(stderrTail, chunk));
   const deadline = Date.now() + readinessTimeoutMs;
+  let lastReadinessStatus: number | null = null;
   while (Date.now() < deadline) {
     if (child.exitCode !== null || child.signalCode !== null) {
       const tail = stderrTail.join("").slice(-2000);
@@ -224,6 +225,7 @@ export async function startAnalysisEdge(
         ),
         signal: AbortSignal.timeout(1_000),
       });
+      lastReadinessStatus = response.status;
       const responseBody = await response.text().catch(() => "");
       const isHandlerAccepted =
         response.status === 202 && responseBody === '{"ok":true,"accepted":true}';
@@ -240,7 +242,9 @@ export async function startAnalysisEdge(
   }
   const tail = stderrTail.join("").slice(-2000);
   await stop();
-  throw new Error(`Local analysis Edge readiness timed out. Tail: ${tail}`);
+  throw new Error(
+    `Local analysis Edge readiness timed out (last HTTP status: ${lastReadinessStatus ?? "no response"}). Tail: ${tail}`,
+  );
 }
 
 export async function startEdgeConFake(

@@ -1,6 +1,6 @@
 # Plan S2-09 — Confirmación, estados de análisis, créditos y Retry Analysis
 
-> Estado: implementación parcial realizada en `feature/analysis-confirmation-status-credits-retry`. S2-05, S2-06 y S2-08 están integrados en este checkout; cierre sigue pendiente de S2-10 y de la validación UI/E2E completa.
+> Estado: implementación realizada en `feature/analysis-confirmation-status-credits-retry`. S2-05, S2-06 y S2-08 están integrados; cinco recorridos Playwright y la suite unitaria completa pasan. El resultado vacío sigue pendiente de S2-10. La suite de integración completa conserva una excepción por un job cron local preexistente que el test se niega a modificar.
 
 ## Objetivo
 
@@ -61,7 +61,7 @@ Se puede avanzar en paralelo con la página Credits, estados visuales, tests de 
 - Mostrar `available` y `reserved` para Admin, QA Lead y Member; mostrar ledger paginado solo para Admin/QA Lead. Member que manipule URL o acción recibe `FORBIDDEN` para el ledger.
 - Añadir la entrada de navegación a `AppShell` y reflejar la ruta activa sin modificar el layout compartido más de lo requerido.
 - Incluir estados loading, vacío, paginación y error controlado; excluir checkout/paquetes S4.
-- **Implementado:** ruta `/credits`, saldo para cualquier miembro, primera página de ledger solo Admin/QA Lead y enlace activo en `AppShell`. **Pendiente:** paginación interactiva y cobertura de roles con sesión/DB local.
+- **Implementado:** ruta `/credits`, saldo para cualquier miembro, ledger paginado solo Admin/QA Lead y enlace activo en `AppShell`. Playwright confirma que Member ve el saldo, no ve el ledger y su RPC directo de ledger devuelve `42501`; las consultas unitarias cubren paginación.
 
 ### 3. Confirmación y envío de Run
 
@@ -70,7 +70,7 @@ Se puede avanzar en paralelo con la página Credits, estados visuales, tests de 
 - Generar una clave idempotente nueva por intento confirmado; mantener la misma clave en doble clic, timeout, respuesta perdida y recuperación tras recarga.
 - Invocar `runAnalysis` desde una acción pública validada, sin aceptar workspace/rol/coste del cliente. Presentar errores controlados de saldo insuficiente, análisis activo, scope obsoleto y conflicto de idempotencia.
 - Navegar al seguimiento solo con el `analysisId` devuelto por el backend; las repeticiones con la misma clave no deben reservar de nuevo.
-- **Implementado:** diálogo de confirmación/coste, invalidación al cambiar scope, llamada a S2-05, errores controlados, replay de clave desde `sessionStorage` y navegación por ID. **Pendiente:** pruebas de doble clic y respuesta perdida contra backend real.
+- **Implementado:** diálogo de confirmación/coste, invalidación al cambiar scope, llamada a S2-05, errores controlados, replay de clave desde `sessionStorage` y navegación por ID. Playwright ejercita el cambio de scope y la invalidación del coste; duplica concurrentemente el Server Action, pierde la respuesta y recupera el mismo `analysisId` tras reload, verificando que solo hay una reserva.
 
 ### 4. Recuperación y seguimiento por ID
 
@@ -79,7 +79,7 @@ Se puede avanzar en paralelo con la página Credits, estados visuales, tests de 
 - Renderizar `Queued`, `Processing`, `Completed` o `Failed` exclusivamente desde snapshots persistidos, con coste, iniciador, timestamps y scope exacto.
 - Para estados activos, aplicar polling acotado con backoff; detener al terminar, al límite o al perder la sesión, y ofrecer refresh manual. No interpretar errores de red como transiciones de estado.
 - Probar autorización de Admin/QA, Member y tenant cruzado en la lectura directa por ID.
-- **Implementado:** acción protegida por rol y lectura de vistas con sesión/RLS; ruta por ID, recuperación activa al entrar en Run Analysis, refresh manual y polling acotado. `canRetry` se deriva de un evento `Released` visible al actor con importe igual al coste persistido. **Pendiente:** backoff y pruebas UI/RLS multirol/tenant.
+- **Implementado:** acción protegida por rol y lectura de vistas con sesión/RLS; ruta por ID, recuperación activa al entrar en Run Analysis, refresh manual y polling acotado. `canRetry` se deriva de un evento `Released` visible al actor con importe igual al coste persistido. Playwright verifica Admin/QA en los flujos Run/Retry/seguimiento, logout/login, estados `Queued`, `Processing`, `Completed` y `Failed`, y denegación de Member para análisis propios y de otro tenant.
 
 ### 5. Resultado completado y fallo/retry
 
@@ -87,13 +87,13 @@ Se puede avanzar en paralelo con la página Credits, estados visuales, tests de 
 - En `failed`, releer estado y saldo tras confirmación backend de release; nunca inferir release a partir de un error HTTP.
 - Habilitar Retry solo con permiso y elegibilidad reportados por backend. Reestimar las versiones exactas del run fallido, presentar el coste nuevo y requerir otra confirmación.
 - Ejecutar retry con `failedAnalysisId` y una nueva clave idempotente. Mostrar saldo insuficiente, conflicto por otro run activo, scope no elegible o estimación vencida sin sobrescribir el run fallido ni generar cargos no confirmados.
-- **Implementado:** cuando S2-08 confirma la liberación, la vista reestima el scope exacto, pide confirmación del nuevo coste y llama a S2-05 con una clave idempotente nueva; conserva la clave opaca para recuperar una respuesta perdida.
+- **Implementado:** cuando S2-08 confirma la liberación, la vista reestima el scope exacto, pide confirmación del nuevo coste y llama a S2-05 con una clave idempotente nueva; conserva la clave opaca para recuperar una respuesta perdida. Playwright verifica el fallo con release visible, confirmación del nuevo coste, creación de una ejecución enlazada y preservación del run fallido.
 
 ### 6. Cobertura de calidad y aceptación
 
 - Unitarias: estado de confirmación/invalidación, clave por intento, retry, polling/backoff, errores controlados, Member vs Admin/QA y paginación de créditos.
 - Integración local: APIs reales de snapshot/ledger, Run/Retry, estado activo/terminal y release; verificar tenant y que no haya doble reserva.
-- Playwright local: doble clic, pérdida de respuesta + reload, logout/reingreso, estados queued/processing/completed/failed, completed vacío, release y retry, Member y tenant cruzado.
+- Playwright local ejecutado (5 escenarios): invalidación al cambiar scope, doble envío concurrente, respuesta perdida + reload sin segundo cargo, logout/reingreso de QA, estados persistidos, fallo/release/retry, Member sin ledger ni acceso a análisis propio/de otro tenant, RPC de ledger denegado y ausencia de texto de chunks en la UI. La prueba unitaria de privacidad verifica que la telemetría de análisis reconstruye solo campos permitidos. **Pendiente:** completed vacío (se hará con S2-10).
 - Verificar que DOM, respuestas de UI y telemetría no contengan texto documental, confidence, prompts, datos crudos del proveedor o URLs firmadas.
 - Controles apropiados: `pnpm typecheck`, `pnpm lint`, `pnpm test:unit`, pruebas de integración de los módulos reales, `pnpm test:db`, y los escenarios Playwright del ticket con Supabase local y fixtures. No usar base remota ni presentar mocks como aceptación.
 
@@ -120,14 +120,20 @@ El ticket se considera completo cuando las diez filas de aceptación están veri
 
 - `pnpm typecheck`: pasó. Next mostró un aviso ya existente de hook de navegación de Sentry.
 - `pnpm lint`: pasó con 0 errores y 3 warnings preexistentes en dos tests de ingesta.
-- `pnpm test:unit`: 869 tests pasaron y 1 falló; `ingestion-chunking.test.ts` excedió su timeout de 5 s al parsear fixtures reales.
+- `pnpm test:unit`: 103 archivos y 873 pruebas pasaron; la prueba real DOCX/PDF tiene un timeout dedicado de 30 s para no fallar por el coste del parser en frío.
 - `pnpm test:db`: pasó, 29 archivos y 1.197 pruebas SQL. Antes se aplicaron las migraciones locales pendientes de S2-05/S2-06/S2-08; no hubo reset ni conexión remota.
 - Integración dirigida (`analysis-run`, `analysis-finalization`, `analysis-isolation`, `credits-access`): pasó, 4 archivos y 9 pruebas.
-- Suite de integración completa: no terminó ni emitió resultados tras varios minutos y fue detenida; el conjunto dirigido sí pasó.
+- `pnpm test:integration`: 29 archivos y 66 pruebas pasaron; el único fallo de suite fue el guard de `analysis-recovery`, que encontró activo un job cron local preexistente `kdm-analysis-recovery` y se negó correctamente a modificarlo; hubo 4 casos omitidos en ese archivo.
+- Integración dirigida del worker (`analysis-worker.test.ts`): 5/5 pruebas pasaron después de ampliar los límites de arranque del runtime Edge local.
+- Privacidad/parsers dirigidos: 2 archivos, 21 pruebas pasaron.
+- `pnpm typecheck`: pasó. Next mostró el aviso de hook de navegación de Sentry.
+- `pnpm lint`: 0 errores y 3 warnings preexistentes en dos tests de ingesta.
 - `git diff --check`: sin errores de whitespace.
-- No hay escenarios Playwright para el flujo S2-09; no se ejecutó E2E.
+- `pnpm build`: pasó con el aviso existente de hook de navegación de Sentry.
+- `pnpm test:e2e:local -- tests/e2e/analysis.spec.ts`: pasó, 5/5 escenarios contra Supabase local; no se usó base remota.
+- El job cron preexistente se dejó intacto. El test `analysis-recovery` debe repetirse cuando ese horario local ya no esté configurado.
 
-Por tanto, esta entrega integra ya S2-08 y su Retry, pero el ticket **no está cerrado**: falta S2-10 y su ruta de findings, pruebas UI/E2E completas y resolver/revalidar el timeout del parser para obtener una suite unitaria verde.
+Por tanto, esta entrega integra S2-08 y su Retry, tiene cinco recorridos Playwright aprobados y una suite unitaria verde. El ticket **no está cerrado** hasta integrar S2-10 y validar completed vacío. La suite de integración tiene un único fallo de preflight por el job cron local preexistente; no se alteró esa configuración.
 
 ## Nota sobre herramientas solicitadas
 

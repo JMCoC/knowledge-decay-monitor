@@ -36,6 +36,9 @@ export interface AnalysisFixture {
   adminId: string;
   qaId: string;
   memberId: string;
+  adminCredentials: { email: string; password: string };
+  qaCredentials: { email: string; password: string };
+  memberCredentials: { email: string; password: string };
   sql: LocalSqlSession;
   dispose(): Promise<void>;
 }
@@ -51,6 +54,7 @@ interface LocalUser {
   client: SupabaseClient<Database>;
   userId: string;
   email: string;
+  password: string;
 }
 
 class InjectedAnalysisFixtureFailure extends Error {}
@@ -338,6 +342,9 @@ async function createAnalysisFixtureInternal(
       adminId: admin.userId,
       qaId: qa.userId,
       memberId: member.userId,
+      adminCredentials: { email: admin.email, password: admin.password },
+      qaCredentials: { email: qa.email, password: qa.password },
+      memberCredentials: { email: member.email, password: member.password },
       sql,
       dispose,
     };

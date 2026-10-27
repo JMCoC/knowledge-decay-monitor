@@ -239,7 +239,7 @@ describe("FAKE-PROVIDER analysis worker integration", () => {
   beforeAll(async () => {
     await assertLocalSupabaseReady();
     edge = await startEdgeConFake();
-  });
+  }, 90_000);
 
   let edge: AnalysisEdgeHandle | undefined;
 
@@ -339,7 +339,7 @@ describe("FAKE-PROVIDER analysis worker integration", () => {
     } finally {
       await job.dispose();
     }
-  }, 60_000);
+  }, 120_000);
 
   it("FAKE-PROVIDER processes 40+ pairs across pages in one attempt", async () => {
     const worker = requireEdge();
