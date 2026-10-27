@@ -18,6 +18,8 @@ export interface StartAnalysisEdgeOptions {
   supabaseUrl: string;
   serviceRoleKey: string;
   fakeProvider?: EdgeFakeProviderOptions;
+  analysisFakeFinalization?: string;
+  analysisFakePersistence?: string;
   port?: number;
   readinessTimeoutMs?: number;
 }
@@ -97,6 +99,16 @@ export async function startAnalysisEdge(
       );
     }
   }
+  if (opts.analysisFakeFinalization !== undefined) {
+    workerEnv.push(
+      `ANALYSIS_FAKE_FINALIZATION=${opts.analysisFakeFinalization}`,
+    );
+  }
+  if (opts.analysisFakePersistence !== undefined) {
+    workerEnv.push(
+      `ANALYSIS_FAKE_PERSISTENCE=${opts.analysisFakePersistence}`,
+    );
+  }
   writeFileSync(envFile, `${workerEnv.join("\n")}\n`);
 
   const childEnv: NodeJS.ProcessEnv = { ...process.env };
@@ -108,6 +120,8 @@ export async function startAnalysisEdge(
   delete childEnv["ANALYSIS_SUPABASE_URL"];
   delete childEnv["ANALYSIS_SUPABASE_SERVICE_ROLE_KEY"];
   delete childEnv["ANALYSIS_FAKE_PROVIDER"];
+  delete childEnv["ANALYSIS_FAKE_FINALIZATION"];
+  delete childEnv["ANALYSIS_FAKE_PERSISTENCE"];
   delete childEnv["ANALYSIS_FAKE_LATENCY_MS"];
   delete childEnv["ANALYSIS_FAKE_FAIL_AT_CALL_INDEX"];
   delete childEnv["ANALYSIS_FAKE_FAIL_CODE"];
@@ -234,6 +248,8 @@ export async function startEdgeConFake(
     latencyMs?: number;
     failAtCallIndex?: number;
     failCode?: string;
+    analysisFakeFinalization?: string;
+    analysisFakePersistence?: string;
     token?: string;
   } = {},
 ): Promise<AnalysisEdgeHandle> {
@@ -257,5 +273,11 @@ export async function startEdgeConFake(
         : {}),
       ...(opts.failCode !== undefined ? { failCode: opts.failCode } : {}),
     },
+    ...(opts.analysisFakeFinalization !== undefined
+      ? { analysisFakeFinalization: opts.analysisFakeFinalization }
+      : {}),
+    ...(opts.analysisFakePersistence !== undefined
+      ? { analysisFakePersistence: opts.analysisFakePersistence }
+      : {}),
   });
 }

@@ -209,6 +209,9 @@ insert into pg_temp.analysis_fixture_ids(name, analysis_id) values
 insert into pg_temp.handoff_ops(name, operation_id)
   select 'handoff_expired', c.operation_id
   from public.claim_analysis(pg_temp.analysis_fixture_id('handoff_expired')) c;
+insert into public.credit_ledger(workspace_id, event_type, amount, analysis_id)
+select workspace_id, 'Reserved', 3, id
+from public.analyses where id = pg_temp.analysis_fixture_id('handoff_expired');
 update pg_temp.handoff_ops set attempt_deadline_at = a.attempt_deadline_at,
   analysis_deadline_at = a.analysis_deadline_at
   from public.analyses a where handoff_ops.name = 'handoff_expired'
@@ -226,6 +229,20 @@ select is((select count(*)::integer from public.claim_analysis(pg_temp.analysis_
 select is((select status::text || '|' || error_code::text || '|' || attempt_count::text
   from public.analyses where id = pg_temp.analysis_fixture_id('handoff_expired')),
   'failed|TIMEOUT|1', 'An expired continuation becomes terminal without consuming another attempt');
+select is((select count(*)::integer from public.credit_ledger
+  where analysis_id = pg_temp.analysis_fixture_id('handoff_expired')), 2,
+  'An expired continuation keeps the reservation and adds a release');
+select is((select count(*)::integer from public.credit_ledger
+  where analysis_id = pg_temp.analysis_fixture_id('handoff_expired') and event_type = 'Released'), 1,
+  'An expired continuation releases the reservation exactly once');
+select is((select count(*)::integer from public.notification_events
+  where analysis_id = pg_temp.analysis_fixture_id('handoff_expired')
+    and type = 'analysis_failed'), 1,
+  'An expired continuation emits one failure event');
+delete from public.notification_events
+  where analysis_id = pg_temp.analysis_fixture_id('handoff_expired');
+delete from public.credit_ledger
+  where analysis_id = pg_temp.analysis_fixture_id('handoff_expired');
 delete from public.analysis_documents where analysis_id = pg_temp.analysis_fixture_id('handoff_expired');
 delete from public.analyses where id = pg_temp.analysis_fixture_id('handoff_expired');
 

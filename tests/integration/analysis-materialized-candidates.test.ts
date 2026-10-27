@@ -143,9 +143,10 @@ describe("materialized analysis candidate snapshots through local Supabase", () 
         return `${ids[0]}|${ids[1]}`;
       }).sort()).toEqual(expectedPairIds);
 
-      const completed = await service.rpc("complete_analysis", {
+      const completed = await service.rpc("finalize_analysis_success", {
         p_analysis_id: analysisId,
         p_operation_id: operationId,
+        p_reported_findings_count: 0,
       });
       expect(completed.error?.code).toBeUndefined();
       expect(firstSqlRow(await fixture.sql.query(snapshotCountsQuery(analysisId)))).toBe("0|0");
@@ -181,9 +182,10 @@ describe("materialized analysis candidate snapshots through local Supabase", () 
       expect(page.error?.code).toBeUndefined();
       expect(page.data).toEqual([]);
 
-      const completed = await service.rpc("complete_analysis", {
+      const completed = await service.rpc("finalize_analysis_success", {
         p_analysis_id: analysisId,
         p_operation_id: operationId,
+        p_reported_findings_count: 0,
       });
       expect(completed.error?.code).toBeUndefined();
       expect(firstSqlRow(await fixture.sql.query(snapshotCountsQuery(analysisId)))).toBe("0|0");

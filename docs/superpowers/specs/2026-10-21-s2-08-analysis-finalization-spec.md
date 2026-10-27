@@ -741,6 +741,14 @@ Test `s2_08_finalization.test.sql:618-640` se actualiza en 8b-10 a
 | K | queued | `p_enforce_operation=false` | caller confirmó terminal | Normal: UPDATE failed + Released + evento + cleanup → `'failed'` |
 | L | no existe | — | — | `'superseded'` |
 
+**Nota de interpretación (rama `failed` antes del fencing):**
+El fencing de §13.1 (status='processing' + token + lease/deadlines)
+aplica SOLO a estados no-terminales. Los casos D-G/H se resuelven en
+una rama previa que valida `status='failed'` + token match y no
+revalida lease/deadlines (si ya está failed, las deadlines no
+importan). Sin esta interpretación, D-G/H serían inalcanzables con el
+texto literal de §13.1.
+
 Reglas:
 
 - Solo completa cuando `status='failed'` + token match (o estado

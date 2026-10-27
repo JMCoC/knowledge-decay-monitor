@@ -393,9 +393,15 @@ describe("local pg_cron analysis recovery", () => {
       const { data: ledger, error: ledgerError } = await service
         .from("credit_ledger")
         .select("event_type,amount")
-        .eq("analysis_id", job.analysisId);
+        .eq("analysis_id", job.analysisId)
+        // Tiebreaker: ascending enum order keeps Reserved before settlements.
+        .order("created_at", { ascending: true })
+        .order("event_type", { ascending: true });
       expect(ledgerError).toBeNull();
-      expect(ledger).toEqual([{ event_type: "Reserved", amount: row.fixed_cost }]);
+      expect(ledger).toEqual([
+        { event_type: "Reserved", amount: row.fixed_cost },
+        { event_type: "Consumed", amount: row.fixed_cost },
+      ]);
       const { count: findings, error: findingsError } = await service
         .from("findings")
         .select("id", { count: "exact", head: true })
@@ -480,9 +486,15 @@ describe("local pg_cron analysis recovery", () => {
       const { data: ledger, error } = await service
         .from("credit_ledger")
         .select("event_type,amount")
-        .eq("analysis_id", job.analysisId);
+        .eq("analysis_id", job.analysisId)
+        // Tiebreaker: ascending enum order keeps Reserved before settlements.
+        .order("created_at", { ascending: true })
+        .order("event_type", { ascending: true });
       expect(error).toBeNull();
-      expect(ledger).toEqual([{ event_type: "Reserved", amount: row.fixed_cost }]);
+      expect(ledger).toEqual([
+        { event_type: "Reserved", amount: row.fixed_cost },
+        { event_type: "Consumed", amount: row.fixed_cost },
+      ]);
     } finally {
       await job.fixture.dispose();
     }
@@ -544,9 +556,15 @@ describe("local pg_cron analysis recovery", () => {
       const { data: ledger, error } = await service
         .from("credit_ledger")
         .select("event_type,amount")
-        .eq("analysis_id", job.analysisId);
+        .eq("analysis_id", job.analysisId)
+        // Tiebreaker: ascending enum order keeps Reserved before settlements.
+        .order("created_at", { ascending: true })
+        .order("event_type", { ascending: true });
       expect(error).toBeNull();
-      expect(ledger).toEqual([{ event_type: "Reserved", amount: row.fixed_cost }]);
+      expect(ledger).toEqual([
+        { event_type: "Reserved", amount: row.fixed_cost },
+        { event_type: "Consumed", amount: row.fixed_cost },
+      ]);
     } finally {
       await job.fixture.dispose();
     }

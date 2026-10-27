@@ -252,7 +252,15 @@ describe("S2-08a real analysis finalization", () => {
         .from("credit_ledger")
         .select("event_type,amount")
         .eq("analysis_id", prepared.analysisId)
-        .order("created_at");
+        // Tiebreaker: Reserved and Released/Consumed can share created_at
+        // when the fixture inserts them in one transaction
+        // (transaction_timestamp() is constant within a tx). Ascending
+        // event_type follows the enum declaration order
+        // (Promotional, Reserved, Consumed, Released), so Reserved precedes
+        // both Released and Consumed. Promotional is not inserted for an
+        // analysis. Revisit if the enum order changes in a future migration.
+        .order("created_at")
+        .order("event_type", { ascending: true });
       expect(ledgerError).toBeNull();
       expect(ledger?.map((row) => row.event_type)).toEqual([
         "Reserved",
@@ -329,7 +337,15 @@ describe("S2-08a real analysis finalization", () => {
         .from("credit_ledger")
         .select("event_type,amount")
         .eq("analysis_id", prepared.analysisId)
-        .order("created_at");
+        // Tiebreaker: Reserved and Released/Consumed can share created_at
+        // when the fixture inserts them in one transaction
+        // (transaction_timestamp() is constant within a tx). Ascending
+        // event_type follows the enum declaration order
+        // (Promotional, Reserved, Consumed, Released), so Reserved precedes
+        // both Released and Consumed. Promotional is not inserted for an
+        // analysis. Revisit if the enum order changes in a future migration.
+        .order("created_at")
+        .order("event_type", { ascending: true });
       expect(ledgerError).toBeNull();
       expect(ledger?.map((row) => row.event_type)).toEqual([
         "Reserved",
