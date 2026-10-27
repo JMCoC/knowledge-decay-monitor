@@ -41,6 +41,8 @@ export interface AnalyzeEnv {
   supabaseServiceRoleKey: string | undefined;
   analysisSupabaseUrl: string | undefined;
   analysisFakeProvider: string | undefined;
+  analysisFakeFinalization: string | undefined;
+  analysisFakePersistence: string | undefined;
   analysisFakeLatencyMs: string | undefined;
   analysisFakeFailAtCallIndex: string | undefined;
   analysisFakeFailCode: string | undefined;
@@ -49,7 +51,9 @@ export interface AnalyzeEnv {
 
 export interface AnalyzeHandlerDeps {
   createProviderFn: () => AIProvider;
-  createFinalizationFn: () => AnalysisFinalization;
+  createFinalizationFn: (
+    client: AnalysisWorkerDb,
+  ) => AnalysisFinalization;
   createBatchPersistenceFn: (
     client: AnalysisWorkerDb,
   ) => AnalysisBatchPersistence;
@@ -217,18 +221,20 @@ export async function handleAnalyzeRequest(
   let client: AnalysisWorkerDb;
   try {
     client = deps.createClientFn(env);
-    if (isLocalTestEnv(env)) {
-      provider = createFakeProvider(
-        env,
-        parseFakeBehaviorSafe(body.fakeOverrides),
-      );
-      finalization = createTestFinalization(client);
-      persistence = new FakeAnalysisBatchPersistence(client);
-    } else {
-      provider = deps.createProviderFn();
-      finalization = deps.createFinalizationFn();
-      persistence = deps.createBatchPersistenceFn(client);
-    }
+    const baseGate = isLocalTestEnv(env);
+    const fakeProvider = baseGate && env.analysisFakeProvider !== "0";
+    const fakeFinalization =
+      baseGate && env.analysisFakeFinalization !== "0";
+    const fakePersistence = baseGate && env.analysisFakePersistence !== "0";
+    provider = fakeProvider
+      ? createFakeProvider(env, parseFakeBehaviorSafe(body.fakeOverrides))
+      : deps.createProviderFn();
+    finalization = fakeFinalization
+      ? createTestFinalization(client)
+      : deps.createFinalizationFn(client);
+    persistence = fakePersistence
+      ? new FakeAnalysisBatchPersistence(client)
+      : deps.createBatchPersistenceFn(client);
   } catch {
     reportAnalysisFailure({
       module: "analysis",
@@ -286,6 +292,8 @@ if (typeof Deno !== "undefined" && typeof Deno.serve === "function") {
         Deno.env.get("ANALYSIS_SUPABASE_SERVICE_ROLE_KEY"),
       analysisSupabaseUrl: Deno.env.get("ANALYSIS_SUPABASE_URL"),
       analysisFakeProvider: Deno.env.get("ANALYSIS_FAKE_PROVIDER"),
+      analysisFakeFinalization: Deno.env.get("ANALYSIS_FAKE_FINALIZATION"),
+      analysisFakePersistence: Deno.env.get("ANALYSIS_FAKE_PERSISTENCE"),
       analysisFakeLatencyMs: Deno.env.get("ANALYSIS_FAKE_LATENCY_MS"),
       analysisFakeFailAtCallIndex: Deno.env.get("ANALYSIS_FAKE_FAIL_AT_CALL_INDEX"),
       analysisFakeFailCode: Deno.env.get("ANALYSIS_FAKE_FAIL_CODE"),

@@ -8,11 +8,17 @@ import type {
   AnalyzeEnv,
   AnalyzeHandlerDeps,
 } from "../../supabase/functions/analyze/index";
-import type { AnalysisWorkerDb } from "../../src/modules/analysis/worker/types";
-import type { AnalysisBatchPersistence } from "../../src/modules/analysis/worker/types";
+import type {
+  AIProvider,
+  AnalysisBatchPersistence,
+  AnalysisWorkerDb,
+} from "../../src/modules/analysis/worker/types";
 import { createBatchPersistence } from "../../src/modules/analysis/worker/batch-persistence";
 import { createFinalization } from "../../src/modules/analysis/worker/finalization";
+import type { AnalysisFinalization } from "../../src/modules/analysis/worker/finalization";
 import { createProvider } from "../../src/modules/analysis/worker/provider";
+import { FakeAnalysisProvider } from "../../supabase/functions/analyze/_test_doubles/analysis-provider.fake";
+import { FakeAnalysisBatchPersistence } from "../../supabase/functions/analyze/_test_doubles/analysis-batch-persistence.fake";
 
 const ENV: AnalyzeEnv = {
   analysisInternalToken: "test-token",
@@ -20,6 +26,8 @@ const ENV: AnalyzeEnv = {
   supabaseServiceRoleKey: "service-key",
   analysisSupabaseUrl: "http://127.0.0.1:54321",
   analysisFakeProvider: undefined,
+  analysisFakeFinalization: undefined,
+  analysisFakePersistence: undefined,
   analysisFakeLatencyMs: undefined,
   analysisFakeFailAtCallIndex: undefined,
   analysisFakeFailCode: undefined,
@@ -27,7 +35,7 @@ const ENV: AnalyzeEnv = {
 };
 
 function throwingProvider(): never {
-  throw new Error("S2-07 not merged: AIProvider unavailable.");
+  throw new Error("provider unavailable");
 }
 
 function throwingFinalization(): never {
@@ -35,7 +43,7 @@ function throwingFinalization(): never {
 }
 
 function throwingPersistence(): AnalysisBatchPersistence {
-  return createBatchPersistence({ rpc: vi.fn() } as never);
+  throw new Error("S2-08 not merged: analysis batch staging unavailable.");
 }
 
 function ready() {
@@ -294,12 +302,44 @@ describe("analyze handler readiness and async acknowledgement", () => {
     expect(d.runJobFn).toHaveBeenCalledWith(expect.objectContaining({ persistence: expect.anything() }));
   });
 
-  it("keeps failing factories explicit", () => {
-    expect(() => createProvider()).toThrow("S2-07 not merged: AIProvider unavailable.");
-    expect(() => createFinalization()).toThrow("S2-08 not merged: AnalysisFinalization unavailable.");
-    expect(() => throwingPersistence()).toThrow(
-      "S2-08 not merged: analysis batch staging unavailable.",
-    );
+  it("builds a real provider and both factories with a stub client", () => {
+    vi.stubEnv("CEREBRAS_API_KEY", "test-cerebras-key");
+    vi.stubEnv("GROQ_API_KEY", "test-groq-key");
+    vi.stubEnv("CEREBRAS_BASE_URL", "https://cerebras.test/v1");
+    vi.stubEnv("GROQ_BASE_URL", "https://groq.test/openai/v1");
+    try {
+      const provider = createProvider();
+      expect(provider).not.toBeInstanceOf(Promise);
+      expect(typeof provider.analyzePair).toBe("function");
+      const client = { rpc: vi.fn() } as unknown as AnalysisWorkerDb;
+      expect(() => createFinalization(client)).not.toThrow();
+      expect(() => createBatchPersistence(client)).not.toThrow();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("returns 503 without a claim when provider credentials are missing", async () => {
+    vi.stubEnv("CEREBRAS_API_KEY", "");
+    vi.stubEnv("GROQ_API_KEY", "");
+    vi.stubEnv("CEREBRAS_BASE_URL", "");
+    vi.stubEnv("GROQ_BASE_URL", "");
+    try {
+      const d = deps({
+        createProviderFn: createProvider,
+        createFinalizationFn: ready,
+        createBatchPersistenceFn: ready,
+      });
+      const response = await handleAnalyzeRequest(
+        post({ analysisId: "analysis-1" }, "test-token"),
+        ENV,
+        d,
+      );
+      expect(response.status).toBe(503);
+      expect(d.runJobFn).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("parses fake behavior without allowing unsupported values", async () => {
@@ -312,5 +352,236 @@ describe("analyze handler readiness and async acknowledgement", () => {
       failCode: "PROVIDER_UNAVAILABLE",
     });
     expect(parseFakeBehaviorSafe({ latencyMs: -1 })).toEqual({});
+  });
+});
+
+const realProvider = {
+  analyzePair: vi.fn(),
+} as unknown as AIProvider;
+const realFinalization = {
+  finalize: vi.fn(),
+  real: true,
+} as unknown as AnalysisFinalization;
+const realPersistence = {
+  persist: vi.fn(),
+  real: true,
+} as unknown as AnalysisBatchPersistence;
+
+type ComponentExpectation = "fake" | "real";
+
+interface FlagCase {
+  name: string;
+  env: AnalyzeEnv;
+  expected: {
+    provider: ComponentExpectation;
+    finalization: ComponentExpectation;
+    persistence: ComponentExpectation;
+  };
+}
+
+function localEnv(overrides: Partial<AnalyzeEnv> = {}): AnalyzeEnv {
+  return {
+    ...ENV,
+    analysisFakeProvider: "1",
+    ...overrides,
+  } as AnalyzeEnv;
+}
+
+async function selectComponents(
+  env: AnalyzeEnv,
+  body: unknown = { analysisId: "analysis-1" },
+) {
+  let background: Promise<unknown> | undefined;
+  const createProviderFn = vi.fn(() => realProvider);
+  const createFinalizationFn = vi.fn(() => realFinalization);
+  const createBatchPersistenceFn = vi.fn(() => realPersistence);
+  const d = deps({
+    createProviderFn,
+    createFinalizationFn,
+    createBatchPersistenceFn,
+    waitUntilFn: vi.fn((promise) => {
+      background = promise;
+    }),
+  });
+  const response = await handleAnalyzeRequest(
+    post(body, "test-token"),
+    env,
+    d,
+  );
+  expect(response.status).toBe(202);
+  await background;
+  const job = vi.mocked(d.runJobFn).mock.calls[0]?.[0];
+  if (!job) throw new Error("analysis job was not started");
+  return {
+    job,
+    createProviderFn,
+    createFinalizationFn,
+    createBatchPersistenceFn,
+  };
+}
+
+const flagCases: FlagCase[] = [
+  {
+    name: "finalization absent inherits the local gate",
+    env: localEnv(),
+    expected: { provider: "fake", finalization: "fake", persistence: "fake" },
+  },
+  {
+    name: "finalization 1 keeps the fake",
+    env: localEnv({ analysisFakeFinalization: "1" }),
+    expected: { provider: "fake", finalization: "fake", persistence: "fake" },
+  },
+  {
+    name: "finalization 0 forces the real implementation",
+    env: localEnv({ analysisFakeFinalization: "0" }),
+    expected: { provider: "fake", finalization: "real", persistence: "fake" },
+  },
+  {
+    name: "finalization empty string inherits the local gate",
+    env: localEnv({ analysisFakeFinalization: "" }),
+    expected: { provider: "fake", finalization: "fake", persistence: "fake" },
+  },
+  {
+    name: "finalization true inherits the local gate",
+    env: localEnv({ analysisFakeFinalization: "true" }),
+    expected: { provider: "fake", finalization: "fake", persistence: "fake" },
+  },
+  {
+    name: "finalization yes inherits the local gate",
+    env: localEnv({ analysisFakeFinalization: "yes" }),
+    expected: { provider: "fake", finalization: "fake", persistence: "fake" },
+  },
+  {
+    name: "finalization on inherits the local gate",
+    env: localEnv({ analysisFakeFinalization: "on" }),
+    expected: { provider: "fake", finalization: "fake", persistence: "fake" },
+  },
+  {
+    name: "persistence 0 forces the real implementation",
+    env: localEnv({ analysisFakePersistence: "0" }),
+    expected: { provider: "fake", finalization: "fake", persistence: "real" },
+  },
+  {
+    name: "persistence empty string inherits the local gate",
+    env: localEnv({ analysisFakePersistence: "" }),
+    expected: { provider: "fake", finalization: "fake", persistence: "fake" },
+  },
+  {
+    name: "persistence true inherits the local gate",
+    env: localEnv({ analysisFakePersistence: "true" }),
+    expected: { provider: "fake", finalization: "fake", persistence: "fake" },
+  },
+  {
+    name: "persistence yes inherits the local gate",
+    env: localEnv({ analysisFakePersistence: "yes" }),
+    expected: { provider: "fake", finalization: "fake", persistence: "fake" },
+  },
+  {
+    name: "both component overrides stay independent",
+    env: localEnv({
+      analysisFakeFinalization: "0",
+      analysisFakePersistence: "0",
+    }),
+    expected: { provider: "fake", finalization: "real", persistence: "real" },
+  },
+  {
+    name: "provider 0 closes the base gate",
+    env: localEnv({ analysisFakeProvider: "0" }),
+    expected: { provider: "real", finalization: "real", persistence: "real" },
+  },
+  {
+    name: "provider absent closes the base gate",
+    env: localEnv({ analysisFakeProvider: undefined }),
+    expected: { provider: "real", finalization: "real", persistence: "real" },
+  },
+  {
+    name: "hosted runtime with all flags 1 keeps all components real",
+    env: localEnv({
+      supabaseUrl: "https://abc.supabase.co",
+      analysisFakeFinalization: "1",
+      analysisFakePersistence: "1",
+    }),
+    expected: { provider: "real", finalization: "real", persistence: "real" },
+  },
+  {
+    name: "hosted runtime with 0 overrides keeps all components real",
+    env: localEnv({
+      supabaseUrl: "https://abc.supabase.co",
+      analysisFakeFinalization: "0",
+      analysisFakePersistence: "0",
+    }),
+    expected: { provider: "real", finalization: "real", persistence: "real" },
+  },
+  {
+    name: "loopback with provider 0 and finalization 1 stays all real",
+    env: localEnv({
+      analysisFakeProvider: "0",
+      analysisFakeFinalization: "1",
+    }),
+    expected: { provider: "real", finalization: "real", persistence: "real" },
+  },
+];
+
+describe("independent fake component flags", () => {
+  it.each(flagCases)("$name", async ({ env, expected }) => {
+    const {
+      job,
+      createProviderFn,
+      createFinalizationFn,
+      createBatchPersistenceFn,
+    } = await selectComponents(env);
+
+    expect(job.provider instanceof FakeAnalysisProvider).toBe(
+      expected.provider === "fake",
+    );
+    expect(job.provider === realProvider).toBe(expected.provider === "real");
+    expect(job.finalization === realFinalization).toBe(
+      expected.finalization === "real",
+    );
+    expect("real" in job.finalization).toBe(
+      expected.finalization === "real",
+    );
+    expect(job.persistence instanceof FakeAnalysisBatchPersistence).toBe(
+      expected.persistence === "fake",
+    );
+    expect(job.persistence === realPersistence).toBe(
+      expected.persistence === "real",
+    );
+    expect(createProviderFn).toHaveBeenCalledTimes(
+      expected.provider === "real" ? 1 : 0,
+    );
+    expect(createFinalizationFn).toHaveBeenCalledTimes(
+      expected.finalization === "real" ? 1 : 0,
+    );
+    expect(createBatchPersistenceFn).toHaveBeenCalledTimes(
+      expected.persistence === "real" ? 1 : 0,
+    );
+  });
+
+  it("does not instantiate the fake provider under hosted with findings overrides", async () => {
+    const { job } = await selectComponents(
+      localEnv({
+        supabaseUrl: "https://abc.supabase.co",
+        analysisFakeFinalization: "1",
+        analysisFakePersistence: "1",
+      }),
+      {
+        analysisId: "analysis-1",
+        _fake: {
+          findings: [
+            {
+              type: "contradiction",
+              severity: "High",
+              confidence: 0.9,
+              explanation: "hosted must not honor fake findings",
+              evidence: [],
+            },
+          ],
+        },
+      },
+    );
+
+    expect(job.provider).toBe(realProvider);
+    expect(job.provider).not.toBeInstanceOf(FakeAnalysisProvider);
   });
 });

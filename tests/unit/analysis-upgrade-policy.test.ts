@@ -61,6 +61,15 @@ const s203Names = [
   "20261011030000_s2_03_eligible_documents_projection.sql",
 ];
 
+const s208aNames = [
+  "20261021164507_s2_08a_analysis_finalization.sql",
+  "20261021181000_s2_08a_fix_persist_initial_checkpoint.sql",
+];
+
+const s208bNames = [
+  "20261023170850_s2_08b_analysis_worker_locks.sql",
+];
+
 describe("analysis migration upgrade stages", () => {
   it("classifies every reviewed S1 and S2 migration by its exact name", () => {
     for (const name of s1Names) {
@@ -78,6 +87,12 @@ describe("analysis migration upgrade stages", () => {
     for (const name of s203Names) {
       expect(migrationStage(`supabase/migrations/${name}`)).toBe("s2_03");
     }
+    for (const name of s208aNames) {
+      expect(migrationStage(`supabase/migrations/${name}`)).toBe("s2_08a");
+    }
+    for (const name of s208bNames) {
+      expect(migrationStage(`supabase/migrations/${name}`)).toBe("s2_08b");
+    }
     for (const name of [
       "20261011013954_s2_02_credit_operations.sql",
       "20261011014828_s2_02_credit_reads.sql",
@@ -86,6 +101,13 @@ describe("analysis migration upgrade stages", () => {
     ]) {
       expect(migrationStage(`supabase/migrations/${name}`)).toBe("s2_02");
     }
+  });
+
+  it("classifies the S2-08b migration and its stage boundary", () => {
+    const s208b = "supabase/migrations/20261023170850_s2_08b_analysis_worker_locks.sql";
+    expect(migrationStage(s208b)).toBe("s2_08b");
+    expect(includeMigration(s208b, "s2_08a")).toBe(false);
+    expect(includeMigration(s208b, "s2_08b")).toBe(true);
   });
 
   it("includes only migrations at or before the requested stage", () => {
@@ -99,6 +121,8 @@ describe("analysis migration upgrade stages", () => {
     const s205Recovery = "supabase/migrations/20261017230309_s2_05_analysis_recovery.sql";
     const s205CandidateSnapshots = "supabase/migrations/20261018021500_s2_05_materialized_candidate_snapshots.sql";
     const s205EmptySnapshot = "supabase/migrations/20261018022500_s2_05_empty_comparison_candidate_snapshot.sql";
+    const s208a = "supabase/migrations/20261021164507_s2_08a_analysis_finalization.sql";
+    const s208b = "supabase/migrations/20261023170850_s2_08b_analysis_worker_locks.sql";
     expect(includeMigration(s1, "s1")).toBe(true);
     expect(includeMigration(s201, "s1")).toBe(false);
     expect(includeMigration(s1, "s2_01")).toBe(true);
@@ -120,6 +144,10 @@ describe("analysis migration upgrade stages", () => {
     expect(includeMigration(s205CandidateSnapshots, "s2_06")).toBe(true);
     expect(includeMigration(s205EmptySnapshot, "s2_04")).toBe(false);
     expect(includeMigration(s205EmptySnapshot, "s2_06")).toBe(true);
+    expect(includeMigration(s208a, "s2_06")).toBe(false);
+    expect(includeMigration(s208a, "s2_08a")).toBe(true);
+    expect(includeMigration(s208b, "s2_08a")).toBe(false);
+    expect(includeMigration(s208b, "s2_08b")).toBe(true);
   });
 
   it("normalizes Windows separators and rejects paths or names outside the inventory", () => {

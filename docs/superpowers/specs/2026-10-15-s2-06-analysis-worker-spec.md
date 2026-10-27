@@ -323,6 +323,11 @@ S2-06 queda "completo pendiente de integración" (G2=A; cerrar solo con fakes co
 | 10 | Bundle deployable incluye supabase/functions/analyze/ _test_doubles/ (statically imported para que Deno preloadee; gate en runtime decide uso) | Task 7 | Auditoría de bundle o necesidad de excluir tests del deploy | Código de tests en bundle de producción (inactivo bajo gate) |
 | 11 | Flake no identificado en test:integration (1/6 corridas, no reproducido en 5 posteriores; hipótesis contención Docker/puertos) | S2-06 / próximo merge a develop | Fallo de CI | Bloquea merges intermitentemente; investigar si reaparece |
 | 12 | Claim concurrente real sin probar (skip con método dblink documentado en `supabase/tests/database/020_s2_06_analysis_leases.test.sql`) | S2-06 | Antes del cierre S2-12 | Doble worker podría reclamar el mismo job (mitigado: advisory lock + SKIP LOCKED + CHECK attempt_count, patrón probado concurrentemente en S1-07) |
+| 13 | `provider_used`/`model_used` se derivan de `configuration.providers.primary` o quedan NULL; no se persiste el proveedor efectivo | S2-07 | S2-08 o telemetría efectiva | Atribución imprecisa cuando Groq responde |
+| 14 | Discrepancia `tests/fakes` vs `_test_doubles`; no se mueven archivos | S2-07 | Limpieza de dobles | Confusión documental |
+| 15 | Smoke real opt-in, no CI; 429 real no inducible | S2-07 | Cambio de proveedor o CI real | Fallback 429 no verificado en CI |
+| 16 | Telemetría del proveedor efectivo por intento; requiere evento de éxito | S2-08 | S2-08 o posterior | No se sabe qué proveedor sirvió cada par |
+| — | Filas 17-19 de esta sección viven en `docs/superpowers/specs/2026-10-21-s2-08-analysis-finalization-spec.md` §12.1 (S2-08 declara que no duplica la tabla de S2-06). | — | — | — |
 
 ### 12.2 Decisiones diferidas ("decidido no decidir hasta X; criterio = Y")
 
