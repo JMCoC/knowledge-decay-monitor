@@ -292,12 +292,16 @@ export interface FindingSummary {
   severityOriginal: FindingSeverity;
   severityCurrent: FindingSeverity;
   status: FindingStatus;
+  assignee: EligibleOwner | null;
+  createdAt: string;
 }
 
-export interface FindingEvidence {
+export interface FindingEvidenceItem {
   id: string;
   documentId: string;
+  documentName: string;
   versionId: string;
+  versionNumber: number;
   chunkId: string;
   pageNumber: number | null;
   section: string | null;
@@ -305,14 +309,19 @@ export interface FindingEvidence {
   snapshot: string;
 }
 
+/** Backwards-compatible alias for FindingEvidenceItem */
+export type FindingEvidence = FindingEvidenceItem;
+
 export interface FindingDetail extends FindingSummary {
-  evidence: FindingEvidence[];
+  evidence: FindingEvidenceItem[];
 }
 
 export interface FindingsQuery {
   analysisId: string;
   type?: FindingType;
   severity?: FindingSeverity;
+  status?: FindingStatus;
+  assignee?: "all" | "unassigned";
   page?: number;
   pageSize?: number;
 }

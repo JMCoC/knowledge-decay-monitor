@@ -149,7 +149,20 @@ export function AnalysisStatusView({ initial }: { initial: AnalysisSnapshot }) {
       </section>
       {snapshot.status === "queued" || snapshot.status === "processing" ? <p role="status" className="mt-5 rounded-lg bg-cyan-50 p-4 text-sm text-cyan-950">Your analysis is running. This page refreshes its status automatically.</p> : null}
       {snapshot.status === "failed" ? <p role="alert" className="mt-5 rounded-lg bg-amber-50 p-4 text-sm text-amber-950">{snapshot.error?.message ?? "The analysis failed."}</p> : null}
-      {snapshot.status === "completed" ? <p className="mt-5 rounded-lg bg-emerald-50 p-4 text-sm text-emerald-950">Analysis completed. Findings will be available when the findings experience is delivered.</p> : null}
+      {snapshot.status === "completed" ? (
+        <div className="mt-5 rounded-lg bg-emerald-50 p-4 border border-emerald-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div>
+            <p className="text-sm font-semibold text-emerald-950">Analysis completed.</p>
+            <p className="text-xs text-emerald-800 mt-0.5">Explore detected contradictions, obsolescence, and corroborating citations.</p>
+          </div>
+          <Link
+            href={`/analysis/${snapshot.analysisId}/findings`}
+            className="inline-flex items-center justify-center px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold rounded-md shadow-sm transition"
+          >
+            View Analysis Findings →
+          </Link>
+        </div>
+      ) : null}
       {message ? <p role="status" className="mt-3 text-sm text-slate-600">{message}</p> : null}
       {snapshot.status === "failed" ? (snapshot.canRetry ? <button type="button" disabled={isEstimatingRetry || isRetrying} onClick={() => void estimateRetry()} className="mt-4 rounded-lg bg-cyan-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{isEstimatingRetry ? "Estimating retry…" : "Retry Analysis"}</button> : <p className="mt-4 text-sm text-slate-600">Retry is unavailable until the failed reservation has been released.</p>) : null}
       {retryConfirmation && retryEstimate ? <div role="dialog" aria-modal="true" aria-labelledby="retry-confirmation-title" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4"><section className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl"><h2 id="retry-confirmation-title" className="text-lg font-semibold">Confirm analysis retry</h2><p className="mt-3 text-sm text-slate-700">Estimated cost: {retryEstimate.fixedCost} credits</p><div className="mt-6 flex justify-end gap-3"><button type="button" disabled={isRetrying} onClick={() => setRetryConfirmation(false)} className="rounded-lg border border-slate-300 px-4 py-2 text-sm">Cancel</button><button type="button" disabled={isRetrying} onClick={() => void confirmRetry()} className="rounded-lg bg-cyan-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{isRetrying ? "Starting…" : "Confirm and retry"}</button></div></section></div> : null}

@@ -93,22 +93,93 @@ test.describe("S2-09 analysis confirmation, recovery, status, and retry", () => 
     }
   });
 
-  test("renders persisted Processing and Completed states without exposing chunk text", async ({ page, context }) => {
+  test("opens the findings list from Completed, inspects exact evidence, and renders the no-findings state", async ({ page, context }) => {
     const processing = await createAnalysisFixture({ status: "processing" });
-    const completed = await createAnalysisFixture({ status: "completed" });
+    const completed = await createAnalysisFixture({ status: "completed", versionCount: 2 });
+    const empty = await createAnalysisFixture({ status: "completed" });
     try {
       await loginAs(context, processing.qaCredentials.email, processing.qaCredentials.password);
       await page.goto(`/analysis/${processing.analysisId}`);
       await expect(page.getByRole("heading", { name: "Processing" })).toBeVisible();
       await expect(page.getByText("Synthetic analysis fixture chunk", { exact: true })).toHaveCount(0);
 
+      const secondVersion = completed.versions[1];
+      if (!secondVersion) throw new Error("Expected a second version in the analysis fixture.");
+      await completed.sql.query(`
+        insert into public.finding_evidence(
+          workspace_id, analysis_id, finding_id, document_id, version_id, chunk_id,
+          section, section_heading, snapshot
+        ) values (
+          '${completed.workspaceId}'::uuid, '${completed.analysisId}'::uuid,
+          '${completed.findingId}'::uuid, '${secondVersion.documentId}'::uuid,
+          '${secondVersion.versionId}'::uuid, '${secondVersion.chunkId}'::uuid,
+          'Fixture', 'Comparison', 'Synthetic comparison evidence snapshot'
+        );
+      `);
+      await completed.sql.query(`
+        insert into public.findings(
+          workspace_id, analysis_id, type, severity_original, severity_current,
+          confidence, explanation, status, assignee_id, fingerprint
+        )
+        select '${completed.workspaceId}'::uuid, '${completed.analysisId}'::uuid,
+          'obsolescence', 'Low', 'Low', 0.5,
+          'Additional fixture finding ' || n, 'pending_review', null, gen_random_uuid()::text
+        from generate_series(1, 11) as series(n);
+      `);
+
       await context.clearCookies();
       await loginAs(context, completed.qaCredentials.email, completed.qaCredentials.password);
       await page.goto(`/analysis/${completed.analysisId}`);
       await expect(page.getByRole("heading", { name: "Completed" })).toBeVisible();
-      await expect(page.getByText("Analysis completed. Findings will be available when the findings experience is delivered.")).toBeVisible();
+      await page.getByRole("link", { name: "View Analysis Findings" }).click();
+      await expect(page).toHaveURL(`/analysis/${completed.analysisId}/findings`);
+      await expect(page.getByText("Synthetic analysis finding")).toBeVisible();
+      await expect(page.getByRole("combobox", { name: "Status" })).toBeVisible();
+      await expect(page.getByRole("combobox", { name: "Assignee" })).toBeVisible();
+      await expect(page.getByText("Showing 10 of 12 findings")).toBeVisible();
+      await expect(page.locator("tbody tr").first().locator("td").first()).toHaveText("High");
+
+      await page.getByRole("combobox", { name: "Type" }).selectOption("obsolescence");
+      await expect(page).toHaveURL(/type=obsolescence/);
+      await expect(page.getByText("Showing 10 of 11 findings")).toBeVisible();
+      await page.getByRole("combobox", { name: "Severity" }).selectOption("High");
+      await expect(page).toHaveURL(/severity=High/);
+      await expect(page.getByText("No findings match your selected filters")).toBeVisible();
+      await page.getByRole("button", { name: "Clear filters" }).first().click();
+      await expect(page).toHaveURL(`/analysis/${completed.analysisId}/findings`);
+
+      await page.getByRole("combobox", { name: "Status" }).selectOption("pending_review");
+      await expect(page).toHaveURL(/status=pending_review/);
+      await page.getByRole("combobox", { name: "Assignee" }).selectOption("unassigned");
+      await expect(page).toHaveURL(/assignee=unassigned/);
+      await page.getByRole("button", { name: "Clear filters" }).click();
+      await page.getByRole("button", { name: "Next" }).click();
+      await expect(page).toHaveURL(/page=2/);
+      await expect(page.getByText("Page 2 of 2")).toBeVisible();
+      await page.getByRole("button", { name: "Previous" }).click();
+      await expect(page.getByText("Page 1 of 2")).toBeVisible();
+      await expect(page.locator("tbody tr").first().locator("td").first()).toHaveText("High");
+
+      await page.locator("tbody tr").first().getByRole("button", { name: /View Evidence/ }).click();
+      const drawer = page.getByRole("dialog", { name: "Evidence & Document Comparison" });
+      await expect(drawer).toBeVisible();
+      await expect(drawer.getByText("Synthetic analysis evidence snapshot")).toBeVisible();
+      await expect(drawer.getByText("Synthetic comparison evidence snapshot")).toBeVisible();
+      await expect(drawer.getByRole("button", { name: "Open original" })).toHaveCount(2);
+      await expect(drawer.getByText(/confidence/i)).toHaveCount(0);
       await expect(page.getByText("Synthetic analysis fixture chunk", { exact: true })).toHaveCount(0);
+
+      await empty.sql.query(`
+        delete from public.finding_evidence where finding_id = '${empty.findingId}'::uuid;
+        delete from public.findings where id = '${empty.findingId}'::uuid;
+      `);
+      await context.clearCookies();
+      await loginAs(context, empty.qaCredentials.email, empty.qaCredentials.password);
+      await page.goto(`/analysis/${empty.analysisId}`);
+      await page.getByRole("link", { name: "View Analysis Findings" }).click();
+      await expect(page.getByText("No contradictions or obsolescence issues detected")).toBeVisible();
     } finally {
+      await empty.dispose();
       await completed.dispose();
       await processing.dispose();
     }

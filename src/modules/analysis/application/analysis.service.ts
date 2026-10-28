@@ -4,6 +4,11 @@ import type {
   AnalysisSelectionItem,
   EligibleDocumentsQuery,
   AnalysisSelectionInput,
+  FindingSummary,
+  FindingDetail,
+  FindingEvidenceItem,
+  FindingsQuery,
+  FindingSeverity,
 } from "@/types/contracts";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/database";
@@ -11,8 +16,57 @@ import {
   findEligibleDocuments,
   resolveEligibleVersionIds,
   verifyVersionsEligibility,
+  findFindingsByAnalysis,
+  findFindingWithEvidence,
 } from "../infrastructure/analysis.repository";
-import { eligibleDocumentsQuerySchema, analysisSelectionInputSchema, resolveFilteredScopeSchema } from "../schemas";
+import {
+  eligibleDocumentsQuerySchema,
+  analysisSelectionInputSchema,
+  resolveFilteredScopeSchema,
+  findingsQuerySchema,
+  findingIdSchema,
+} from "../schemas";
+
+const SEVERITY_ORDER: Record<FindingSeverity, number> = {
+  High: 3,
+  Medium: 2,
+  Low: 1,
+};
+
+export function sortFindingsBySeverityAndDate<T extends { severityCurrent: FindingSeverity; createdAt: string; id: string }>(
+  items: T[],
+): T[] {
+  return [...items].sort((a, b) => {
+    const sevDiff = SEVERITY_ORDER[b.severityCurrent] - SEVERITY_ORDER[a.severityCurrent];
+    if (sevDiff !== 0) return sevDiff;
+    const dateDiff = new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    if (dateDiff !== 0) return dateDiff;
+    return b.id.localeCompare(a.id);
+  });
+}
+
+type FindingRow = Database["public"]["Views"]["analysis_findings"]["Row"];
+
+export function mapFindingRowToSummary(row: FindingRow): FindingSummary {
+  if (
+    !row.id || !row.analysis_id || !row.type || !row.explanation ||
+    !row.severity_original || !row.severity_current || !row.status || !row.created_at
+  ) {
+    throw new Error("Finding projection is missing required fields.");
+  }
+
+  return {
+    id: row.id,
+    analysisId: row.analysis_id,
+    type: row.type,
+    explanation: row.explanation,
+    severityOriginal: row.severity_original,
+    severityCurrent: row.severity_current,
+    status: row.status,
+    assignee: null, // S2 invariant: Unassigned
+    createdAt: row.created_at,
+  };
+}
 
 export function calculateDistinctScopeUnion(sources: string[], comparisons: string[]): string[] {
   return Array.from(new Set([...sources, ...comparisons]));
@@ -167,4 +221,80 @@ export async function validateAnalysisScopeService(
       error: { code: "INTERNAL_ERROR", message: "Failed to validate analysis scope." },
     };
   }
+}
+
+export async function listFindingsService(
+  supabase: SupabaseClient<Database>,
+  workspaceId: string,
+  query: FindingsQuery,
+): Promise<AnalysisPage<FindingSummary>> {
+  const parsed = findingsQuerySchema.parse(query);
+  const { page, pageSize, type, severity, status, assignee } = parsed;
+  const offset = (page - 1) * pageSize;
+
+  const result = await findFindingsByAnalysis(supabase, {
+    workspaceId,
+    analysisId: parsed.analysisId,
+    type,
+    severity,
+    status,
+    assignee,
+    offset,
+    limit: pageSize,
+  });
+
+  const summaries = result.data.map(mapFindingRowToSummary);
+  const sorted = sortFindingsBySeverityAndDate(summaries);
+
+  return {
+    items: sorted,
+    total: result.total,
+    page,
+    pageSize,
+  };
+}
+
+export async function getFindingDetailService(
+  supabase: SupabaseClient<Database>,
+  workspaceId: string,
+  findingId: string,
+): Promise<FindingDetail | null> {
+  const validFindingId = findingIdSchema.parse(findingId);
+
+  const result = await findFindingWithEvidence(supabase, {
+    workspaceId,
+    findingId: validFindingId,
+  });
+
+  if (!result) {
+    return null;
+  }
+
+  const summary = mapFindingRowToSummary(result.finding);
+
+  const evidence: FindingEvidenceItem[] = result.evidence.map((row) => {
+    if (
+      !row.id || !row.document_id || !row.version_id || !row.chunk_id || !row.snapshot
+    ) {
+      throw new Error("Finding evidence projection is missing required fields.");
+    }
+
+    return {
+      id: row.id,
+      documentId: row.document_id,
+      documentName: row.documentName,
+      versionId: row.version_id,
+      versionNumber: row.versionNumber,
+      chunkId: row.chunk_id,
+      pageNumber: row.page_number,
+      section: row.section,
+      sectionHeading: row.section_heading,
+      snapshot: row.snapshot,
+    };
+  });
+
+  return {
+    ...summary,
+    evidence,
+  };
 }
