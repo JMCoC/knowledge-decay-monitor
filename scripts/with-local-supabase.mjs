@@ -67,6 +67,18 @@ export function runWithLocalSupabase({
     KDM_SENTRY_DIAGNOSTICS_ENABLED: "0",
     KDM_SENTRY_DIAGNOSTICS_OPERATOR_IDS: "",
     KDM_SENTRY_DIAGNOSTICS_EXPIRES_AT: "",
+    ...(selected === "e2e" ? {
+      ANALYSIS_EXECUTION_MANIFEST: JSON.stringify({
+        fingerprintVersion: "s2-05-v2",
+        pricingVersion: "s2-04-v1",
+        promptVersion: "s2-07-prompt-v1",
+        outputSchemaVersion: "s2-07-findings-v1",
+        providers: {
+          primary: { provider: "cerebras", model: "qwen-3.8-27b" },
+          fallback: { provider: "groq", model: "openai/gpt-oss-20b" },
+        },
+      }),
+    } : {}),
   };
   delete childEnv.INGESTION_INTERNAL_TOKEN;
   delete childEnv.SUPABASE_SECRET_KEY;

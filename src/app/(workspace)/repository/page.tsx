@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { listRepositoryDocuments } from "@/modules/repository";
 import { OperationError } from "@/components/operation-error";
 import { ProcessingStatusBadge } from "@/modules/repository/ui/processing-status-badge";
@@ -58,12 +59,12 @@ export default async function RepositoryPage({ searchParams }: PageProps) {
                     </p>
                 </div>
                 {actor && (
-                    <a
+                    <Link
                         href="/analysis/run"
                         className="rounded-lg bg-cyan-700 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-800 focus:outline-none focus:ring-2 focus:ring-cyan-600 focus:ring-offset-2"
                     >
                         Run Analysis
-                    </a>
+                    </Link>
                 )}
             </div>
 
