@@ -8,5 +8,7 @@ export {
   estimateAnalysisAction,
   getAnalysisAction,
   getActiveAnalysisAction,
+  listFindingsAction,
+  getFindingDetailAction,
 } from "./application/analysis.actions";
 export { runAnalysis, retryAnalysis } from "./application/run-actions";

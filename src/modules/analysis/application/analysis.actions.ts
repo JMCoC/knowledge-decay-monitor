@@ -8,6 +8,9 @@ import type {
   AnalysisSelectionInput,
   AnalysisEstimate,
   AnalysisSnapshot,
+  FindingSummary,
+  FindingDetail,
+  FindingsQuery,
 } from "@/types/contracts";
 import { requireDocumentActor, IdentityError } from "@/modules/identity";
 import { createReadOnlyClient } from "@/lib/supabase/server";
@@ -18,9 +21,12 @@ import {
   listEligibleDocumentsService,
   resolveFilteredScopeService,
   validateAnalysisScopeService,
+  listFindingsService,
+  getFindingDetailService,
 } from "./analysis.service";
+import { findingsQuerySchema, findingIdSchema } from "../schemas";
 
-type AnalysisOperation = "selection" | "scope_validation";
+type AnalysisOperation = "selection" | "scope_validation" | "findings_read";
 
 const analysisIdSchema = z.string().uuid();
 
@@ -77,7 +83,6 @@ async function readAnalysisSnapshot(analysisId?: string): Promise<ActionResult<A
     return mapped ?? reportInternalFailure("selection", "We couldn't verify your access to analysis.");
   }
 }
-
 export async function getAnalysisAction(analysisId: string): Promise<ActionResult<AnalysisSnapshot>> {
   const result = await readAnalysisSnapshot(analysisId);
   if (!result.ok) return result;
@@ -188,5 +193,75 @@ export async function estimateAnalysisAction(
     const mapped = mapIdentityError(error, "scope_validation");
     if (mapped) return mapped;
     return reportInternalFailure("scope_validation", "An unexpected error occurred.");
+  }
+}
+
+export async function listFindingsAction(
+  query: FindingsQuery,
+): Promise<ActionResult<AnalysisPage<FindingSummary>>> {
+  try {
+    const actor = await requireDocumentActor();
+    const parsed = findingsQuerySchema.safeParse(query);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: { code: "INVALID_INPUT", message: parsed.error.issues[0]?.message ?? "Invalid query parameters." },
+      };
+    }
+
+    const supabase = await createReadOnlyClient();
+
+    // Verify analysis exists, belongs to workspace, and is completed
+    const { data: analysis, error: analysisError } = await supabase
+      .from("analyses")
+      .select("id, status, workspace_id")
+      .eq("id", parsed.data.analysisId)
+      .eq("workspace_id", actor.workspaceId)
+      .maybeSingle();
+
+    if (analysisError || !analysis || analysis.status !== "completed") {
+      return {
+        ok: false,
+        error: { code: "NOT_FOUND", message: "This analysis is unavailable." },
+      };
+    }
+
+    const pageResult = await listFindingsService(supabase, actor.workspaceId, parsed.data);
+    return { ok: true, data: pageResult };
+  } catch (error) {
+    const mapped = mapIdentityError(error, "findings_read");
+    if (mapped) return mapped;
+    return reportInternalFailure("findings_read", "An unexpected error occurred loading findings.");
+  }
+}
+
+export async function getFindingDetailAction(
+  findingId: string,
+): Promise<ActionResult<FindingDetail>> {
+  const parsed = findingIdSchema.safeParse(findingId);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: { code: "INVALID_INPUT", message: parsed.error.issues[0]?.message ?? "Invalid finding ID." },
+    };
+  }
+
+  try {
+    const actor = await requireDocumentActor();
+    const supabase = await createReadOnlyClient();
+    const finding = await getFindingDetailService(supabase, actor.workspaceId, parsed.data);
+
+    if (!finding) {
+      return {
+        ok: false,
+        error: { code: "NOT_FOUND", message: "Finding not found." },
+      };
+    }
+
+    return { ok: true, data: finding };
+  } catch (error) {
+    const mapped = mapIdentityError(error, "findings_read");
+    if (mapped) return mapped;
+    return reportInternalFailure("findings_read", "An unexpected error occurred loading finding detail.");
   }
 }

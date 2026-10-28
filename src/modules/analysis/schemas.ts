@@ -77,3 +77,21 @@ export const selectionSchema = z
   .strict();
 
 export type SelectionInput = z.infer<typeof selectionSchema>;
+
+const findingTypes = ["contradiction", "obsolescence"] as const;
+const findingSeverities = ["High", "Medium", "Low"] as const;
+const findingStatuses = ["pending_review"] as const;
+
+export const findingIdSchema = z.string().uuid("Invalid finding ID.");
+
+export const findingsQuerySchema = z.object({
+  analysisId: z.string().uuid("Invalid analysis ID."),
+  type: z.enum(findingTypes).optional(),
+  severity: z.enum(findingSeverities).optional(),
+  status: z.enum(findingStatuses).optional(),
+  assignee: z.enum(["all", "unassigned"]).optional(),
+  page: z.coerce.number().int().min(1, "Page must be at least 1.").default(1),
+  pageSize: z.coerce.number().int().min(1).max(50, "Page size cannot exceed 50.").default(10),
+});
+
+export type FindingsQueryInput = z.infer<typeof findingsQuerySchema>;

@@ -1,6 +1,6 @@
 # Plan S2-09 — Confirmación, estados de análisis, créditos y Retry Analysis
 
-> Estado: implementación realizada en `feature/analysis-confirmation-status-credits-retry`. S2-05, S2-06 y S2-08 están integrados; cinco recorridos Playwright y la suite unitaria completa pasan. El resultado vacío sigue pendiente de S2-10. La suite de integración completa conserva una excepción por un job cron local preexistente que el test se niega a modificar.
+> Estado: implementación S2-09 realizada en `feature/analysis-confirmation-status-credits-retry`. S2-05, S2-06 y S2-08 están integrados; cinco recorridos Playwright y la suite unitaria completa pasan. La navegación a findings por `analysisId` y el resultado vacío se completaron en S2-10 y se verificaron con Playwright en esta rama. La suite de integración conserva una excepción por un job cron local preexistente que el test se niega a modificar.
 
 ## Objetivo
 
@@ -13,7 +13,7 @@ Completar el flujo de producto desde el selector S2-03: mostrar la estimación p
 - S2-03 tiene `/analysis/run` y la estimación real de S2-04. El botón de continuación aún es un `window.alert` de placeholder en `src/modules/analysis/ui/run-analysis-view.tsx`.
 - `src/modules/credits/queries.ts` ya expone `getCreditSnapshot` (para cualquier rol miembro del workspace) y `listCreditLedger` (Admin/QA Lead). No hay todavía página Billing / Credits ni enlace en `AppShell`.
 - Los contratos `AnalysisApi` y `AnalysisSnapshot` describen Run, Retry, lectura por ID y lectura del activo; el barrel público de `src/modules/analysis` todavía no exporta esas operaciones reales.
-- S2-05 aporta Run/Retry, idempotencia y reserva atómica; S2-06 aporta worker/transiciones; S2-08 aporta liquidación/liberación terminal y publicación de findings. No existe ruta de resultados de S2-10 en este checkout.
+- S2-05 aporta Run/Retry, idempotencia y reserva atómica; S2-06 aporta worker/transiciones; S2-08 aporta liquidación/liberación terminal y publicación de findings. S2-10 ahora aporta la ruta de resultados y el detalle seguro.
 - No se prevé migración de S2-09: usar las APIs públicas y la persistencia propiedad de los tickets previos. Cualquier necesidad de esquema o contrato compartido requiere coordinación explícita.
 
 ## Límites de arquitectura y seguridad
@@ -41,7 +41,7 @@ Antes de cerrar S2-09 deben estar integrados y revisados:
 
 - **S2-05:** `runAnalysis`, `retryAnalysis`, persistencia de idempotencia, recuperación ante respuesta perdida, conflictos y reserva atómica.
 - **S2-06/S2-08:** transiciones persistidas, snapshot de estado y timestamps; fallo terminal con release confirmado y `canRetry` coherente.
-- **S2-10:** ruta pública/contrato de resultados por `analysisId` y estado vacío cuando no existan findings. S2-08 ya publica findings, pero S2-10 no está integrado en este checkout.
+- **S2-10:** ruta pública/contrato de resultados por `analysisId` y estado vacío cuando no existan findings. La dependencia se integró en este checkout y sus dos casos quedaron cubiertos en Playwright.
 - **S2-02:** las consultas públicas de snapshot/ledger ya existen aquí; confirmar que el esquema/rpc integrado coincide con su contrato y sus permisos Member/Admin/QA.
 
 Se puede avanzar en paralelo con la página Credits, estados visuales, tests de presentación y wiring de S2-03/S2-04, pero la aceptación final debe probar los contratos reales de extremo a extremo. Si una dependencia aún no está mergeada, marcar los pasos de integración como bloqueados por esa dependencia, no reemplazarla con mocks.
@@ -93,7 +93,7 @@ Se puede avanzar en paralelo con la página Credits, estados visuales, tests de 
 
 - Unitarias: estado de confirmación/invalidación, clave por intento, retry, polling/backoff, errores controlados, Member vs Admin/QA y paginación de créditos.
 - Integración local: APIs reales de snapshot/ledger, Run/Retry, estado activo/terminal y release; verificar tenant y que no haya doble reserva.
-- Playwright local ejecutado (5 escenarios): invalidación al cambiar scope, doble envío concurrente, respuesta perdida + reload sin segundo cargo, logout/reingreso de QA, estados persistidos, fallo/release/retry, Member sin ledger ni acceso a análisis propio/de otro tenant, RPC de ledger denegado y ausencia de texto de chunks en la UI. La prueba unitaria de privacidad verifica que la telemetría de análisis reconstruye solo campos permitidos. **Pendiente:** completed vacío (se hará con S2-10).
+- Playwright local: cinco escenarios base aprobados; el recorrido Completed se amplió y volvió a pasar para comprobar la navegación al listado de findings con el mismo `analysisId`, filtros, orden, paginación, Drawer con evidencia side-by-side y completed sin findings. También verifica que no se muestra texto de chunks ni `confidence`.
 - Verificar que DOM, respuestas de UI y telemetría no contengan texto documental, confidence, prompts, datos crudos del proveedor o URLs firmadas.
 - Controles apropiados: `pnpm typecheck`, `pnpm lint`, `pnpm test:unit`, pruebas de integración de los módulos reales, `pnpm test:db`, y los escenarios Playwright del ticket con Supabase local y fixtures. No usar base remota ni presentar mocks como aceptación.
 
@@ -133,7 +133,7 @@ El ticket se considera completo cuando las diez filas de aceptación están veri
 - `pnpm test:e2e:local -- tests/e2e/analysis.spec.ts`: pasó, 5/5 escenarios contra Supabase local; no se usó base remota.
 - El job cron preexistente se dejó intacto. El test `analysis-recovery` debe repetirse cuando ese horario local ya no esté configurado.
 
-Por tanto, esta entrega integra S2-08 y su Retry, tiene cinco recorridos Playwright aprobados y una suite unitaria verde. El ticket **no está cerrado** hasta integrar S2-10 y validar completed vacío. La suite de integración tiene un único fallo de preflight por el job cron local preexistente; no se alteró esa configuración.
+Por tanto, los criterios de S2-09 quedan completos: S2-10 ya aporta la ruta de resultados por `analysisId` y el estado vacío completado, verificados desde Playwright. El ticket puede cerrarse. La suite completa de integración tuvo un fallo de preflight porque encontró activo el job cron local preexistente `kdm-analysis-recovery`; no se alteró esa configuración.
 
 ## Nota sobre herramientas solicitadas
 
