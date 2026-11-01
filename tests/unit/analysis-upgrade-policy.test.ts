@@ -73,6 +73,7 @@ const s208bNames = [
 
 const s211Names = [
   "20261101190000_s2_11_notification_delivery.sql",
+  "20261101190050_s2_11_notification_candidates.sql",
   "20261101190100_s2_11_notification_scheduler.sql",
 ];
 
@@ -120,11 +121,11 @@ describe("analysis migration upgrade stages", () => {
   });
 
   it("keeps S2-11 out of historical stages and includes its exact migration names at S2-11", () => {
-    const [delivery, scheduler] = s211Names.map((name) => `supabase/migrations/${name}`);
-    expect(includeMigration(delivery, "s2_08b")).toBe(false);
-    expect(includeMigration(scheduler, "s2_08b")).toBe(false);
-    expect(includeMigration(delivery, "s2_11")).toBe(true);
-    expect(includeMigration(scheduler, "s2_11")).toBe(true);
+    const migrations = s211Names.map((name) => `supabase/migrations/${name}`);
+    for (const migration of migrations) {
+      expect(includeMigration(migration, "s2_08b")).toBe(false);
+      expect(includeMigration(migration, "s2_11")).toBe(true);
+    }
     expect(() => migrationStage("supabase/migrations/20261101190200_s2_11_unreviewed.sql"))
       .toThrow("Unreviewed migration in upgrade inventory.");
   });

@@ -65,6 +65,7 @@ const s208bNames = new Set([
 
 const s211Names = new Set([
   "20261101190000_s2_11_notification_delivery.sql",
+  "20261101190050_s2_11_notification_candidates.sql",
   "20261101190100_s2_11_notification_scheduler.sql",
 ]);
 
