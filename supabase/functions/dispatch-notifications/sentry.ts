@@ -1,7 +1,7 @@
 import * as Sentry from "@sentry/deno";
 import { sanitizeSafeEnvelope } from "../../../src/lib/observability/safe-envelope.ts";
 import { createNotificationReporter } from "../../../src/modules/notifications/telemetry.ts";
-import type { NotificationConfig, NotificationSentrySdk } from "../../../src/modules/notifications/types.ts";
+import { NotificationReadinessError, type NotificationConfig, type NotificationSentrySdk } from "../../../src/modules/notifications/types.ts";
 import type { TelemetryContext } from "../../../src/lib/observability/safe-event.ts";
 
 type DenoSentryOptions = NonNullable<Parameters<typeof Sentry.init>[0]>;
@@ -54,7 +54,7 @@ export function initNotificationsSentry(
   });
 
   const transport = Sentry.getClient()?.getTransport();
-  if (!transport) return async () => false;
+  if (!transport) throw new NotificationReadinessError();
   wrapTransport(transport, context, deliveryStatuses);
 
   const sdk: NotificationSentrySdk = {

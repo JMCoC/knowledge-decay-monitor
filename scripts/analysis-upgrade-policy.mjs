@@ -73,6 +73,7 @@ const stageOrder = Object.freeze({ s1: 0, s2_01: 1, s2_02: 2, s2_03: 3, s2_04: 4
 const functionStage = Object.freeze({
   "supabase/functions/embed/": "s1",
   "supabase/functions/analyze/": "s2_06",
+  "supabase/functions/dispatch-notifications/": "s2_11",
 });
 
 /** @param {string} path */

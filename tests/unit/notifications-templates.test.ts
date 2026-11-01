@@ -86,8 +86,8 @@ function environment(overrides: Record<string, string> = {}): Record<string, str
     SUPABASE_URL: "http://127.0.0.1:54321",
     SUPABASE_SERVICE_ROLE_KEY: "local-test-service-role-key",
     SENTRY_DSN: "https://public@example.ingest.sentry.io/1",
-    VERCEL_ENV: "development",
-    VERCEL_GIT_COMMIT_SHA: "local",
+    NOTIFICATIONS_ENVIRONMENT: "development",
+    NOTIFICATIONS_RELEASE_SHA: "d".repeat(40),
     ...overrides,
   };
 }
@@ -103,6 +103,14 @@ describe("notification environment readiness", () => {
     expect(read).toHaveBeenCalledExactlyOnceWith("NOTIFICATIONS_ENABLED");
   });
 
+  it("treats the planned zero value as disabled", () => {
+    const read = vi.fn((name: string) => name === "NOTIFICATIONS_ENABLED" ? "0" : undefined);
+    const config = readNotificationsConfig(read);
+
+    expect(config.enabled).toBe(false);
+    expect(read).toHaveBeenCalledExactlyOnceWith("NOTIFICATIONS_ENABLED");
+  });
+
   it("reads the approved private configuration through the injected reader", () => {
     const values = environment();
     const read = (name: string) => values[name];
@@ -113,13 +121,19 @@ describe("notification environment readiness", () => {
       from: CONFIG.from,
       appOrigin: "http://localhost:3000",
       environment: "development",
-      release: "local",
+      release: "d".repeat(40),
     });
     expect(config.apiKey).toBe(values.RESEND_API_KEY);
     expect(config.internalToken).toBe(values.NOTIFICATIONS_INTERNAL_TOKEN);
   });
 
+  it("accepts the explicit one value for an enabled runtime", () => {
+    const values = environment({ NOTIFICATIONS_ENABLED: "1" });
+    expect(readNotificationsConfig(name => values[name]).enabled).toBe(true);
+  });
+
   it.each([
+    ["unknown enabled flag", { NOTIFICATIONS_ENABLED: "yes" }],
     ["short internal token", { NOTIFICATIONS_INTERNAL_TOKEN: "too-short" }],
     ["whitespace in internal token", { NOTIFICATIONS_INTERNAL_TOKEN: "invalid token that is longer than 32 chars" }],
     ["unverified sender", { NOTIFICATIONS_FROM: "Other <other@example.test>" }],
@@ -129,10 +143,31 @@ describe("notification environment readiness", () => {
     ["origin with credentials", { APP_ORIGIN: "https://operator@example.test" }],
     ["origin with a normalized path", { APP_ORIGIN: "https://example.test/.." }],
     ["missing provider key", { RESEND_API_KEY: "" }],
+    ["missing environment label", { NOTIFICATIONS_ENVIRONMENT: "" }],
+    ["missing release SHA", { NOTIFICATIONS_RELEASE_SHA: "" }],
+    ["short release SHA", { NOTIFICATIONS_RELEASE_SHA: "a".repeat(39) }],
+    ["dirty release outside development", {
+      NOTIFICATIONS_ENVIRONMENT: "vercel-production",
+      NOTIFICATIONS_RELEASE_SHA: `${"a".repeat(40)}-dirty`,
+    }],
+    ["uppercase dirty release outside development", {
+      NOTIFICATIONS_ENVIRONMENT: "vercel-production",
+      NOTIFICATIONS_RELEASE_SHA: `${"A".repeat(40)}-DIRTY`,
+    }],
   ])("fails readiness for %s", (_name, overrides) => {
     const values = environment(overrides);
     expect(() => readNotificationsConfig(name => values[name])).toThrow(
       "Notification service is not ready.",
     );
+  });
+
+  it("allows a dirty SHA only for the development environment", () => {
+    const values = environment({ NOTIFICATIONS_RELEASE_SHA: `${"a".repeat(40)}-dirty` });
+    expect(readNotificationsConfig(name => values[name]).release).toBe(`${"a".repeat(40)}-dirty`);
+  });
+
+  it("normalizes hexadecimal release values before enforcing the dirty suffix", () => {
+    const values = environment({ NOTIFICATIONS_RELEASE_SHA: "A".repeat(40) });
+    expect(readNotificationsConfig(name => values[name]).release).toBe("a".repeat(40));
   });
 });

@@ -1229,6 +1229,10 @@ export type Database = {
         Args: { p_enabled: boolean }
         Returns: undefined
       }
+      configure_notifications_dispatch: {
+        Args: { p_enabled: boolean }
+        Returns: undefined
+      }
       confirm_notification_alert: {
         Args: { p_event_id: string; p_operation_id: string }
         Returns: boolean
@@ -1386,6 +1390,7 @@ export type Database = {
         }
         Returns: boolean
       }
+      notifications_dispatch_enabled: { Args: never; Returns: boolean }
       persist_analysis_batch: {
         Args: {
           p_analysis_id: string

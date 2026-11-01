@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { renderTerminalNotification } from "./templates";
+import { renderTerminalNotification } from "./templates.ts";
 import type {
   NotificationAlertLease,
   NotificationContext,
@@ -7,7 +7,7 @@ import type {
   NotificationDispatchSummary,
   NotificationFailureCode,
   NotificationLease,
-} from "./types";
+} from "./types.ts";
 
 const MAX_WORK_ITEMS = 5;
 const MAX_ALERTS_PER_RUN = 2;

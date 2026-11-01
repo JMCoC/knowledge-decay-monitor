@@ -1,5 +1,5 @@
-import { NotificationReadinessError } from "./types";
-import type { PreparedNotification, SendNotificationResult } from "./types";
+import { NotificationReadinessError } from "./types.ts";
+import type { PreparedNotification, SendNotificationResult } from "./types.ts";
 
 export const RESEND_ENDPOINT = "https://api.resend.com/emails";
 export const RESEND_TIMEOUT_MS = 10_000;

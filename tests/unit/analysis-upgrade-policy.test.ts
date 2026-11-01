@@ -191,6 +191,7 @@ describe("analysis function upgrade stages", () => {
   it("includes only functions at or before the requested stage", () => {
     const embed = "supabase/functions/embed/index.ts";
     const analyze = "supabase/functions/analyze/index.ts";
+    const notifications = "supabase/functions/dispatch-notifications/index.ts";
     const cases: ReadonlyArray<readonly [string, MigrationStage, boolean]> = [
       [embed, "s1", true],
       [analyze, "s1", false],
@@ -198,6 +199,8 @@ describe("analysis function upgrade stages", () => {
       [analyze, "s2_04", false],
       [analyze, "s2_06", true],
       [embed, "s2_06", true],
+      [notifications, "s2_06", false],
+      [notifications, "s2_11", true],
     ];
     for (const [path, stage, expected] of cases) {
       expect(includeFunction(path, stage)).toBe(expected);
@@ -222,6 +225,9 @@ describe("analysis function config upgrade stages", () => {
       "[functions.analyze]",
       "verify_jwt = false",
       "",
+      "[functions.dispatch-notifications]",
+      "verify_jwt = false",
+      "",
       "[db]",
       "port = 54322",
     ].join("\r\n");
@@ -234,7 +240,20 @@ describe("analysis function config upgrade stages", () => {
       "[db]",
       "port = 54322",
     ].join("\r\n");
+    const expectedS206Config = [
+      'project_id = "test"',
+      "",
+      "[functions.embed]",
+      "verify_jwt = false",
+      "",
+      "[functions.analyze]",
+      "verify_jwt = false",
+      "",
+      "[db]",
+      "port = 54322",
+    ].join("\r\n");
     expect(filterFunctionConfigForStage(config, "s1")).toBe(expectedS1Config);
-    expect(filterFunctionConfigForStage(config, "s2_06")).toBe(config);
+    expect(filterFunctionConfigForStage(config, "s2_06")).toBe(expectedS206Config);
+    expect(filterFunctionConfigForStage(config, "s2_11")).toBe(config);
   });
 });

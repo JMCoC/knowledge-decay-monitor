@@ -1,4 +1,4 @@
-import { NotificationReadinessError, type NotificationConfig } from "./types";
+import { NotificationReadinessError, type NotificationConfig } from "./types.ts";
 
 export const NOTIFICATIONS_FROM =
   "Knowledge Decay Monitor <notifications@knowledge-decay-monitor.online>";
@@ -74,31 +74,34 @@ function validateSentryDsn(value: string) {
   return value;
 }
 
-function environmentValue(value: string | undefined): NotificationConfig["environment"] {
-  if (value === undefined || value === "development") return "development";
-  if (value === "preview") return "vercel-preview";
-  if (value === "production") return "vercel-production";
+function environmentValue(value: string): NotificationConfig["environment"] {
+  if (value === "development" || value === "vercel-preview" || value === "vercel-production") {
+    return value;
+  }
   throw new NotificationReadinessError();
 }
 
-function releaseValue(value: string | undefined) {
-  if (value === undefined || value === "") return "local";
-  if (value !== "local" && !/^[0-9a-f]{7,64}$/i.test(value)) {
+function releaseValue(value: string, environment: NotificationConfig["environment"]) {
+  const normalized = value.toLowerCase();
+  if (!/^[0-9a-f]{40}(?:-dirty)?$/.test(normalized)) {
     throw new NotificationReadinessError();
   }
-  return value;
+  if (normalized.endsWith("-dirty") && environment !== "development") {
+    throw new NotificationReadinessError();
+  }
+  return normalized;
 }
 
 /** Reads configuration from an injected environment reader, never process.env. */
 export function readNotificationsConfig(
   read: (name: string) => string | undefined,
 ): NotificationConfig {
-  const enabledValue = read("NOTIFICATIONS_ENABLED") ?? "false";
-  if (enabledValue !== "true" && enabledValue !== "false") {
+  const enabledValue = read("NOTIFICATIONS_ENABLED") ?? "0";
+  if (!["0", "1", "true", "false"].includes(enabledValue)) {
     throw new NotificationReadinessError();
   }
 
-  if (enabledValue === "false") {
+  if (enabledValue === "0" || enabledValue === "false") {
     return {
       enabled: false,
       internalToken: "",
@@ -122,8 +125,8 @@ export function readNotificationsConfig(
   const supabaseUrl = parseServiceOrigin(requiredValue(read, "SUPABASE_URL")).origin;
   const serviceRoleKey = requiredValue(read, "SUPABASE_SERVICE_ROLE_KEY");
   const sentryDsn = validateSentryDsn(requiredValue(read, "SENTRY_DSN"));
-  const environment = environmentValue(read("VERCEL_ENV"));
-  const release = releaseValue(read("VERCEL_GIT_COMMIT_SHA"));
+  const environment = environmentValue(requiredValue(read, "NOTIFICATIONS_ENVIRONMENT"));
+  const release = releaseValue(requiredValue(read, "NOTIFICATIONS_RELEASE_SHA"), environment);
 
   return {
     enabled: true,

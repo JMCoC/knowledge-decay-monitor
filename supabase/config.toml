@@ -395,6 +395,9 @@ deno_version = 2
 [functions.analyze]
 verify_jwt = false
 
+[functions.dispatch-notifications]
+verify_jwt = false
+
 # [edge_runtime.secrets]
 # secret_key = "env(SECRET_VALUE)"
 

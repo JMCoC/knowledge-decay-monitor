@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { Database } from "../../types/database";
+import type { Database } from "../../types/database.ts";
 import type {
   NotificationAlertLease,
   NotificationCandidate,
@@ -8,7 +8,7 @@ import type {
   NotificationLease,
   NotificationResult,
   NotificationStore,
-} from "./types";
+} from "./types.ts";
 
 const DATABASE_TIMEOUT_MS = 3_000;
 const MAX_CANDIDATES = 5;
