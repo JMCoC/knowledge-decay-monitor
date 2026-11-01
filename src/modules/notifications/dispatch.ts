@@ -24,7 +24,7 @@ const contextSchema = z.object({
   recipientId: z.uuid(),
   recipientEmail: z.email(),
   type: z.enum(["analysis_completed", "analysis_failed"]),
-  finishedAt: z.iso.datetime(),
+  finishedAt: z.iso.datetime({ offset: true }),
 });
 
 const emailSchema = z.email();

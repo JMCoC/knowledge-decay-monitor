@@ -21,7 +21,7 @@ const contextSchema = z.object({
   recipientId: z.uuid(),
   recipientEmail: z.string(),
   type: z.enum(["analysis_completed", "analysis_failed"]),
-  finishedAt: z.iso.datetime(),
+  finishedAt: z.iso.datetime({ offset: true }),
 });
 
 const bodySchema = z.object({
@@ -36,7 +36,7 @@ const claimedEventSchema = z.object({
   id: z.uuid(),
   operation_id: z.uuid(),
   attempt_count: z.number().int().min(1).max(3),
-  lease_expires_at: z.iso.datetime(),
+  lease_expires_at: z.iso.datetime({ offset: true }),
 });
 
 const candidateSchema = z.object({ event_id: z.uuid(), recover_expired: z.boolean() });
@@ -50,7 +50,7 @@ const preparedResponseSchema = z.object({
   body: bodySchema,
   requestJson: z.string().min(1).max(16_384),
   idempotencyKey: z.string().min(1).max(256),
-  firstSubmissionAt: z.iso.datetime(),
+  firstSubmissionAt: z.iso.datetime({ offset: true }),
 });
 
 type DbReply<T> = { data: T | null; error: unknown };
