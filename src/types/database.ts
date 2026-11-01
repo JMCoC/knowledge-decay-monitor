@@ -1365,6 +1365,19 @@ export type Database = {
         Args: { p_page?: number; p_page_size?: number }
         Returns: Json
       }
+      list_notification_alerts: {
+        Args: { p_limit?: number }
+        Returns: {
+          event_id: string
+        }[]
+      }
+      list_notification_candidates: {
+        Args: { p_limit?: number }
+        Returns: {
+          event_id: string
+          recover_expired: boolean
+        }[]
+      }
       mark_upload_attempt_cleanup: {
         Args: {
           p_attempt_id: string
