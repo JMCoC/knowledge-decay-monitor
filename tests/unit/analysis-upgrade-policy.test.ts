@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   filterFunctionConfigForStage,
   includeFunction,
@@ -70,6 +71,11 @@ const s208bNames = [
   "20261023170850_s2_08b_analysis_worker_locks.sql",
 ];
 
+const s211Names = [
+  "20261101190000_s2_11_notification_delivery.sql",
+  "20261101190100_s2_11_notification_scheduler.sql",
+];
+
 describe("analysis migration upgrade stages", () => {
   it("classifies every reviewed S1 and S2 migration by its exact name", () => {
     for (const name of s1Names) {
@@ -93,6 +99,9 @@ describe("analysis migration upgrade stages", () => {
     for (const name of s208bNames) {
       expect(migrationStage(`supabase/migrations/${name}`)).toBe("s2_08b");
     }
+    for (const name of s211Names) {
+      expect(migrationStage(`supabase/migrations/${name}`)).toBe("s2_11");
+    }
     for (const name of [
       "20261011013954_s2_02_credit_operations.sql",
       "20261011014828_s2_02_credit_reads.sql",
@@ -108,6 +117,25 @@ describe("analysis migration upgrade stages", () => {
     expect(migrationStage(s208b)).toBe("s2_08b");
     expect(includeMigration(s208b, "s2_08a")).toBe(false);
     expect(includeMigration(s208b, "s2_08b")).toBe(true);
+  });
+
+  it("keeps S2-11 out of historical stages and includes its exact migration names at S2-11", () => {
+    const [delivery, scheduler] = s211Names.map((name) => `supabase/migrations/${name}`);
+    expect(includeMigration(delivery, "s2_08b")).toBe(false);
+    expect(includeMigration(scheduler, "s2_08b")).toBe(false);
+    expect(includeMigration(delivery, "s2_11")).toBe(true);
+    expect(includeMigration(scheduler, "s2_11")).toBe(true);
+    expect(() => migrationStage("supabase/migrations/20261101190200_s2_11_unreviewed.sql"))
+      .toThrow("Unreviewed migration in upgrade inventory.");
+  });
+
+  it("excludes only S2-11 lease fields from the S2-01 notification history hash", () => {
+    const upgradeScript = readFileSync("scripts/check-analysis-upgrade.mjs", "utf8");
+    const projection = upgradeScript.match(
+      /select 'notification_events',\s*n\.id::text,\s*([\s\S]*?)\s+from public\.notification_events/,
+    )?.[1]?.replaceAll(/\s+/g, " ").trim();
+
+    expect(projection).toBe("to_jsonb(n) - 'operation_id' - 'lease_expires_at'");
   });
 
   it("includes only migrations at or before the requested stage", () => {

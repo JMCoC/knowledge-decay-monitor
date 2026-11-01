@@ -44,9 +44,7 @@ function seamCode(error: unknown): string {
 }
 
 /**
- * Real finalization factory for the S2-08a success transaction. Failure
- * finalization belongs to S2-08b; failing loud here leaves the job
- * processing instead of closing it as completed.
+ * Finalization RPCs own the atomic findings, credit and event writes.
  */
 export function createFinalization(
   client: AnalysisWorkerDb,
@@ -55,19 +53,24 @@ export function createFinalization(
 
   return {
     async finalize({ analysisId, operationId, outcome }) {
-      if (outcome.kind !== "completed") {
-        throw new Error(
-          "S2-08b: analysis failure finalization is not available.",
-        );
-      }
       try {
-        const result = await client.rpc("finalize_analysis_success", {
-          p_analysis_id: analysisId,
-          p_operation_id: operationId,
-          p_reported_findings_count: outcome.findings.length,
-        });
+        const result = outcome.kind === "completed"
+          ? await client.rpc("finalize_analysis_success", {
+              p_analysis_id: analysisId,
+              p_operation_id: operationId,
+              p_reported_findings_count: outcome.findings.length,
+            })
+          : await client.rpc("fail_analysis", {
+              p_analysis_id: analysisId,
+              p_operation_id: operationId,
+              p_retryable: outcome.code !== "ESTIMATE_STALE" && outcome.code !== "ATTEMPTS_EXHAUSTED",
+              p_error_code: outcome.code,
+            });
         if (result.error) {
           return { ok: false, code: seamCode(result.error) };
+        }
+        if (result.data === "superseded") {
+          return { ok: false, code: "superseded" };
         }
         return { ok: true };
       } catch (error: unknown) {

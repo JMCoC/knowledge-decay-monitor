@@ -174,7 +174,8 @@ with selected_rows(kind, row_id, row_data) as (
   from public.finding_evidence e
   where e.workspace_id = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'::uuid
   union all
-  select 'notification_events', n.id::text, to_jsonb(n)
+  select 'notification_events', n.id::text,
+         to_jsonb(n) - 'operation_id' - 'lease_expires_at'
   from public.notification_events n
   where n.workspace_id = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'::uuid
 )
