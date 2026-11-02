@@ -3,6 +3,7 @@ import {
   installSafeTransport,
   wrapSafeTransport,
 } from "../../src/lib/observability/safe-transport";
+import { sanitizeSafeEnvelope } from "../../src/lib/observability/safe-envelope";
 import type { TelemetryContext } from "../../src/lib/observability/safe-event";
 
 const context: TelemetryContext = {
@@ -49,6 +50,16 @@ function envelope() {
 }
 
 describe("safe Sentry transport", () => {
+  it("exposes the same pure envelope filter for non-Next runtimes", () => {
+    const sanitized = sanitizeSafeEnvelope(envelope(), context);
+
+    expect(sanitized).not.toBeNull();
+    expect(JSON.stringify(sanitized)).not.toMatch(
+      /SENTINEL|attachment|session|user_id|authorization|dsn|trace|content_type/,
+    );
+    expect(sanitized?.[1].map(([header]) => header.type)).toEqual(["event"]);
+  });
+
   it("sends only reconstructed event items and strips envelope metadata", async () => {
     const sent: unknown[] = [];
     const base = {

@@ -1,3 +1,5 @@
+> **Guía histórica de S2-05.** Para el estado integrado hasta S2-10, configuración de Cerebras/Groq y prueba manual actual, usar [la revisión local del 2026-11-01](2026-11-01-second-vertical-local-review.md).
+
 # Segundo vertical: guía E2E local con UI, Supabase y workers
 
 Guía del checkout con S2-03, S2-04, S2-05 y S2-06, revisada contra el código

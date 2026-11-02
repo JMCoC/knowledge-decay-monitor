@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   filterFunctionConfigForStage,
   includeFunction,
@@ -70,6 +71,12 @@ const s208bNames = [
   "20261023170850_s2_08b_analysis_worker_locks.sql",
 ];
 
+const s211Names = [
+  "20261101190000_s2_11_notification_delivery.sql",
+  "20261101190050_s2_11_notification_candidates.sql",
+  "20261101190100_s2_11_notification_scheduler.sql",
+];
+
 describe("analysis migration upgrade stages", () => {
   it("classifies every reviewed S1 and S2 migration by its exact name", () => {
     for (const name of s1Names) {
@@ -93,6 +100,9 @@ describe("analysis migration upgrade stages", () => {
     for (const name of s208bNames) {
       expect(migrationStage(`supabase/migrations/${name}`)).toBe("s2_08b");
     }
+    for (const name of s211Names) {
+      expect(migrationStage(`supabase/migrations/${name}`)).toBe("s2_11");
+    }
     for (const name of [
       "20261011013954_s2_02_credit_operations.sql",
       "20261011014828_s2_02_credit_reads.sql",
@@ -108,6 +118,25 @@ describe("analysis migration upgrade stages", () => {
     expect(migrationStage(s208b)).toBe("s2_08b");
     expect(includeMigration(s208b, "s2_08a")).toBe(false);
     expect(includeMigration(s208b, "s2_08b")).toBe(true);
+  });
+
+  it("keeps S2-11 out of historical stages and includes its exact migration names at S2-11", () => {
+    const migrations = s211Names.map((name) => `supabase/migrations/${name}`);
+    for (const migration of migrations) {
+      expect(includeMigration(migration, "s2_08b")).toBe(false);
+      expect(includeMigration(migration, "s2_11")).toBe(true);
+    }
+    expect(() => migrationStage("supabase/migrations/20261101190200_s2_11_unreviewed.sql"))
+      .toThrow("Unreviewed migration in upgrade inventory.");
+  });
+
+  it("excludes only S2-11 lease fields from the S2-01 notification history hash", () => {
+    const upgradeScript = readFileSync("scripts/check-analysis-upgrade.mjs", "utf8");
+    const projection = upgradeScript.match(
+      /select 'notification_events',\s*n\.id::text,\s*([\s\S]*?)\s+from public\.notification_events/,
+    )?.[1]?.replaceAll(/\s+/g, " ").trim();
+
+    expect(projection).toBe("to_jsonb(n) - 'operation_id' - 'lease_expires_at'");
   });
 
   it("includes only migrations at or before the requested stage", () => {
@@ -163,6 +192,7 @@ describe("analysis function upgrade stages", () => {
   it("includes only functions at or before the requested stage", () => {
     const embed = "supabase/functions/embed/index.ts";
     const analyze = "supabase/functions/analyze/index.ts";
+    const notifications = "supabase/functions/dispatch-notifications/index.ts";
     const cases: ReadonlyArray<readonly [string, MigrationStage, boolean]> = [
       [embed, "s1", true],
       [analyze, "s1", false],
@@ -170,6 +200,8 @@ describe("analysis function upgrade stages", () => {
       [analyze, "s2_04", false],
       [analyze, "s2_06", true],
       [embed, "s2_06", true],
+      [notifications, "s2_06", false],
+      [notifications, "s2_11", true],
     ];
     for (const [path, stage, expected] of cases) {
       expect(includeFunction(path, stage)).toBe(expected);
@@ -194,6 +226,9 @@ describe("analysis function config upgrade stages", () => {
       "[functions.analyze]",
       "verify_jwt = false",
       "",
+      "[functions.dispatch-notifications]",
+      "verify_jwt = false",
+      "",
       "[db]",
       "port = 54322",
     ].join("\r\n");
@@ -206,7 +241,20 @@ describe("analysis function config upgrade stages", () => {
       "[db]",
       "port = 54322",
     ].join("\r\n");
+    const expectedS206Config = [
+      'project_id = "test"',
+      "",
+      "[functions.embed]",
+      "verify_jwt = false",
+      "",
+      "[functions.analyze]",
+      "verify_jwt = false",
+      "",
+      "[db]",
+      "port = 54322",
+    ].join("\r\n");
     expect(filterFunctionConfigForStage(config, "s1")).toBe(expectedS1Config);
-    expect(filterFunctionConfigForStage(config, "s2_06")).toBe(config);
+    expect(filterFunctionConfigForStage(config, "s2_06")).toBe(expectedS206Config);
+    expect(filterFunctionConfigForStage(config, "s2_11")).toBe(config);
   });
 });

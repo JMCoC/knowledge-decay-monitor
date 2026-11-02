@@ -330,7 +330,7 @@ test.describe("Repository processing retry", () => {
     }
   });
 
-  test("QA Lead can retry a failed version and sees a controlled failure when parsing fails again", async ({ page, context }) => {
+  test("QA Lead can retry a failed version and sees a controlled failure when parsing fails again", async ({ page, context, ingestionWorker }) => {
     const fixture = await createRetryFixture({
       label: "qa-failure",
       ownerId: QA_LEAD_A_ID,
@@ -343,8 +343,11 @@ test.describe("Repository processing retry", () => {
       await page.goto(`/repository?name=${encodeURIComponent(fixture.name)}`);
       const row = page.getByRole("row").filter({ hasText: fixture.name });
       await expect(row.getByRole("button", { name: "Retry Processing" })).toBeVisible();
+      // Keep the persisted queued state observable before the worker consumes it.
+      await ingestionWorker.stop();
       await row.getByRole("button", { name: "Retry Processing" }).click();
-      await expect(page.getByText("Processing queued.", { exact: true })).toBeVisible();
+      await expect(row.getByText("Queued", { exact: true })).toBeVisible();
+      await ingestionWorker.start();
       await expect.poll(async()=>{
         const result=await serviceClient().from('document_versions').select('processing_status,processing_queued').eq('id',fixture.versionId).single();
         return result.data?.processing_queued ? 'queued' : result.data?.processing_status;
@@ -369,6 +372,7 @@ test.describe("Repository processing retry", () => {
       expect(await countChunks(fixture.versionId)).toBe(0);
     } finally {
       await cleanupFixture(fixture.name);
+      await ingestionWorker.start();
     }
   });
 

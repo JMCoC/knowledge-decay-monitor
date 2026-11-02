@@ -145,7 +145,7 @@ describe("analysis finalization", () => {
     });
   });
 
-  it("does not call the success RPC for a failed outcome", async () => {
+  it("queues a recoverable provider failure through fail_analysis", async () => {
     const { client, rpc } = mockClient();
     const finalization = createFinalization(client);
 
@@ -155,7 +155,20 @@ describe("analysis finalization", () => {
         operationId: OPERATION_ID,
         outcome: { kind: "failed", code: "PROVIDER_UNAVAILABLE" },
       }),
-    ).rejects.toThrow("S2-08b");
-    expect(rpc).not.toHaveBeenCalled();
+    ).resolves.toEqual({ ok: true });
+    expect(rpc).toHaveBeenCalledWith("fail_analysis", {
+      p_analysis_id: ANALYSIS_ID,
+      p_operation_id: OPERATION_ID,
+      p_retryable: true,
+      p_error_code: "PROVIDER_UNAVAILABLE",
+    });
+  });
+
+  it("preserves fencing when a failure belongs to an obsolete operation", async () => {
+    const { client } = mockClient({ data: "superseded", error: null });
+    await expect(createFinalization(client).finalize({
+      analysisId: ANALYSIS_ID, operationId: OPERATION_ID,
+      outcome: { kind: "failed", code: "ESTIMATE_STALE" },
+    })).resolves.toEqual({ ok: false, code: "superseded" });
   });
 });

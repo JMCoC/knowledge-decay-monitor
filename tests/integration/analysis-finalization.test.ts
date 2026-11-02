@@ -205,6 +205,37 @@ describe("S2-08a real analysis finalization", () => {
     await assertLocalSupabaseReady();
   });
 
+  it.each([
+    ["PROVIDER_UNAVAILABLE", "queued", "Reserved"],
+    ["ESTIMATE_STALE", "failed", "Released"],
+  ] as const)("persists %s through the real failure adapter", async (code, status, lastEvent) => {
+    const service = serviceClient();
+    const prepared = await prepareAnalysis(service, false);
+    try {
+      const client = service as unknown as AnalysisWorkerDb;
+      const result = await runAnalysisJob({
+        client,
+        provider: new FakeAnalysisProvider({ failAtCallIndex: 0, failCode: code }),
+        persistence: createBatchPersistence(client),
+        finalization: createFinalization(client),
+        analysisId: prepared.analysisId,
+      });
+      expect(result.kind).toBe("failed");
+      const { data, error } = await service.from("analyses").select("status,error_code")
+        .eq("id", prepared.analysisId).single();
+      expect(error).toBeNull();
+      expect(data).toEqual({ status, error_code: code });
+      const { data: ledger } = await service.from("credit_ledger").select("event_type")
+        .eq("analysis_id", prepared.analysisId).order("created_at").order("event_type");
+      expect(ledger?.map(row => row.event_type)).toEqual(
+        lastEvent === "Reserved" ? ["Reserved"] : ["Reserved", "Released"],
+      );
+      expect(await count(service, "notification_events", prepared.analysisId)).toBe(status === "failed" ? 1 : 0);
+    } finally {
+      await cleanup(prepared);
+    }
+  }, 60_000);
+
   it("publishes findings and closes a successful run through the real factories", async () => {
     const service = serviceClient();
     const prepared = await prepareAnalysis(service, true);

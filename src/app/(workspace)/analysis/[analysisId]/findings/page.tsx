@@ -65,7 +65,7 @@ export default async function FindingsPage({ params, searchParams }: FindingsPag
   let activeFindingDetail = null;
   if (findingId) {
     const detailResult = await getFindingDetailAction(findingId);
-    if (detailResult.ok) {
+    if (detailResult.ok && detailResult.data.analysisId === analysisId) {
       activeFindingDetail = detailResult.data;
     }
   }
@@ -75,7 +75,7 @@ export default async function FindingsPage({ params, searchParams }: FindingsPag
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-slate-200 pb-5">
         <div>
           <nav className="flex items-center gap-2 text-xs text-slate-500 mb-2">
-            <Link href="/analysis" className="hover:text-slate-800 transition">
+            <Link href="/analysis/run" className="hover:text-slate-800 transition">
               Analysis
             </Link>
             <span>/</span>

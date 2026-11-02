@@ -741,7 +741,9 @@ export type Database = {
           created_at: string
           error_code: string | null
           id: string
+          lease_expires_at: string | null
           next_attempt_at: string | null
+          operation_id: string | null
           recipient_id: string
           sent_at: string | null
           status: Database["public"]["Enums"]["notification_status"]
@@ -754,7 +756,9 @@ export type Database = {
           created_at?: string
           error_code?: string | null
           id?: string
+          lease_expires_at?: string | null
           next_attempt_at?: string | null
+          operation_id?: string | null
           recipient_id: string
           sent_at?: string | null
           status?: Database["public"]["Enums"]["notification_status"]
@@ -767,7 +771,9 @@ export type Database = {
           created_at?: string
           error_code?: string | null
           id?: string
+          lease_expires_at?: string | null
           next_attempt_at?: string | null
+          operation_id?: string | null
           recipient_id?: string
           sent_at?: string | null
           status?: Database["public"]["Enums"]["notification_status"]
@@ -1160,6 +1166,31 @@ export type Database = {
           workspace_id: string
         }[]
       }
+      claim_notification_alert: { Args: { p_event_id: string }; Returns: Json }
+      claim_notification_event: {
+        Args: { p_event_id: string }
+        Returns: {
+          analysis_id: string
+          attempt_count: number
+          created_at: string
+          error_code: string | null
+          id: string
+          lease_expires_at: string | null
+          next_attempt_at: string | null
+          operation_id: string | null
+          recipient_id: string
+          sent_at: string | null
+          status: Database["public"]["Enums"]["notification_status"]
+          type: Database["public"]["Enums"]["notification_type"]
+          workspace_id: string
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "notification_events"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
       claim_upload_recovery: {
         Args: { p_user_id: string; p_version_id: string }
         Returns: {
@@ -1197,6 +1228,22 @@ export type Database = {
       configure_analysis_recovery: {
         Args: { p_enabled: boolean }
         Returns: undefined
+      }
+      configure_notifications_dispatch: {
+        Args: { p_enabled: boolean }
+        Returns: undefined
+      }
+      confirm_notification_alert: {
+        Args: { p_event_id: string; p_operation_id: string }
+        Returns: boolean
+      }
+      confirm_notification_sent: {
+        Args: {
+          p_event_id: string
+          p_operation_id: string
+          p_provider_message_id: string
+        }
+        Returns: boolean
       }
       create_analysis_estimate: {
         Args: {
@@ -1300,6 +1347,10 @@ export type Database = {
           version_id: string
         }[]
       }
+      get_notification_context: {
+        Args: { p_event_id: string; p_operation_id: string }
+        Returns: Json
+      }
       get_upload_resume_target: {
         Args: { p_user_id: string; p_version_id: string }
         Returns: {
@@ -1318,6 +1369,19 @@ export type Database = {
         Args: { p_page?: number; p_page_size?: number }
         Returns: Json
       }
+      list_notification_alerts: {
+        Args: { p_limit?: number }
+        Returns: {
+          event_id: string
+        }[]
+      }
+      list_notification_candidates: {
+        Args: { p_limit?: number }
+        Returns: {
+          event_id: string
+          recover_expired: boolean
+        }[]
+      }
       mark_upload_attempt_cleanup: {
         Args: {
           p_attempt_id: string
@@ -1326,6 +1390,7 @@ export type Database = {
         }
         Returns: boolean
       }
+      notifications_dispatch_enabled: { Args: never; Returns: boolean }
       persist_analysis_batch: {
         Args: {
           p_analysis_id: string
@@ -1336,6 +1401,14 @@ export type Database = {
           p_operation_id: string
         }
         Returns: boolean
+      }
+      prepare_notification_delivery: {
+        Args: {
+          p_event_id: string
+          p_operation_id: string
+          p_request_json: string
+        }
+        Returns: Json
       }
       read_analysis_pair_batch: {
         Args: {
@@ -1383,6 +1456,19 @@ export type Database = {
           upload_state: Database["public"]["Enums"]["upload_state"]
           version_id: string
         }[]
+      }
+      record_notification_failure: {
+        Args: {
+          p_error_code: string
+          p_event_id: string
+          p_operation_id: string
+          p_retry_after_seconds?: number
+        }
+        Returns: string
+      }
+      recover_notification_event: {
+        Args: { p_event_id: string }
+        Returns: string
       }
       renew_analysis_lease:
         | {
@@ -1472,6 +1558,10 @@ export type Database = {
           retry_of_analysis_id: string
           status: Database["public"]["Enums"]["analysis_job_status"]
         }[]
+      }
+      retry_notification_alert: {
+        Args: { p_event_id: string; p_operation_id: string }
+        Returns: boolean
       }
       run_analysis: {
         Args: {

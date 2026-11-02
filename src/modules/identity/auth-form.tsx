@@ -6,15 +6,16 @@ import { useState, type FormEvent } from "react";
 import type { ActionError } from "../../types/contracts";
 import { OperationError } from "../../components/operation-error";
 import { captureClientTransportFailure } from "../../lib/observability/client-failure";
+import { analysisContinuationPath } from "./analysis-continuation";
 import { login, register } from "./actions";
 import { loginSchema, registerSchema } from "./schemas";
 
-type AuthFormProps = { mode: "login" | "register" };
+type AuthFormProps = { mode: "login" | "register"; analysisId?: string };
 
 const fieldClassName =
   "mt-2 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-950 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-cyan-700 focus:ring-2 focus:ring-cyan-700/20 disabled:bg-slate-100";
 
-export function AuthForm({ mode }: AuthFormProps) {
+export function AuthForm({ mode, analysisId }: AuthFormProps) {
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -70,7 +71,10 @@ export function AuthForm({ mode }: AuthFormProps) {
         setError(result.error);
         return;
       }
-      router.replace(result.data.destination);
+      const destination = result.data.destination === "/app"
+        ? analysisContinuationPath(analysisId ?? null) ?? result.data.destination
+        : result.data.destination;
+      router.replace(destination);
       router.refresh();
     } catch {
       setError(captureClientTransportFailure());
