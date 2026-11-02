@@ -4,7 +4,7 @@ import { createClient } from "@supabase/supabase-js";
 import type { AnalysisExecutionManifest } from "../../src/types/analysis-internal";
 import type { Database, Json } from "../../src/types/database";
 import { assertLocalSupabaseReady } from "../support/local-supabase";
-import { createAnalysisFixture } from "../support/analysis-fixtures";
+import { createAnalysisFixture, type AnalysisFixture } from "../support/analysis-fixtures";
 import {
   startEdgeConFake,
   killEdgeWorkerContainer,
@@ -43,24 +43,34 @@ type Service = ReturnType<typeof serviceClient>;
 interface PreparedJob {
   workspaceId: string;
   analysisId: string;
+  sql: AnalysisFixture["sql"];
   dispose: () => Promise<void>;
   pairCount: number;
 }
 
 async function backdate(
-  service: Service,
-  analysisId: string,
+  job: PreparedJob,
   patch: { leaseExpired?: boolean; backoffPast?: boolean },
 ) {
-  const past = new Date(Date.now() - 60_000).toISOString();
-  const { error } = await service
-    .from("analyses")
-    .update({
-      ...(patch.leaseExpired ? { lease_expires_at: past } : {}),
-      ...(patch.backoffPast ? { next_attempt_at: past } : {}),
-    })
-    .eq("id", analysisId);
-  expect(error).toBeNull();
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!uuid.test(job.analysisId) || !uuid.test(job.workspaceId)) {
+    throw new Error("Invalid synthetic analysis identifier.");
+  }
+  const assignments = [
+    ...(patch.leaseExpired ? ["lease_expires_at = clock_timestamp() - interval '60 seconds'"] : []),
+    ...(patch.backoffPast ? ["next_attempt_at = clock_timestamp() - interval '60 seconds'"] : []),
+  ];
+  // Fixture clock setup must survive the deliberate Edge restart.
+  // Use its existing DB session and verify the exact tenant-scoped row changed.
+  const updated = await job.sql.query(`
+    with changed as (
+      update public.analyses set ${assignments.join(", ")}
+      where id = '${job.analysisId}'::uuid and workspace_id = '${job.workspaceId}'::uuid
+      returning id
+    )
+    select id::text from changed;
+  `);
+  expect(updated.trim()).toBe(job.analysisId);
 }
 
 async function readAnalysis(service: Service, analysisId: string) {
@@ -197,6 +207,7 @@ async function prepareJob(
     return {
       workspaceId: fixture.workspaceId,
       analysisId,
+      sql: fixture.sql,
       dispose: fixture.dispose,
       pairCount: rows.length,
     };
@@ -320,7 +331,7 @@ describe("FAKE-PROVIDER analysis worker integration", () => {
       await killEdgeWorkerContainer();
       await worker.stop();
       edge = await startEdgeConFake();
-      await backdate(service, job.analysisId, { leaseExpired: true });
+      await backdate(job, { leaseExpired: true });
       const recoveryWorker = requireEdge();
       const response = await invokeEdge(recoveryWorker, job.analysisId, { latencyMs: 400 });
       expect(response.status, `${JSON.stringify(response.body)}\n${recoveryWorker.diagnostics()}`).toBe(202);
@@ -387,7 +398,7 @@ describe("FAKE-PROVIDER analysis worker integration", () => {
       expect(first.error).toBeNull();
       const staleOperation = first.data?.[0]?.operation_id;
       expect(staleOperation).toBeTruthy();
-      await backdate(service, job.analysisId, { leaseExpired: true });
+      await backdate(job, { leaseExpired: true });
       const second = await service.rpc("claim_analysis", {
         p_analysis_id: job.analysisId,
       });
@@ -437,7 +448,7 @@ describe("FAKE-PROVIDER analysis worker integration", () => {
       let row = await readAnalysis(service, job.analysisId);
       expect(row.status).toBe("queued");
       expect(row.attempt_count).toBe(1);
-      await backdate(service, job.analysisId, { backoffPast: true });
+      await backdate(job, { backoffPast: true });
 
       const second = await invokeEdge(worker, job.analysisId, fail);
       expect(second.status, `${JSON.stringify(second.body)}\n${worker.diagnostics()}`).toBe(202);
@@ -450,7 +461,7 @@ describe("FAKE-PROVIDER analysis worker integration", () => {
       row = await readAnalysis(service, job.analysisId);
       expect(row.status).toBe("queued");
       expect(row.attempt_count).toBe(2);
-      await backdate(service, job.analysisId, { backoffPast: true });
+      await backdate(job, { backoffPast: true });
 
       const third = await invokeEdge(worker, job.analysisId, fail);
       expect(third.status, `${JSON.stringify(third.body)}\n${worker.diagnostics()}`).toBe(202);

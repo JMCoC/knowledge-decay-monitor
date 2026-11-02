@@ -100,3 +100,28 @@ Esta evidencia cierra la reproducción enfocada de los siete fallos; no es una
 nueva corrida de los 45 casos completos. El upgrade y la integración completa
 siguen pendientes de CI en un runner limpio. La entrega real Resend/Sentry y
 la activación del scheduler continúan pendientes según el runbook.
+
+## CI del PR #29 y estabilización del test de crash
+
+El commit `0cbb4ee` tuvo dos ejecuciones legítimas del workflow: apertura del
+PR en borrador (run `41459180132`, PASS completo) y evento `ready_for_review`
+(run `41465173976`, fallo en integración). El workflow incluye ambos eventos.
+No eran dos versiones diferentes del código.
+
+La segunda ejecución pasó unitarias, SQL, tipos, fixtures y upgrade; falló
+únicamente `analysis-worker.test.ts`, caso de recuperación después de matar
+el Edge worker (86/87 pruebas de integración pasaron). El helper `backdate`
+recibió `TypeError: fetch failed / UND_ERR_SOCKET` en el PATCH de preparación,
+inmediatamente después del reinicio de Edge y antes de invocar la recuperación.
+
+Se cambió esa preparación al SQL session del fixture, que ya está conectado
+directamente al contenedor de DB. El UPDATE valida UUIDs, filtra análisis y
+workspace y devuelve exactamente el ID actualizado. Se conserva la muerte y
+el reinicio real del worker y todas las verificaciones de recuperación,
+checkpoint, findings, notificación y créditos. No se añadieron reintentos del
+test ni se relajaron sus aserciones.
+
+Validación local del ajuste: los cinco casos de `analysis-worker.test.ts`
+pasaron (71.95 s), ESLint del archivo y `tsc --noEmit` pasaron. La nueva
+ejecución completa de CI corresponde al commit que contiene este ajuste; su
+resultado debe comprobarse en el PR antes de integrar.
