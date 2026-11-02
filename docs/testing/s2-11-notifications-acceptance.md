@@ -62,3 +62,41 @@ no demuestra que el worker haya alcanzado estado terminal.
 La cobertura de integración completa permanece pendiente de un runner limpio
 que no contenga el cron de recuperación personal y pueda iniciar Postgres. No
 se paró, reseteó ni reconfiguró el stack personal para obtener esos resultados.
+
+## Revisión después del reinicio — 2026-11-02
+
+Se restauraron las dependencias con `npx --yes pnpm@12.5.1 install
+--frozen-lockfile` (salida 0, sin cambiar el lockfile). La instalación interrumpida
+al cierre anterior había dejado `node_modules` incompleto y faltaba `tsx`.
+Este hallazgo explica por qué el worker no podía arrancar hoy; no establece por
+sí solo la causa de todos los timeouts del día anterior.
+
+`node --conditions=react-server --import tsx scripts/warm-ingestion-model.ts`
+pasó tanto con `INGESTION_MODEL_OFFLINE=1` como sin esa variable: 32 vectores de
+384 dimensiones. Las repeticiones E2E usaron el modelo en caché con
+`INGESTION_MODEL_OFFLINE=1` y el wrapper local habitual, sin reset de Supabase.
+
+Los siete casos fallidos del 1 de noviembre pasaron en repeticiones enfocadas:
+
+| Repetición Chromium | Resultado |
+|---|---|
+| `processing-retry.spec.ts -g 'near-expired\|Admin can retry'` | 2/2 PASS. |
+| `processing-retry.spec.ts` y `upload.spec.ts`, filtrando QA, aislamiento, URL firmada, crash y carga máxima | 4 PASS; QA reprodujo un fallo distinto: esperaba un mensaje temporal que desaparece al refrescar la fila. |
+| `processing-retry.spec.ts -g 'QA Lead can retry'`, tras corregir esa espera | 1/1 PASS. |
+
+El test de QA ahora detiene únicamente su worker de prueba, comprueba el estado
+persistido `Queued`, lo arranca y conserva las verificaciones de fallo de
+parsing, integridad del documento y ausencia de chunks. El botón que contenía
+`Processing queued.` se desmonta cuando la fila pasa a `Queued`; esperar ese
+mensaje era una condición de carrera en la prueba.
+
+La recuperación tras matar el worker persistió los 500 chunks y rechazó la
+operación anterior (5.7 minutos). La URL firmada expiró después de los cinco
+minutos reales. La carga de diez archivos más el original de 10 MiB completó
+sus comprobaciones (1.6 minutos). ESLint del archivo modificado y
+`tsc --noEmit` pasaron con salida 0.
+
+Esta evidencia cierra la reproducción enfocada de los siete fallos; no es una
+nueva corrida de los 45 casos completos. El upgrade y la integración completa
+siguen pendientes de CI en un runner limpio. La entrega real Resend/Sentry y
+la activación del scheduler continúan pendientes según el runbook.
