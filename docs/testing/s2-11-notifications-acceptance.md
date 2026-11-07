@@ -1,5 +1,9 @@
 # Aceptación — S2-11 notificaciones terminales
 
+Actualización posterior: ver [corrección del dispatcher local del 2026-11-07](#corrección-del-dispatcher-local--2026-11-07)
+para evidencia nueva de aceptación por Resend. Las secciones anteriores a esa
+actualización conservan su carácter histórico.
+
 Fecha de evidencia: **2026-11-01**. Entorno: checkout local Windows
 `C:\KDM\knowledge-decay-monitor`, Supabase CLI 2.117.0, Node 24.11.0 y
 pnpm 12.5.1 invocado con `npx`. La corrida parte de `9ad82a1` con el diff de
@@ -125,3 +129,58 @@ Validación local del ajuste: los cinco casos de `analysis-worker.test.ts`
 pasaron (71.95 s), ESLint del archivo y `tsc --noEmit` pasaron. La nueva
 ejecución completa de CI corresponde al commit que contiene este ajuste; su
 resultado debe comprobarse en el PR antes de integrar.
+
+## Corrección del dispatcher local — 2026-11-07
+
+Entorno: Windows, Supabase local `knowledge-decay-monitor-s1-02`, CLI 2.117.0.
+HEAD base `dd8427645535712810e3bb96f7e6e9b1ce278830`, con la corrección de
+configuración y sus pruebas sin commit. Esta comprobación corresponde a la
+solicitud de reparar el flujo de correo ya habilitado por el operador.
+
+### Reproducción y causa
+
+- Cuatro eventos `analysis_completed`, todos `pending`, `attempt_count=0` y sin
+  error. Los cuatro destinatarios coincidían con cuentas de prueba configuradas;
+  no se guardaron direcciones ni cuerpos de mensajes en esta evidencia.
+- Vault tenía las cuatro entradas sin duplicados; ambos tokens coincidían con
+  Edge. Los cron de análisis y notificaciones estaban activos cada minuto y la
+  compuerta de dispatch estaba habilitada.
+- El runtime inyectaba `SUPABASE_URL=http://kong:8000`. La validación rechazaba
+  ese HTTP interno antes de autenticar, consultar PostgreSQL o reclamar eventos.
+  La misma configuración, cambiando solo esa URL en memoria por una loopback,
+  pasaba validación. No se alteró el env del servicio para hacer esta comparación.
+- Un POST con Bearer deliberadamente inválido devolvía 401 en `analyze` y 503
+  `not_ready` en `dispatch-notifications`, identificando cuál endpoint fallaba.
+
+### Corrección y resultado observado
+
+El validador acepta los gateways `http://kong:8000` y
+`http://api.supabase.internal:8000` únicamente para la URL de Supabase en
+`development`. No se amplió la validación del origen web ni se permitieron
+otros servidores HTTP. No se cambiaron secretos, cron, migraciones, destinatarios
+o estado de eventos mediante SQL.
+
+Edge recargó el cambio. En el siguiente tick ya programado, a las
+**22:17:00 UTC**, las dos llamadas cron devolvieron 202. Los cuatro eventos
+pasaron a `sent`, `attempt_count=1`, `error_code=NULL` y `sent_at` no nulo entre
+22:17:00.699 y 22:17:00.908 UTC. No hubo reenvío manual. El POST con token inválido
+al dispatcher pasó a devolver 401, conservando la autenticación.
+
+Lectura final a las 22:19:11 UTC: los cuatro eventos seguían `sent`, con un solo
+intento y sin errores. Las seis respuestas cron registradas desde la corrección
+eran 202, sin nuevos 503. Ambos schedulers del operador permanecieron activos.
+
+| Validación nueva | Resultado |
+|---|---|
+| Baseline de los dos archivos unitarios afectados | PASS, 42 pruebas. |
+| Regresiones antes de corregir | 4 fallos esperados: readiness y handler rechazaban ambos gateways. |
+| Pruebas focalizadas después de corregir | PASS, 56 pruebas. |
+| `pnpm.cmd test:unit` | PASS, 116 archivos y 1.002 pruebas. |
+| `pnpm.cmd typecheck` | PASS; aviso existente de instrumentación de navegación Sentry. |
+| `pnpm.cmd lint` | PASS, 0 errores y 3 warnings existentes en pruebas de upload. |
+
+Esto demuestra aceptación por Resend de los cuatro mensajes mediante el
+scheduler y dispatcher reales. **No certifica recepción en inbox ni navegación
+del enlace**: requieren comprobación del operador. No se ejecutaron aquí SQL,
+integración, Playwright, build ni smoke de ingestión real Sentry. No se hizo
+commit, push ni despliegue remoto.

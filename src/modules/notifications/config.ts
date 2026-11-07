@@ -4,12 +4,16 @@ export const NOTIFICATIONS_FROM =
   "Knowledge Decay Monitor <notifications@knowledge-decay-monitor.online>";
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
+const LOCAL_SUPABASE_GATEWAYS = new Set([
+  "http://kong:8000",
+  "http://api.supabase.internal:8000",
+]);
 
 function isLoopback(url: URL) {
   return LOOPBACK_HOSTS.has(url.hostname.replace(/^\[|\]$/g, "").toLowerCase());
 }
 
-function parseServiceOrigin(value: string) {
+function parseServiceOrigin(value: string, allowLocalSupabaseGateway = false) {
   if (/\s|\\/.test(value) || !/^https?:\/\/[^/?#]+\/?$/i.test(value)) {
     throw new NotificationReadinessError();
   }
@@ -22,7 +26,9 @@ function parseServiceOrigin(value: string) {
   }
 
   if (
-    (url.protocol !== "https:" && !(url.protocol === "http:" && isLoopback(url)))
+    (url.protocol !== "https:" && !(url.protocol === "http:" && (
+      isLoopback(url) || (allowLocalSupabaseGateway && LOCAL_SUPABASE_GATEWAYS.has(url.origin))
+    )))
     || value.includes("@")
     || url.username !== ""
     || url.password !== ""
@@ -122,10 +128,14 @@ export function readNotificationsConfig(
   const apiKey = requiredValue(read, "RESEND_API_KEY");
   const from = validateNotificationsFrom(read("NOTIFICATIONS_FROM") ?? "");
   const appOrigin = validateAppOrigin(requiredValue(read, "APP_ORIGIN"));
-  const supabaseUrl = parseServiceOrigin(requiredValue(read, "SUPABASE_URL")).origin;
+  const environment = environmentValue(requiredValue(read, "NOTIFICATIONS_ENVIRONMENT"));
+  // Local Edge receives a Docker gateway, rather than the host's loopback URL.
+  const supabaseUrl = parseServiceOrigin(
+    requiredValue(read, "SUPABASE_URL"),
+    environment === "development",
+  ).origin;
   const serviceRoleKey = requiredValue(read, "SUPABASE_SERVICE_ROLE_KEY");
   const sentryDsn = validateSentryDsn(requiredValue(read, "SENTRY_DSN"));
-  const environment = environmentValue(requiredValue(read, "NOTIFICATIONS_ENVIRONMENT"));
   const release = releaseValue(requiredValue(read, "NOTIFICATIONS_RELEASE_SHA"), environment);
 
   return {
