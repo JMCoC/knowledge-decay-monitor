@@ -63,6 +63,23 @@ async function responseBody(response: Response): Promise<unknown> {
 }
 
 describe("notification dispatch HTTP handler", () => {
+  it.each([
+    "http://kong:8000",
+    "http://api.supabase.internal:8000",
+  ])("dispatches authenticated scheduler work using the local Edge gateway %s", async (origin) => {
+    const { deps, pending } = makeDeps();
+    const response = await handleNotificationRequest(request({
+      authorization: `Bearer ${TOKEN}`,
+      contentType: "application/json",
+    }), { ...ENV, SUPABASE_URL: origin }, deps);
+
+    expect(response.status).toBe(202);
+    await Promise.all(pending);
+    expect(deps.createStore).toHaveBeenCalledWith(expect.objectContaining({ supabaseUrl: origin }));
+    expect(deps.isDispatchEnabled).toHaveBeenCalledOnce();
+    expect(deps.runDispatch).toHaveBeenCalledOnce();
+  });
+
   it("rejects unsupported methods without reading configuration or creating dependencies", async () => {
     const { deps } = makeDeps();
     const response = await handleNotificationRequest(request({ method: "GET" }), ENV, deps);

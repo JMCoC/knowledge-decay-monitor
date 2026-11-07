@@ -133,6 +133,40 @@ describe("notification environment readiness", () => {
   });
 
   it.each([
+    "http://kong:8000",
+    "http://api.supabase.internal:8000",
+  ])("accepts the local Edge gateway %s in development", (origin) => {
+    const values = environment({ SUPABASE_URL: `${origin}/` });
+    expect(readNotificationsConfig(name => values[name]).supabaseUrl).toBe(origin);
+  });
+
+  it.each([
+    ["http://kong:8000", "vercel-preview"],
+    ["http://api.supabase.internal:8000", "vercel-production"],
+    ["http://example.test:8000", "development"],
+    ["http://kong:8001", "development"],
+    ["http://kong:8000.example.test", "development"],
+    ["http://kong:8000/rest/v1", "development"],
+    ["http://kong:8000?", "development"],
+    ["http://user@kong:8000", "development"],
+  ])("rejects unsafe Supabase origin %s in %s", (origin, environmentName) => {
+    const values = environment({ SUPABASE_URL: origin, NOTIFICATIONS_ENVIRONMENT: environmentName });
+    expect(() => readNotificationsConfig(name => values[name])).toThrow(
+      "Notification service is not ready.",
+    );
+  });
+
+  it.each([
+    "http://kong:8000",
+    "http://api.supabase.internal:8000",
+  ])("rejects the internal gateway %s as a public application origin", (origin) => {
+    const values = environment({ APP_ORIGIN: origin });
+    expect(() => readNotificationsConfig(name => values[name])).toThrow(
+      "Notification service is not ready.",
+    );
+  });
+
+  it.each([
     ["unknown enabled flag", { NOTIFICATIONS_ENABLED: "yes" }],
     ["short internal token", { NOTIFICATIONS_INTERNAL_TOKEN: "too-short" }],
     ["whitespace in internal token", { NOTIFICATIONS_INTERNAL_TOKEN: "invalid token that is longer than 32 chars" }],

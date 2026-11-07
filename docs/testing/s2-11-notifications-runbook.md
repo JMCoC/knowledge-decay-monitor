@@ -27,7 +27,7 @@ key or has delivered a notification.
 | `RESEND_API_KEY` | Edge runtime only | Sending-only key, limited to the verified sender domain. Never expose to the browser or CI. |
 | `NOTIFICATIONS_FROM` | Edge runtime | Exact fixed sender above. |
 | `APP_ORIGIN` | Edge runtime | Canonical app origin, HTTPS, no path/query/fragment. |
-| `SUPABASE_URL` | Edge runtime | The same project that owns the event outbox. |
+| `SUPABASE_URL` | Edge runtime | Platform-injected URL for the project that owns the event outbox. Local Docker gateways are accepted only in `development`; do not override this with the host's loopback URL. |
 | `SUPABASE_SERVICE_ROLE_KEY` | Edge runtime only | Privileged key; never in `NEXT_PUBLIC_*`, test output, or browser configuration. |
 | `SENTRY_DSN` | Edge runtime | Sentry Deno project DSN; keep in private runtime configuration. |
 | `NOTIFICATIONS_ENVIRONMENT` | Edge runtime | `development`, `vercel-preview`, or `vercel-production`. |
@@ -188,6 +188,29 @@ for this smoke.
 | Event becomes `failed` | Use only the controlled error code and attempt count. A final lost acknowledgement may be uncertain; do not resend manually. |
 | Event is `sent`, inbox empty | Check the controlled inbox/spam and Resend's dashboard for the provider message ID. This is a receipt investigation, not a reason to reset the event. |
 | Sentry alert remains pending | Inspect alert lease/backoff and Sentry's event lookup by correlation ID; do not retry the email to recover telemetry. |
+
+### Local Docker: `503 not_ready` before any attempt
+
+The local Edge runtime injects `SUPABASE_URL=http://kong:8000`. The notification
+configuration accepts that origin and `http://api.supabase.internal:8000` only
+when `NOTIFICATIONS_ENVIRONMENT=development`. Other non-loopback HTTP origins
+remain rejected. `APP_ORIGIN` is separate: it must remain the browser-accessible
+web origin, such as `http://127.0.0.1:3000`, never the Docker gateway.
+
+An older validator applied the public-origin restriction to `SUPABASE_URL` too,
+returning `503 {"error":"not_ready"}` before reading the dispatch gate or claiming
+an event. This leaves `pending` events at `attempt_count=0` even when Vault, cron
+and credentials are correct. Updating the validator fixes that failure; replacing
+the injected URL with `127.0.0.1` would point at the Edge container itself.
+
+To distinguish functions without claiming jobs or sending mail, POST an empty
+JSON object to each local endpoint with a deliberately invalid Bearer token.
+An enabled dispatcher with valid configuration returns 401 before database
+access; this particular invalid configuration returns 503 before authentication.
+A 503 can also have other readiness causes, so inspect the effective runtime
+configuration privately rather than inferring the cause from the status alone.
+After correction, observe the already approved scheduler and event state;
+HTTP 202 alone does not prove delivery.
 
 Any hosted secret change, scheduler activation, real email, Sentry ingest, push,
 or deployment remains a separate authorized operation.
