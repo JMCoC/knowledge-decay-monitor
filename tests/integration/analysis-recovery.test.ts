@@ -175,12 +175,22 @@ let workerToken: string | undefined;
 let recoveryScheduleOwned = false;
 const createdSecretIds: string[] = [];
 
-async function enableRecoverySchedule(service: ReturnType<typeof serviceClient>) {
-  const { error } = await service.rpc("configure_analysis_recovery", {
-    p_enabled: true,
-  });
-  expect(error).toBeNull();
-  recoveryScheduleOwned = true;
+async function configureRecoverySchedule(enabled: boolean) {
+  if (!sql) throw new Error("Local recovery SQL fixture is not initialized.");
+  // functions serve reloads Kong when restarting Edge. Keep fixture setup on
+  // the existing SQL connection so a closed gateway socket cannot fail it.
+  // Invoke the same public function with the same role as the HTTP RPC.
+  await sql.query("set role service_role;");
+  try {
+    await sql.query(`select public.configure_analysis_recovery(${enabled});`);
+    recoveryScheduleOwned = enabled;
+  } finally {
+    await sql.query("reset role;");
+  }
+  const count = await sql.query(
+    "select count(*)::text from cron.job where jobname = 'kdm-analysis-recovery';",
+  );
+  expect(count).toBe(enabled ? "1" : "0");
 }
 
 describe("local pg_cron analysis recovery", () => {
@@ -255,12 +265,12 @@ describe("local pg_cron analysis recovery", () => {
 
   afterAll(async () => {
     const cleanupErrors: string[] = [];
-    if (recoveryScheduleOwned && process.env.SUPABASE_SERVICE_ROLE_KEY) {
-      const { error } = await serviceClient().rpc(
-        "configure_analysis_recovery",
-        { p_enabled: false },
-      );
-      if (error) cleanupErrors.push("could not disable the local recovery cron job");
+    if (recoveryScheduleOwned) {
+      try {
+        await configureRecoverySchedule(false);
+      } catch {
+        cleanupErrors.push("could not disable the local recovery cron job");
+      }
     }
     if (edge) {
       try {
@@ -352,7 +362,7 @@ describe("local pg_cron analysis recovery", () => {
       const scheduledAfter = await sql.query(
         "select clock_timestamp()::text;",
       );
-      await enableRecoverySchedule(service);
+      await configureRecoverySchedule(true);
 
       const jobId = Number(await sql.query(
         "select jobid::text from cron.job where jobname = 'kdm-analysis-recovery';",
@@ -416,10 +426,7 @@ describe("local pg_cron analysis recovery", () => {
   it("recovers a lost continuation from cron without counting another attempt", async () => {
     if (!sql || !workerToken) throw new Error("Local recovery fixture is not initialized.");
     const service = serviceClient();
-    const { error: disableError } = await service.rpc("configure_analysis_recovery", {
-      p_enabled: false,
-    });
-    expect(disableError).toBeNull();
+    await configureRecoverySchedule(false);
     const job = await createQueuedJob(service, { versionCount: 7, sourceCount: 3 });
     expect(job.pairCount).toBeGreaterThan(10);
     try {
@@ -454,7 +461,7 @@ describe("local pg_cron analysis recovery", () => {
       edge = await startEdgeConFake({ token: workerToken, latencyMs: 10 });
       // Start the schedule only after continuation_pending is durable. This
       // prevents an earlier minute tick from consuming the observation window.
-      await enableRecoverySchedule(service);
+      await configureRecoverySchedule(true);
       const scheduledAfter = await sql.query("select clock_timestamp()::text;");
       const jobId = Number(await sql.query(
         "select jobid::text from cron.job where jobname = 'kdm-analysis-recovery';",
@@ -503,7 +510,7 @@ describe("local pg_cron analysis recovery", () => {
   it("reclaims an interrupted worker only after its real lease expires", async () => {
     if (!sql || !workerToken) throw new Error("Local recovery fixture is not initialized.");
     const service = serviceClient();
-    await enableRecoverySchedule(service);
+    await configureRecoverySchedule(true);
     if (edge) {
       await edge.stop();
       edge = undefined;
