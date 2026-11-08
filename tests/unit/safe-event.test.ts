@@ -128,4 +128,112 @@ describe("safe Sentry events", () => {
       }),
     ).toEqual({ correlationId });
   });
+
+  it.each(["snapshot", "ledger"] as const)("accepts the closed credits/%s operation", (operation) => {
+    const receipt = captureSafeFailure({
+      module: "credits",
+      operation,
+      code: "INTERNAL_ERROR",
+      correlationId,
+    });
+
+    expect(receipt).toEqual({ correlationId, eventId: "0123456789abcdef0123456789abcdef" });
+    expect(filterSafeEvent(safeCandidate({
+      tags: {
+        ...safeCandidate().tags as object,
+        module: "credits",
+        operation,
+      },
+    }), context)?.tags).toMatchObject({ module: "credits", operation });
+  });
+
+  it("accepts the closed analysis/estimate operation", () => {
+    const receipt = captureSafeFailure({
+      module: "analysis",
+      operation: "estimate",
+      code: "INTERNAL_ERROR",
+      correlationId,
+    });
+
+    expect(receipt).toEqual({ correlationId, eventId: "0123456789abcdef0123456789abcdef" });
+  });
+
+  it.each(["run", "retry", "trigger"] as const)("accepts the closed analysis/%s operation", (operation) => {
+    const receipt = captureSafeFailure({
+      module: "analysis",
+      operation,
+      code: "INTERNAL_ERROR",
+      correlationId,
+    });
+
+    expect(receipt).toEqual({ correlationId, eventId: "0123456789abcdef0123456789abcdef" });
+  });
+
+  it("rejects credit operations outside the closed catalog", () => {
+    expect(filterSafeEvent(safeCandidate({
+      tags: {
+        ...safeCandidate().tags as object,
+        module: "credits",
+        operation: "write",
+      },
+    }), context)).toBeNull();
+  });
+
+  it.each(["dispatch", "deliver", "recover", "alert"] as const)(
+    "accepts the closed notifications/%s operation without copying caller data",
+    (operation) => {
+      const event = filterSafeEvent(safeCandidate({
+        email: "PRIVATE_EMAIL_SENTINEL",
+        url: "https://private.example/PRIVATE_URL_SENTINEL",
+        body: "PRIVATE_BODY_SENTINEL",
+        tags: {
+          "kdm.safe": "true",
+          module: "notifications",
+          operation,
+          code: "DELIVERY_FAILED",
+          correlation_id: correlationId,
+          attempt_id: "88725091-ae4b-47d2-88dc-490b0baf1072",
+        },
+      }), context);
+
+      expect(event?.tags).toMatchObject({
+        module: "notifications",
+        operation,
+        code: "DELIVERY_FAILED",
+        correlation_id: correlationId,
+        attempt_id: "88725091-ae4b-47d2-88dc-490b0baf1072",
+      });
+      expect(JSON.stringify(event)).not.toMatch(/PRIVATE_EMAIL|PRIVATE_URL|PRIVATE_BODY/);
+      expect(event).not.toHaveProperty("email");
+      expect(event).not.toHaveProperty("url");
+      expect(event).not.toHaveProperty("body");
+    },
+  );
+
+  it.each(["RECIPIENT_UNAVAILABLE", "INTERNAL_ERROR"] as const)(
+    "accepts the controlled notifications failure code %s",
+    (code) => {
+      const event = filterSafeEvent(safeCandidate({
+        tags: {
+          "kdm.safe": "true",
+          module: "notifications",
+          operation: "alert",
+          code,
+          correlation_id: correlationId,
+        },
+      }), context);
+
+      expect(event?.tags).toMatchObject({ module: "notifications", operation: "alert", code });
+    },
+  );
+
+  it("rejects unknown notification operations and failure codes", () => {
+    const tags = safeCandidate().tags as Record<string, unknown>;
+    expect(filterSafeEvent(safeCandidate({
+      tags: { ...tags, module: "notifications", operation: "send" },
+    }), context)).toBeNull();
+    expect(filterSafeEvent(safeCandidate({
+      tags: { ...tags, module: "notifications", operation: "alert", code: "RESEND_REJECTED" },
+    }), context)).toBeNull();
+  });
 });

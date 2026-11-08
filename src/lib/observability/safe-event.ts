@@ -3,6 +3,9 @@ export const operationCatalog = {
   workspace: ["bootstrap", "reconcile", "owners"],
   ingestion: ["reserve", "verify", "resume", "recover", "cleanup", "reconcile", "process", "retry"],
   repository: ["list", "open"],
+  credits: ["snapshot", "ledger"],
+  analysis: ["selection", "scope_validation", "estimate", "run", "retry", "trigger", "findings_read"],
+  notifications: ["dispatch", "deliver", "recover", "alert"],
   application: ["request", "render", "unhandled", "transport", "diagnostic"],
 } as const;
 
@@ -22,7 +25,9 @@ export type SafeFailureCode =
   | "PARSING_FAILED"
   | "CHUNKING_FAILED"
   | "EMBEDDING_FAILED"
-  | "PERSISTENCE_FAILED";
+  | "PERSISTENCE_FAILED"
+  | "DELIVERY_FAILED"
+  | "RECIPIENT_UNAVAILABLE";
 
 export type SafeFailureInput = SafeOperation & {
   code: SafeFailureCode;
@@ -77,6 +82,8 @@ const failureCodes = new Set<SafeFailureCode>([
   "CHUNKING_FAILED",
   "EMBEDDING_FAILED",
   "PERSISTENCE_FAILED",
+  "DELIVERY_FAILED",
+  "RECIPIENT_UNAVAILABLE",
 ]);
 const processingCodes = new Set<SafeFailureCode>([
   "PROCESSING_FAILED",

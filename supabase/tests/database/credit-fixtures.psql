@@ -1,0 +1,49 @@
+create temporary table credit_workspace (
+  workspace_id uuid primary key,
+  user_id uuid not null
+) on commit drop;
+
+create function pg_temp.create_credit_workspace() returns uuid
+language plpgsql
+set search_path = ''
+as $$
+declare
+  v_user uuid := gen_random_uuid();
+  v_workspace uuid := gen_random_uuid();
+begin
+  insert into auth.users(id, email, aud, role)
+  values (v_user, 'kdm-' || v_user::text || '@example.test', 'authenticated', 'authenticated');
+  insert into public.workspaces(id, name)
+  values (v_workspace, 'kdm-' || v_user::text);
+  insert into public.profiles(id, workspace_id, role, full_name, email)
+  values (v_user, v_workspace, 'Admin', 'Synthetic credit admin',
+          'kdm-' || v_user::text || '@example.test');
+  insert into pg_temp.credit_workspace(workspace_id, user_id)
+  values (v_workspace, v_user);
+  return v_workspace;
+end;
+$$;
+
+create function pg_temp.create_credit_analysis(
+  p_workspace uuid,
+  p_cost integer,
+  p_status public.analysis_job_status default 'queued'
+) returns uuid
+language plpgsql
+set search_path = ''
+as $$
+declare
+  v_analysis uuid;
+  v_user uuid;
+begin
+  select user_id into strict v_user
+  from pg_temp.credit_workspace
+  where workspace_id = p_workspace;
+
+  v_analysis := pg_temp.create_analysis_fixture(p_workspace, v_user, p_status, 0);
+  update public.analyses
+  set fixed_cost = p_cost, reserved_credits = p_cost
+  where id = v_analysis;
+  return v_analysis;
+end;
+$$;

@@ -1,4 +1,4 @@
-import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -6,6 +6,12 @@ import { resolve } from "node:path";
 const LOCAL_API_URL = "http://127.0.0.1:54321";
 const LOCAL_PROJECT_ID = "knowledge-decay-monitor-s1-02";
 const QUERY_TIMEOUT_MS = 5000;
+const MAX_QUERY_TIMEOUT_MS = 45_000;
+
+export interface LocalSqlSessionOptions {
+  /** A bounded client-side wait; database function statement limits remain authoritative. */
+  queryTimeoutMs?: number;
+}
 
 export class LocalSqlError extends Error {
   constructor(readonly sqlState: string | null, reason: "query" | "timeout" | "session") {
@@ -48,14 +54,21 @@ function localDatabaseContainer() {
   return matches[0];
 }
 
-export async function openLocalSqlSession(applicationName: string): Promise<LocalSqlSession> {
+export async function openLocalSqlSession(
+  applicationName: string,
+  options: LocalSqlSessionOptions = {},
+): Promise<LocalSqlSession> {
   if (!/^kdm_[a-z0-9_]{1,48}$/.test(applicationName)) {
     throw new Error("The local SQL application name is not a test marker.");
+  }
+  const queryTimeoutMs = options.queryTimeoutMs ?? QUERY_TIMEOUT_MS;
+  if (!Number.isInteger(queryTimeoutMs) || queryTimeoutMs < 1000 || queryTimeoutMs > MAX_QUERY_TIMEOUT_MS) {
+    throw new Error("The local SQL query timeout must be between 1000 and 45000 milliseconds.");
   }
   const container = localDatabaseContainer();
   const child = spawn(
     "docker",
-    ["exec", "-i", container, "psql", "-XAt", "-U", "postgres", "-d", "postgres"],
+    ["exec", "-i", container, "sh", "-c", "exec psql -XAt -U postgres -d postgres 2>&1"],
     { stdio: ["pipe", "pipe", "pipe"], windowsHide: true },
   );
   let stdoutBuffer = "";
@@ -80,7 +93,8 @@ export async function openLocalSqlSession(applicationName: string): Promise<Loca
       stdoutBuffer = stdoutBuffer.slice(newline + 1);
       if (!active) continue;
       if (line === active.marker) {
-        const sqlState = [...active.errors.matchAll(/(?:ERROR|FATAL):\s*(\d{5}):/g)].at(-1)?.[1] ?? null;
+        const sqlState = [...`${active.output.join("\n")}\n${active.errors}`
+          .matchAll(/(?:ERROR|FATAL):\s*(\d{5}):/g)].at(-1)?.[1] ?? null;
         const request = active;
         active = null;
         clearTimeout(request.timer);
@@ -131,7 +145,7 @@ export async function openLocalSqlSession(applicationName: string): Promise<Loca
           closed = true;
           child.kill();
           rejectQuery(new LocalSqlError(null, "timeout"));
-        }, QUERY_TIMEOUT_MS),
+        }, queryTimeoutMs),
       };
       active = request;
       child.stdin.write(`${sql}\n\\echo ${marker}\n`);

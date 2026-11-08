@@ -52,6 +52,12 @@ jobs:
       - name: Unit tests
         run: pnpm test:unit
 
+      - name: Edge notification Sentry test (runtime network disabled)
+        run: pnpm dlx deno@2.9.6 test --config supabase/functions/dispatch-notifications/deno.json --node-modules-dir=none --allow-env tests/edge/notifications-sentry.test.ts
+
+      - name: Verify S1 to S2-01 to S2-02 credits upgrade
+        run: node scripts/check-analysis-upgrade.mjs
+
       - name: Start disposable local Supabase
         run: node scripts/local-supabase-lifecycle.mjs start
 

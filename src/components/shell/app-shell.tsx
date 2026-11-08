@@ -40,6 +40,7 @@ export function AppShell({ workspaceName, fullName, role, children }: AppShellPr
 
   const isHomeActive = pathname === "/app";
   const isRepositoryActive = pathname.startsWith("/repository");
+  const isCreditsActive = pathname.startsWith("/credits");
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
@@ -94,6 +95,15 @@ export function AppShell({ workspaceName, fullName, role, children }: AppShellPr
               Repository
             </Link>
           ) : null}
+          <Link
+            href="/credits"
+            aria-current={isCreditsActive ? "page" : undefined}
+            className={`shrink-0 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+              isCreditsActive ? "bg-cyan-50 font-semibold text-cyan-950" : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+            }`}
+          >
+            Credits
+          </Link>
         </nav>
 
         <main className="min-w-0 px-4 py-8 sm:px-6 lg:px-10 lg:py-10">

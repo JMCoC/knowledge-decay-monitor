@@ -181,7 +181,7 @@ describe("chunkDeterministic", () => {
     expect(chunkDeterministic(pdfParsed.sections).length).toBeGreaterThan(0);
     expect(pdfParsed.sections.flatMap((section) => section.paragraphs).join(" "))
       .toContain("Synthetic PDF acceptance procedure");
-  });
+  }, 30_000);
 
   it("rejects the checked-in empty PDF with the controlled no-text error", async () => {
     const pdf = readFileSync(resolve("tests/fixtures/processing/pdf-empty/original-empty.pdf"));

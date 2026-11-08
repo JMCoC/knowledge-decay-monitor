@@ -114,6 +114,51 @@ describe("product operation telemetry privacy", () => {
     expect(sentry.withScope).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps analysis failures free of document text, confidence, prompts, provider output, and signed URLs", () => {
+    captureOperationFailure({
+      module: "analysis",
+      operation: "run",
+      code: "INTERNAL_ERROR",
+      correlationId,
+      documentText: "PRIVATE_DOCUMENT_TEXT",
+      confidence: 0.99,
+      prompt: "PRIVATE_PROMPT",
+      providerResponse: "PRIVATE_PROVIDER_OUTPUT",
+      signedUrl: "PRIVATE_SIGNED_URL",
+      filename: "PRIVATE_FILENAME",
+    } as never);
+
+    const tags = Object.fromEntries(sentry.scope.setTag.mock.calls);
+    expect(tags).toEqual({
+      "kdm.safe": "true",
+      module: "analysis",
+      operation: "run",
+      code: "INTERNAL_ERROR",
+      correlation_id: correlationId,
+      runtime: "server",
+      synthetic: "false",
+    });
+    expect(JSON.stringify(tags)).not.toMatch(/PRIVATE_|confidence|prompt|providerResponse|signedUrl|filename/i);
+
+    const safeEvent = filterSentryEvent({
+      message: "PRIVATE_DOCUMENT_TEXT",
+      tags,
+      request: { url: "PRIVATE_SIGNED_URL" },
+      extra: {
+        confidence: 0.99,
+        prompt: "PRIVATE_PROMPT",
+        providerResponse: "PRIVATE_PROVIDER_OUTPUT",
+        filename: "PRIVATE_FILENAME",
+      },
+      exception: { values: [{ value: "PRIVATE_PROVIDER_OUTPUT" }] },
+    } as never);
+    expect(safeEvent).toMatchObject({
+      message: "Product operation failed",
+      tags: { module: "analysis", operation: "run", code: "INTERNAL_ERROR" },
+    });
+    expect(JSON.stringify(safeEvent)).not.toMatch(/PRIVATE_|confidence|prompt|providerResponse|signedUrl|filename/i);
+  });
+
   it("keeps retry telemetry identifier-only even when called with hostile extra fields", () => {
     captureOperationFailure({
       module: "ingestion",
