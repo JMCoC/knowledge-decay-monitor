@@ -271,6 +271,54 @@ export type Database = {
           },
         ]
       }
+      audit_events: {
+        Row: {
+          action: Database["public"]["Enums"]["review_audit_action"]
+          actor_id: string
+          entity_id: string
+          entity_type: Database["public"]["Enums"]["review_audit_entity_type"]
+          id: string
+          metadata: Json
+          occurred_at: string
+          workspace_id: string
+        }
+        Insert: {
+          action: Database["public"]["Enums"]["review_audit_action"]
+          actor_id: string
+          entity_id: string
+          entity_type: Database["public"]["Enums"]["review_audit_entity_type"]
+          id: string
+          metadata?: Json
+          occurred_at?: string
+          workspace_id: string
+        }
+        Update: {
+          action?: Database["public"]["Enums"]["review_audit_action"]
+          actor_id?: string
+          entity_id?: string
+          entity_type?: Database["public"]["Enums"]["review_audit_entity_type"]
+          id?: string
+          metadata?: Json
+          occurred_at?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "audit_events_actor_id_workspace_id_fkey"
+            columns: ["actor_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "audit_events_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       correction_approval_contributions: {
         Row: {
           approval_id: string
@@ -1503,7 +1551,7 @@ export type Database = {
       }
       notification_events: {
         Row: {
-          analysis_id: string
+          analysis_id: string | null
           attempt_count: number
           created_at: string
           error_code: string | null
@@ -1514,11 +1562,15 @@ export type Database = {
           recipient_id: string
           sent_at: string | null
           status: Database["public"]["Enums"]["notification_status"]
-          type: Database["public"]["Enums"]["notification_type"]
+          type: Database["public"]["Enums"]["notification_type"] | null
+          workflow_event_id: string | null
+          workflow_type:
+            | Database["public"]["Enums"]["workflow_notification_type"]
+            | null
           workspace_id: string
         }
         Insert: {
-          analysis_id: string
+          analysis_id?: string | null
           attempt_count?: number
           created_at?: string
           error_code?: string | null
@@ -1529,11 +1581,15 @@ export type Database = {
           recipient_id: string
           sent_at?: string | null
           status?: Database["public"]["Enums"]["notification_status"]
-          type: Database["public"]["Enums"]["notification_type"]
+          type?: Database["public"]["Enums"]["notification_type"] | null
+          workflow_event_id?: string | null
+          workflow_type?:
+            | Database["public"]["Enums"]["workflow_notification_type"]
+            | null
           workspace_id: string
         }
         Update: {
-          analysis_id?: string
+          analysis_id?: string | null
           attempt_count?: number
           created_at?: string
           error_code?: string | null
@@ -1544,7 +1600,11 @@ export type Database = {
           recipient_id?: string
           sent_at?: string | null
           status?: Database["public"]["Enums"]["notification_status"]
-          type?: Database["public"]["Enums"]["notification_type"]
+          type?: Database["public"]["Enums"]["notification_type"] | null
+          workflow_event_id?: string | null
+          workflow_type?:
+            | Database["public"]["Enums"]["workflow_notification_type"]
+            | null
           workspace_id?: string
         }
         Relationships: [
@@ -1567,6 +1627,13 @@ export type Database = {
             columns: ["recipient_id", "workspace_id"]
             isOneToOne: false
             referencedRelation: "profiles"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "notification_events_workflow_event_workspace_fkey"
+            columns: ["workflow_event_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "audit_events"
             referencedColumns: ["id", "workspace_id"]
           },
         ]
@@ -1937,7 +2004,7 @@ export type Database = {
       claim_notification_event: {
         Args: { p_event_id: string }
         Returns: {
-          analysis_id: string
+          analysis_id: string | null
           attempt_count: number
           created_at: string
           error_code: string | null
@@ -1948,7 +2015,11 @@ export type Database = {
           recipient_id: string
           sent_at: string | null
           status: Database["public"]["Enums"]["notification_status"]
-          type: Database["public"]["Enums"]["notification_type"]
+          type: Database["public"]["Enums"]["notification_type"] | null
+          workflow_event_id: string | null
+          workflow_type:
+            | Database["public"]["Enums"]["workflow_notification_type"]
+            | null
           workspace_id: string
         }[]
         SetofOptions: {
@@ -2415,6 +2486,24 @@ export type Database = {
         | "processing"
         | "ready"
         | "processing_failed"
+      review_audit_action:
+        | "finding_status_changed"
+        | "finding_severity_changed"
+        | "finding_assigned"
+        | "correction_round_prepared"
+        | "correction_round_opened"
+        | "correction_round_cancelled"
+        | "correction_submission_confirmed"
+        | "correction_candidate_selected"
+        | "correction_items_returned"
+        | "correction_candidate_approved"
+        | "correction_candidate_rejected"
+        | "correction_candidate_invalidated"
+      review_audit_entity_type:
+        | "finding"
+        | "correction_round"
+        | "correction_submission"
+        | "correction_candidate"
       upload_cleanup_status: "pending" | "absent" | "failed"
       upload_control_mode: "paused" | "active"
       upload_hash_source: "client_declared" | "legacy_reconciled"
@@ -2425,6 +2514,10 @@ export type Database = {
         | "recovering"
         | "confirmed"
       version_status: "active" | "historical" | "pending_approval" | "rejected"
+      workflow_notification_type:
+        | "assignment"
+        | "version_approved"
+        | "version_rejected"
       workspace_role: "Admin" | "QA Lead" | "Member"
     }
     CompositeTypes: {
@@ -2622,6 +2715,26 @@ export const Constants = {
         "ready",
         "processing_failed",
       ],
+      review_audit_action: [
+        "finding_status_changed",
+        "finding_severity_changed",
+        "finding_assigned",
+        "correction_round_prepared",
+        "correction_round_opened",
+        "correction_round_cancelled",
+        "correction_submission_confirmed",
+        "correction_candidate_selected",
+        "correction_items_returned",
+        "correction_candidate_approved",
+        "correction_candidate_rejected",
+        "correction_candidate_invalidated",
+      ],
+      review_audit_entity_type: [
+        "finding",
+        "correction_round",
+        "correction_submission",
+        "correction_candidate",
+      ],
       upload_cleanup_status: ["pending", "absent", "failed"],
       upload_control_mode: ["paused", "active"],
       upload_hash_source: ["client_declared", "legacy_reconciled"],
@@ -2633,6 +2746,11 @@ export const Constants = {
         "confirmed",
       ],
       version_status: ["active", "historical", "pending_approval", "rejected"],
+      workflow_notification_type: [
+        "assignment",
+        "version_approved",
+        "version_rejected",
+      ],
       workspace_role: ["Admin", "QA Lead", "Member"],
     },
   },

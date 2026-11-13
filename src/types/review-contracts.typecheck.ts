@@ -10,7 +10,11 @@ import type {
   ReviewFindingStatus,
   ReserveCorrectionInput,
 } from "./review-contracts";
-import type { CorrectionDecisionOutcome } from "./review-internal";
+import type {
+  CorrectionDecisionOutcome,
+  ReviewAuditAction,
+  WorkflowNotificationKind,
+} from "./review-internal";
 import type { Database } from "./database";
 import type { ActionErrorCode, ActionResult } from "./contracts";
 
@@ -50,6 +54,14 @@ export type CorrectionSelectionKindMatchesDatabase = Assert<Equal<
 export type CorrectionDecisionOutcomeMatchesDatabase = Assert<Equal<
   CorrectionDecisionOutcome,
   Database["public"]["Enums"]["correction_decision_outcome"]
+>>;
+export type ReviewAuditActionMatchesDatabase = Assert<Equal<
+  ReviewAuditAction,
+  Database["public"]["Enums"]["review_audit_action"]
+>>;
+export type WorkflowNotificationKindMatchesDatabase = Assert<Equal<
+  WorkflowNotificationKind,
+  Database["public"]["Enums"]["workflow_notification_type"]
 >>;
 
 declare const corrections: CorrectionIngestionApi;

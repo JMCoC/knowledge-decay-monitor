@@ -68,6 +68,22 @@ begin
 end;
 $$;
 
+create function pg_temp.append_review_audit_fixture(
+  p_actor_id uuid,
+  p_action text,
+  p_entity_type text,
+  p_entity_id uuid,
+  p_metadata jsonb,
+  p_event_id uuid
+) returns uuid
+language sql
+set search_path = pg_temp, public, private
+as $$
+  select private.append_review_audit(
+    p_actor_id, p_action, p_entity_type, p_entity_id, p_metadata, p_event_id
+  )
+$$;
+
 create function pg_temp.create_review_round(
   p_workspace_id uuid,
   p_mode public.correction_round_mode,

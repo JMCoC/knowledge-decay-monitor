@@ -38,31 +38,75 @@ export type ReviewAuditAction =
   | "correction_candidate_rejected"
   | "correction_candidate_invalidated";
 
-export interface ReviewAuditMetadata {
-  previousStatus?: ReviewFindingStatus;
-  status?: ReviewFindingStatus;
-  previousSeverity?: FindingSeverity;
-  severity?: FindingSeverity;
-  assigneeId?: string | null;
-  roundId?: string;
-  submissionId?: string;
-  candidateId?: string;
-  outcome?: CorrectionDecisionOutcome;
-  retention?: "retain" | "delete";
-}
+export type ReviewAuditMetadata =
+  | { previousStatus: ReviewFindingStatus; status: ReviewFindingStatus }
+  | { previousSeverity: FindingSeverity; severity: FindingSeverity }
+  | { assigneeId: string | null }
+  | { roundId: string }
+  | { roundId: string; outcome: Exclude<CorrectionDecisionOutcome, "approved"> }
+  | { roundId: string; submissionId: string }
+  | { candidateId: string; roundId: string }
+  | { candidateId: string; outcome: "approved"; retention: "retain" | "delete" }
+  | { candidateId: string; outcome: Exclude<CorrectionDecisionOutcome, "approved"> };
 
-export interface ReviewAuditAppend {
+interface ReviewAuditAppendBase {
   context: VerifiedReviewContext;
-  action: ReviewAuditAction;
-  entityType:
-    | "finding"
-    | "correction_round"
-    | "correction_submission"
-    | "correction_candidate";
   entityId: string;
   eventId: string;
-  metadata: ReviewAuditMetadata;
 }
+
+export type ReviewAuditAppend = ReviewAuditAppendBase & (
+  | {
+      action: "finding_status_changed";
+      entityType: "finding";
+      metadata: { previousStatus: ReviewFindingStatus; status: ReviewFindingStatus };
+    }
+  | {
+      action: "finding_severity_changed";
+      entityType: "finding";
+      metadata: { previousSeverity: FindingSeverity; severity: FindingSeverity };
+    }
+  | {
+      action: "finding_assigned";
+      entityType: "finding";
+      metadata: { assigneeId: string | null };
+    }
+  | {
+      action: "correction_round_prepared" | "correction_round_opened" | "correction_round_cancelled";
+      entityType: "correction_round";
+      metadata: { roundId: string };
+    }
+  | {
+      action: "correction_submission_confirmed";
+      entityType: "correction_submission";
+      metadata: { roundId: string; submissionId: string };
+    }
+  | {
+      action: "correction_candidate_selected";
+      entityType: "correction_candidate";
+      metadata: { candidateId: string; roundId: string };
+    }
+  | {
+      action: "correction_items_returned";
+      entityType: "correction_round";
+      metadata: { roundId: string; outcome: "rejected" | "invalidated" };
+    }
+  | {
+      action: "correction_candidate_approved";
+      entityType: "correction_candidate";
+      metadata: { candidateId: string; outcome: "approved"; retention: "retain" | "delete" };
+    }
+  | {
+      action: "correction_candidate_rejected";
+      entityType: "correction_candidate";
+      metadata: { candidateId: string; outcome: "rejected" };
+    }
+  | {
+      action: "correction_candidate_invalidated";
+      entityType: "correction_candidate";
+      metadata: { candidateId: string; outcome: "invalidated" };
+    }
+);
 
 export type WorkflowNotificationKind =
   | "assignment"
