@@ -4,6 +4,7 @@ import type {
   CorrectionRoundItemSnapshot,
   FindingReviewSnapshot,
   MemberAssignment,
+  OwnApprovalItem,
   ReviewRound,
 } from "@/types/contracts";
 
@@ -232,6 +233,14 @@ export const returnedMemberAssignmentFixture: MemberAssignment = {
     createdAt: "2026-11-10T11:00:00.000Z",
   }],
   canSubmit: true,
+};
+
+/** Minimal own contribution history remains available after assignment access ends. */
+export const ownApprovalItemFixture: OwnApprovalItem = {
+  approvalId: "00000000-0000-4000-8000-000000000993",
+  documentId: "00000000-0000-4000-8000-000000000801",
+  approvedAt: "2026-11-12T09:00:00.000Z",
+  ownItemCount: 2,
 };
 
 /** Administrative proposals are allowed without fabricated Member assignments. */

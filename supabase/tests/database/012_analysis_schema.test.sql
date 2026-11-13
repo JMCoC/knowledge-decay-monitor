@@ -45,7 +45,8 @@ select is((
 select is((
   select array_agg(e.enumlabel::text order by e.enumsortorder) from pg_enum e
   where e.enumtypid = 'public.finding_status'::regtype
-), ARRAY['pending_review']::text[], 'S2 finding status stays pending review');
+), ARRAY['pending_review', 'confirmed', 'false_positive', 'update_planned', 'resolved']::text[],
+  'S3 review statuses are additive and preserve the S2 initial state');
 
 select has_column('public', 'analyses', 'workspace_id', 'Analysis carries its tenant');
 select has_column('public', 'analyses', 'reserved_credits', 'Analysis keeps historical reserved amount');
