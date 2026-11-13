@@ -33,4 +33,17 @@ describe("findings schemas", () => {
     expect(findingIdSchema.safeParse("123e4567-e89b-12d3-a456-426614174000").success).toBe(true);
     expect(findingIdSchema.safeParse("not-a-uuid").success).toBe(false);
   });
+
+  it.each([
+    "pending_review",
+    "confirmed",
+    "false_positive",
+    "update_planned",
+    "resolved",
+  ])("acepta el estado de revisión %s", (status) => {
+    expect(findingsQuerySchema.safeParse({
+      analysisId: "123e4567-e89b-12d3-a456-426614174000",
+      status,
+    }).success).toBe(true);
+  });
 });

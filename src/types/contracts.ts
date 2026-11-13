@@ -1,4 +1,5 @@
 import type { Database } from "./database.ts";
+import type { ReviewFindingStatus } from "./review-contracts";
 
 type Tables = Database["public"]["Tables"];
 type Enums = Database["public"]["Enums"];
@@ -208,7 +209,7 @@ export type AnalysisJobStatus = "queued" | "processing" | "completed" | "failed"
 export type AnalysisScopeRole = "source" | "comparison";
 export type FindingType = "contradiction" | "obsolescence";
 export type FindingSeverity = "High" | "Medium" | "Low";
-export type FindingStatus = "pending_review";
+export type FindingStatus = ReviewFindingStatus;
 export type CreditEventType = "Promotional" | "Reserved" | "Consumed" | "Released";
 
 export interface AnalysisPage<T> {

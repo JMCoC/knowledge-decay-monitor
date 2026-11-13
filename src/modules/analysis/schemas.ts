@@ -80,7 +80,13 @@ export type SelectionInput = z.infer<typeof selectionSchema>;
 
 const findingTypes = ["contradiction", "obsolescence"] as const;
 const findingSeverities = ["High", "Medium", "Low"] as const;
-const findingStatuses = ["pending_review"] as const;
+const findingStatuses = [
+  "pending_review",
+  "confirmed",
+  "false_positive",
+  "update_planned",
+  "resolved",
+] as const;
 
 export const findingIdSchema = z.string().uuid("Invalid finding ID.");
 

@@ -1,0 +1,69 @@
+\ir analysis-fixtures.psql
+\ir credit-fixtures.psql
+
+create temporary table review_fixture_case (
+  workspace_id uuid primary key,
+  admin_id uuid not null,
+  member_a_id uuid not null,
+  member_b_id uuid not null,
+  document_id uuid not null,
+  version_id uuid not null,
+  analysis_id uuid not null,
+  finding_a_id uuid not null,
+  finding_b_id uuid not null,
+  finding_c_id uuid not null
+) on commit drop;
+
+create function pg_temp.create_review_fixture_case() returns uuid
+language plpgsql
+set search_path = pg_temp, public, auth, extensions
+as $$
+declare
+  v_workspace uuid;
+  v_admin uuid;
+  v_member_a uuid := gen_random_uuid();
+  v_member_b uuid := gen_random_uuid();
+  v_analysis uuid;
+  v_document uuid;
+  v_version uuid;
+  v_chunk uuid;
+  v_finding_a uuid;
+  v_finding_b uuid;
+  v_finding_c uuid;
+begin
+  v_workspace := pg_temp.create_credit_workspace();
+  select user_id into strict v_admin
+  from pg_temp.credit_workspace where workspace_id = v_workspace;
+
+  insert into auth.users(id, email, aud, role) values
+    (v_member_a, 'review-' || v_member_a::text || '@example.test', 'authenticated', 'authenticated'),
+    (v_member_b, 'review-' || v_member_b::text || '@example.test', 'authenticated', 'authenticated');
+  insert into public.profiles(id, workspace_id, role, full_name, email) values
+    (v_member_a, v_workspace, 'Member', 'Synthetic review member A', 'review-' || v_member_a::text || '@example.test'),
+    (v_member_b, v_workspace, 'Member', 'Synthetic review member B', 'review-' || v_member_b::text || '@example.test');
+
+  v_analysis := pg_temp.create_analysis_fixture(v_workspace, v_admin, 'completed', 1);
+  select document_id, version_id, chunk_id into strict v_document, v_version, v_chunk
+  from pg_temp.analysis_case where analysis_id = v_analysis and ordinal = 1;
+
+  v_finding_a := pg_temp.insert_finding_row(v_analysis, v_workspace, 0.91);
+  v_finding_b := pg_temp.insert_finding_row(v_analysis, v_workspace, 0.82);
+  v_finding_c := pg_temp.insert_finding_row(v_analysis, v_workspace, 0.73);
+  update public.findings
+  set assignee_id = case id
+    when v_finding_a then v_member_a
+    when v_finding_b then v_member_b
+    when v_finding_c then v_member_a
+  end
+  where id in (v_finding_a, v_finding_b, v_finding_c);
+  perform pg_temp.insert_evidence_row(v_workspace, v_analysis, v_finding_a, v_document, v_version, v_chunk, 'Synthetic review evidence A');
+  perform pg_temp.insert_evidence_row(v_workspace, v_analysis, v_finding_b, v_document, v_version, v_chunk, 'Synthetic review evidence B');
+  perform pg_temp.insert_evidence_row(v_workspace, v_analysis, v_finding_c, v_document, v_version, v_chunk, 'Synthetic review evidence C');
+
+  insert into pg_temp.review_fixture_case values (
+    v_workspace, v_admin, v_member_a, v_member_b, v_document, v_version,
+    v_analysis, v_finding_a, v_finding_b, v_finding_c
+  );
+  return v_workspace;
+end;
+$$;

@@ -271,6 +271,767 @@ export type Database = {
           },
         ]
       }
+      correction_approval_contributions: {
+        Row: {
+          approval_id: string
+          approved_at: string
+          contributor_id: string
+          document_id: string
+          own_item_count: number
+          workspace_id: string
+        }
+        Insert: {
+          approval_id: string
+          approved_at?: string
+          contributor_id: string
+          document_id: string
+          own_item_count: number
+          workspace_id: string
+        }
+        Update: {
+          approval_id?: string
+          approved_at?: string
+          contributor_id?: string
+          document_id?: string
+          own_item_count?: number
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "correction_approval_contribut_approval_id_document_id_work_fkey"
+            columns: ["approval_id", "document_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "correction_candidate_decisions"
+            referencedColumns: ["id", "document_id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "correction_approval_contributi_contributor_id_workspace_id_fkey"
+            columns: ["contributor_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "correction_approval_contributions_document_id_workspace_id_fkey"
+            columns: ["document_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "documents"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "correction_approval_contributions_document_id_workspace_id_fkey"
+            columns: ["document_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "eligible_analysis_documents"
+            referencedColumns: ["document_id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "correction_approval_contributions_document_id_workspace_id_fkey"
+            columns: ["document_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "repository_documents"
+            referencedColumns: ["id", "workspace_id"]
+          },
+        ]
+      }
+      correction_candidate_decisions: {
+        Row: {
+          actor_id: string
+          candidate_id: string
+          created_at: string
+          document_id: string
+          id: string
+          outcome: Database["public"]["Enums"]["correction_decision_outcome"]
+          private_reason: string | null
+          retention: string | null
+          round_id: string
+          workspace_id: string
+        }
+        Insert: {
+          actor_id: string
+          candidate_id: string
+          created_at?: string
+          document_id: string
+          id?: string
+          outcome: Database["public"]["Enums"]["correction_decision_outcome"]
+          private_reason?: string | null
+          retention?: string | null
+          round_id: string
+          workspace_id: string
+        }
+        Update: {
+          actor_id?: string
+          candidate_id?: string
+          created_at?: string
+          document_id?: string
+          id?: string
+          outcome?: Database["public"]["Enums"]["correction_decision_outcome"]
+          private_reason?: string | null
+          retention?: string | null
+          round_id?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "correction_candidate_decision_candidate_id_round_id_docume_fkey"
+            columns: ["candidate_id", "round_id", "document_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "correction_candidates"
+            referencedColumns: ["id", "round_id", "document_id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "correction_candidate_decisions_actor_id_workspace_id_fkey"
+            columns: ["actor_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id", "workspace_id"]
+          },
+        ]
+      }
+      correction_candidate_items: {
+        Row: {
+          candidate_id: string
+          created_at: string
+          document_id: string
+          item_revision: number
+          round_id: string
+          round_item_id: string
+          submission_id: string
+          workspace_id: string
+        }
+        Insert: {
+          candidate_id: string
+          created_at?: string
+          document_id: string
+          item_revision: number
+          round_id: string
+          round_item_id: string
+          submission_id: string
+          workspace_id: string
+        }
+        Update: {
+          candidate_id?: string
+          created_at?: string
+          document_id?: string
+          item_revision?: number
+          round_id?: string
+          round_item_id?: string
+          submission_id?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "correction_candidate_items_candidate_id_round_id_document__fkey"
+            columns: ["candidate_id", "round_id", "document_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "correction_candidates"
+            referencedColumns: ["id", "round_id", "document_id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "correction_candidate_items_round_item_id_round_id_document_fkey"
+            columns: [
+              "round_item_id",
+              "round_id",
+              "document_id",
+              "workspace_id",
+            ]
+            isOneToOne: false
+            referencedRelation: "correction_round_items"
+            referencedColumns: ["id", "round_id", "document_id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "correction_candidate_items_submission_id_round_item_id_rou_fkey"
+            columns: [
+              "submission_id",
+              "round_item_id",
+              "round_id",
+              "document_id",
+              "workspace_id",
+            ]
+            isOneToOne: false
+            referencedRelation: "correction_submission_items"
+            referencedColumns: [
+              "submission_id",
+              "round_item_id",
+              "round_id",
+              "document_id",
+              "workspace_id",
+            ]
+          },
+        ]
+      }
+      correction_candidates: {
+        Row: {
+          base_version_id: string
+          coverage_revision: number
+          created_at: string
+          document_id: string
+          id: string
+          idempotency_key: string
+          revision: number
+          round_id: string
+          selected_by: string
+          selection_kind: Database["public"]["Enums"]["correction_selection_kind"]
+          source_submission_id: string | null
+          status: Database["public"]["Enums"]["correction_candidate_status"]
+          updated_at: string
+          version_id: string
+          workspace_id: string
+        }
+        Insert: {
+          base_version_id: string
+          coverage_revision?: number
+          created_at?: string
+          document_id: string
+          id?: string
+          idempotency_key: string
+          revision?: number
+          round_id: string
+          selected_by: string
+          selection_kind: Database["public"]["Enums"]["correction_selection_kind"]
+          source_submission_id?: string | null
+          status?: Database["public"]["Enums"]["correction_candidate_status"]
+          updated_at?: string
+          version_id: string
+          workspace_id: string
+        }
+        Update: {
+          base_version_id?: string
+          coverage_revision?: number
+          created_at?: string
+          document_id?: string
+          id?: string
+          idempotency_key?: string
+          revision?: number
+          round_id?: string
+          selected_by?: string
+          selection_kind?: Database["public"]["Enums"]["correction_selection_kind"]
+          source_submission_id?: string | null
+          status?: Database["public"]["Enums"]["correction_candidate_status"]
+          updated_at?: string
+          version_id?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "correction_candidates_base_version_id_document_id_workspac_fkey"
+            columns: ["base_version_id", "document_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "document_versions"
+            referencedColumns: ["id", "document_id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "correction_candidates_round_id_document_id_workspace_id_fkey"
+            columns: ["round_id", "document_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "correction_rounds"
+            referencedColumns: ["id", "document_id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "correction_candidates_selected_by_workspace_id_fkey"
+            columns: ["selected_by", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "correction_candidates_source_submission_id_round_id_docume_fkey"
+            columns: [
+              "source_submission_id",
+              "round_id",
+              "document_id",
+              "workspace_id",
+            ]
+            isOneToOne: false
+            referencedRelation: "correction_submissions"
+            referencedColumns: ["id", "round_id", "document_id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "correction_candidates_version_id_document_id_workspace_id_fkey"
+            columns: ["version_id", "document_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "document_versions"
+            referencedColumns: ["id", "document_id", "workspace_id"]
+          },
+        ]
+      }
+      correction_return_items: {
+        Row: {
+          created_at: string
+          document_id: string
+          previous_submission_id: string
+          reason: string
+          recipient_id: string
+          return_id: string
+          round_id: string
+          round_item_id: string
+          workspace_id: string
+        }
+        Insert: {
+          created_at?: string
+          document_id: string
+          previous_submission_id: string
+          reason: string
+          recipient_id: string
+          return_id: string
+          round_id: string
+          round_item_id: string
+          workspace_id: string
+        }
+        Update: {
+          created_at?: string
+          document_id?: string
+          previous_submission_id?: string
+          reason?: string
+          recipient_id?: string
+          return_id?: string
+          round_id?: string
+          round_item_id?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "correction_return_items_previous_submission_id_round_id_do_fkey"
+            columns: [
+              "previous_submission_id",
+              "round_id",
+              "document_id",
+              "workspace_id",
+            ]
+            isOneToOne: false
+            referencedRelation: "correction_submissions"
+            referencedColumns: ["id", "round_id", "document_id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "correction_return_items_recipient_id_workspace_id_fkey"
+            columns: ["recipient_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "correction_return_items_return_id_round_id_document_id_wor_fkey"
+            columns: ["return_id", "round_id", "document_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "correction_returns"
+            referencedColumns: ["id", "round_id", "document_id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "correction_return_items_round_item_id_round_id_document_id_fkey"
+            columns: [
+              "round_item_id",
+              "round_id",
+              "document_id",
+              "workspace_id",
+            ]
+            isOneToOne: false
+            referencedRelation: "correction_round_items"
+            referencedColumns: ["id", "round_id", "document_id", "workspace_id"]
+          },
+        ]
+      }
+      correction_returns: {
+        Row: {
+          actor_id: string
+          candidate_id: string | null
+          created_at: string
+          document_id: string
+          id: string
+          idempotency_key: string
+          round_id: string
+          workspace_id: string
+        }
+        Insert: {
+          actor_id: string
+          candidate_id?: string | null
+          created_at?: string
+          document_id: string
+          id?: string
+          idempotency_key: string
+          round_id: string
+          workspace_id: string
+        }
+        Update: {
+          actor_id?: string
+          candidate_id?: string | null
+          created_at?: string
+          document_id?: string
+          id?: string
+          idempotency_key?: string
+          round_id?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "correction_returns_actor_id_workspace_id_fkey"
+            columns: ["actor_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "correction_returns_candidate_id_round_id_document_id_works_fkey"
+            columns: ["candidate_id", "round_id", "document_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "correction_candidates"
+            referencedColumns: ["id", "round_id", "document_id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "correction_returns_round_id_document_id_workspace_id_fkey"
+            columns: ["round_id", "document_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "correction_rounds"
+            referencedColumns: ["id", "document_id", "workspace_id"]
+          },
+        ]
+      }
+      correction_round_items: {
+        Row: {
+          assignee_id: string | null
+          created_at: string
+          current_submission_id: string | null
+          document_id: string
+          finding_id: string
+          id: string
+          initial_assignee_id: string | null
+          revision: number
+          round_id: string
+          workspace_id: string
+        }
+        Insert: {
+          assignee_id?: string | null
+          created_at?: string
+          current_submission_id?: string | null
+          document_id: string
+          finding_id: string
+          id?: string
+          initial_assignee_id?: string | null
+          revision?: number
+          round_id: string
+          workspace_id: string
+        }
+        Update: {
+          assignee_id?: string | null
+          created_at?: string
+          current_submission_id?: string | null
+          document_id?: string
+          finding_id?: string
+          id?: string
+          initial_assignee_id?: string | null
+          revision?: number
+          round_id?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "correction_round_items_assignee_id_workspace_id_fkey"
+            columns: ["assignee_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "correction_round_items_current_submission_fk"
+            columns: [
+              "current_submission_id",
+              "round_id",
+              "document_id",
+              "workspace_id",
+            ]
+            isOneToOne: false
+            referencedRelation: "correction_submissions"
+            referencedColumns: ["id", "round_id", "document_id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "correction_round_items_finding_id_workspace_id_fkey"
+            columns: ["finding_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "analysis_findings"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "correction_round_items_finding_id_workspace_id_fkey"
+            columns: ["finding_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "findings"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "correction_round_items_initial_assignee_id_workspace_id_fkey"
+            columns: ["initial_assignee_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "correction_round_items_round_id_document_id_workspace_id_fkey"
+            columns: ["round_id", "document_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "correction_rounds"
+            referencedColumns: ["id", "document_id", "workspace_id"]
+          },
+        ]
+      }
+      correction_rounds: {
+        Row: {
+          active_candidate_id: string | null
+          base_version_id: string
+          created_at: string
+          created_by: string
+          document_id: string
+          id: string
+          mode: Database["public"]["Enums"]["correction_round_mode"]
+          opened_at: string | null
+          revision: number
+          status: Database["public"]["Enums"]["correction_round_status"]
+          updated_at: string
+          workspace_id: string
+        }
+        Insert: {
+          active_candidate_id?: string | null
+          base_version_id: string
+          created_at?: string
+          created_by: string
+          document_id: string
+          id?: string
+          mode: Database["public"]["Enums"]["correction_round_mode"]
+          opened_at?: string | null
+          revision?: number
+          status?: Database["public"]["Enums"]["correction_round_status"]
+          updated_at?: string
+          workspace_id: string
+        }
+        Update: {
+          active_candidate_id?: string | null
+          base_version_id?: string
+          created_at?: string
+          created_by?: string
+          document_id?: string
+          id?: string
+          mode?: Database["public"]["Enums"]["correction_round_mode"]
+          opened_at?: string | null
+          revision?: number
+          status?: Database["public"]["Enums"]["correction_round_status"]
+          updated_at?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "correction_rounds_active_candidate_fk"
+            columns: [
+              "active_candidate_id",
+              "id",
+              "document_id",
+              "workspace_id",
+            ]
+            isOneToOne: false
+            referencedRelation: "correction_candidates"
+            referencedColumns: ["id", "round_id", "document_id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "correction_rounds_base_version_id_document_id_workspace_id_fkey"
+            columns: ["base_version_id", "document_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "document_versions"
+            referencedColumns: ["id", "document_id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "correction_rounds_created_by_workspace_id_fkey"
+            columns: ["created_by", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "correction_rounds_document_id_workspace_id_fkey"
+            columns: ["document_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "documents"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "correction_rounds_document_id_workspace_id_fkey"
+            columns: ["document_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "eligible_analysis_documents"
+            referencedColumns: ["document_id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "correction_rounds_document_id_workspace_id_fkey"
+            columns: ["document_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "repository_documents"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "correction_rounds_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      correction_submission_items: {
+        Row: {
+          assignee_at_submit_id: string
+          created_at: string
+          document_id: string
+          expected_revision: number
+          round_id: string
+          round_item_id: string
+          submission_id: string
+          workspace_id: string
+        }
+        Insert: {
+          assignee_at_submit_id: string
+          created_at?: string
+          document_id: string
+          expected_revision: number
+          round_id: string
+          round_item_id: string
+          submission_id: string
+          workspace_id: string
+        }
+        Update: {
+          assignee_at_submit_id?: string
+          created_at?: string
+          document_id?: string
+          expected_revision?: number
+          round_id?: string
+          round_item_id?: string
+          submission_id?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "correction_submission_items_assignee_at_submit_id_workspac_fkey"
+            columns: ["assignee_at_submit_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "correction_submission_items_round_item_id_round_id_documen_fkey"
+            columns: [
+              "round_item_id",
+              "round_id",
+              "document_id",
+              "workspace_id",
+            ]
+            isOneToOne: false
+            referencedRelation: "correction_round_items"
+            referencedColumns: ["id", "round_id", "document_id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "correction_submission_items_submission_id_round_id_documen_fkey"
+            columns: [
+              "submission_id",
+              "round_id",
+              "document_id",
+              "workspace_id",
+            ]
+            isOneToOne: false
+            referencedRelation: "correction_submissions"
+            referencedColumns: ["id", "round_id", "document_id", "workspace_id"]
+          },
+        ]
+      }
+      correction_submissions: {
+        Row: {
+          base_version_id: string
+          confirmed_at: string | null
+          created_at: string
+          document_id: string
+          expires_at: string
+          id: string
+          idempotency_key: string
+          previous_submission_id: string | null
+          request_fingerprint: string
+          reserved_at: string
+          round_id: string
+          state: Database["public"]["Enums"]["correction_submission_state"]
+          submitter_id: string
+          version_id: string
+          workspace_id: string
+        }
+        Insert: {
+          base_version_id: string
+          confirmed_at?: string | null
+          created_at?: string
+          document_id: string
+          expires_at?: string
+          id?: string
+          idempotency_key: string
+          previous_submission_id?: string | null
+          request_fingerprint: string
+          reserved_at?: string
+          round_id: string
+          state?: Database["public"]["Enums"]["correction_submission_state"]
+          submitter_id: string
+          version_id: string
+          workspace_id: string
+        }
+        Update: {
+          base_version_id?: string
+          confirmed_at?: string | null
+          created_at?: string
+          document_id?: string
+          expires_at?: string
+          id?: string
+          idempotency_key?: string
+          previous_submission_id?: string | null
+          request_fingerprint?: string
+          reserved_at?: string
+          round_id?: string
+          state?: Database["public"]["Enums"]["correction_submission_state"]
+          submitter_id?: string
+          version_id?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "correction_submissions_base_version_id_document_id_workspa_fkey"
+            columns: ["base_version_id", "document_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "document_versions"
+            referencedColumns: ["id", "document_id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "correction_submissions_previous_submission_id_round_id_doc_fkey"
+            columns: [
+              "previous_submission_id",
+              "round_id",
+              "document_id",
+              "workspace_id",
+            ]
+            isOneToOne: false
+            referencedRelation: "correction_submissions"
+            referencedColumns: ["id", "round_id", "document_id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "correction_submissions_round_id_document_id_workspace_id_fkey"
+            columns: ["round_id", "document_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "correction_rounds"
+            referencedColumns: ["id", "document_id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "correction_submissions_submitter_id_workspace_id_fkey"
+            columns: ["submitter_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "correction_submissions_version_id_document_id_workspace_id_fkey"
+            columns: ["version_id", "document_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "document_versions"
+            referencedColumns: ["id", "document_id", "workspace_id"]
+          },
+        ]
+      }
       credit_ledger: {
         Row: {
           amount: number
@@ -433,6 +1194,7 @@ export type Database = {
           upload_state: Database["public"]["Enums"]["upload_state"] | null
           version_number: number
           version_status: Database["public"]["Enums"]["version_status"] | null
+          workflow_kind: string
           workspace_id: string
         }
         Insert: {
@@ -462,6 +1224,7 @@ export type Database = {
           upload_state?: Database["public"]["Enums"]["upload_state"] | null
           version_number: number
           version_status?: Database["public"]["Enums"]["version_status"] | null
+          workflow_kind?: string
           workspace_id?: string
         }
         Update: {
@@ -491,6 +1254,7 @@ export type Database = {
           upload_state?: Database["public"]["Enums"]["upload_state"] | null
           version_number?: number
           version_status?: Database["public"]["Enums"]["version_status"] | null
+          workflow_kind?: string
           workspace_id?: string
         }
         Relationships: [
@@ -673,6 +1437,7 @@ export type Database = {
           explanation: string
           fingerprint: string
           id: string
+          review_revision: number
           severity_current: Database["public"]["Enums"]["finding_severity"]
           severity_original: Database["public"]["Enums"]["finding_severity"]
           status: Database["public"]["Enums"]["finding_status"]
@@ -688,6 +1453,7 @@ export type Database = {
           explanation: string
           fingerprint: string
           id?: string
+          review_revision?: number
           severity_current: Database["public"]["Enums"]["finding_severity"]
           severity_original: Database["public"]["Enums"]["finding_severity"]
           status?: Database["public"]["Enums"]["finding_status"]
@@ -703,6 +1469,7 @@ export type Database = {
           explanation?: string
           fingerprint?: string
           id?: string
+          review_revision?: number
           severity_current?: Database["public"]["Enums"]["finding_severity"]
           severity_original?: Database["public"]["Enums"]["finding_severity"]
           status?: Database["public"]["Enums"]["finding_status"]
@@ -1598,6 +2365,32 @@ export type Database = {
       analysis_job_status: "queued" | "processing" | "completed" | "failed"
       analysis_scope_role: "source" | "comparison"
       analysis_status: "pending_reanalysis" | "analyzed"
+      correction_candidate_status:
+        | "reserved"
+        | "selected"
+        | "processing"
+        | "failed"
+        | "pending_approval"
+        | "approved"
+        | "rejected"
+        | "invalidated"
+      correction_decision_outcome: "approved" | "rejected" | "invalidated"
+      correction_round_mode: "assigned_findings" | "administrative"
+      correction_round_status:
+        | "draft"
+        | "collecting"
+        | "consolidating"
+        | "candidate_processing"
+        | "candidate_failed"
+        | "pending_approval"
+        | "approved"
+        | "cancelled"
+      correction_selection_kind: "direct" | "consolidated"
+      correction_submission_state:
+        | "reserved"
+        | "confirmed"
+        | "expired"
+        | "invalidated"
       credit_event_type: "Promotional" | "Reserved" | "Consumed" | "Released"
       document_category:
         | "SOP"
@@ -1608,7 +2401,12 @@ export type Database = {
         | "Engineering Guideline"
         | "Other"
       finding_severity: "High" | "Medium" | "Low"
-      finding_status: "pending_review"
+      finding_status:
+        | "pending_review"
+        | "confirmed"
+        | "false_positive"
+        | "update_planned"
+        | "resolved"
       finding_type: "contradiction" | "obsolescence"
       notification_status: "pending" | "sent" | "failed"
       notification_type: "analysis_completed" | "analysis_failed"
@@ -1768,6 +2566,35 @@ export const Constants = {
       analysis_job_status: ["queued", "processing", "completed", "failed"],
       analysis_scope_role: ["source", "comparison"],
       analysis_status: ["pending_reanalysis", "analyzed"],
+      correction_candidate_status: [
+        "reserved",
+        "selected",
+        "processing",
+        "failed",
+        "pending_approval",
+        "approved",
+        "rejected",
+        "invalidated",
+      ],
+      correction_decision_outcome: ["approved", "rejected", "invalidated"],
+      correction_round_mode: ["assigned_findings", "administrative"],
+      correction_round_status: [
+        "draft",
+        "collecting",
+        "consolidating",
+        "candidate_processing",
+        "candidate_failed",
+        "pending_approval",
+        "approved",
+        "cancelled",
+      ],
+      correction_selection_kind: ["direct", "consolidated"],
+      correction_submission_state: [
+        "reserved",
+        "confirmed",
+        "expired",
+        "invalidated",
+      ],
       credit_event_type: ["Promotional", "Reserved", "Consumed", "Released"],
       document_category: [
         "SOP",
@@ -1779,7 +2606,13 @@ export const Constants = {
         "Other",
       ],
       finding_severity: ["High", "Medium", "Low"],
-      finding_status: ["pending_review"],
+      finding_status: [
+        "pending_review",
+        "confirmed",
+        "false_positive",
+        "update_planned",
+        "resolved",
+      ],
       finding_type: ["contradiction", "obsolescence"],
       notification_status: ["pending", "sent", "failed"],
       notification_type: ["analysis_completed", "analysis_failed"],

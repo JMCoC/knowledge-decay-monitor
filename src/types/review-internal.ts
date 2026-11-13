@@ -22,6 +22,8 @@ export interface CoverageSnapshot {
   }[];
 }
 
+export type CorrectionDecisionOutcome = "approved" | "rejected" | "invalidated";
+
 export type ReviewAuditAction =
   | "finding_status_changed"
   | "finding_severity_changed"
@@ -45,7 +47,7 @@ export interface ReviewAuditMetadata {
   roundId?: string;
   submissionId?: string;
   candidateId?: string;
-  outcome?: "approved" | "rejected" | "invalidated";
+  outcome?: CorrectionDecisionOutcome;
   retention?: "retain" | "delete";
 }
 

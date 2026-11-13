@@ -21,6 +21,10 @@ export type ReviewFindingStatus =
 
 export type CorrectionRoundMode = "assigned_findings" | "administrative";
 
+export type CorrectionSubmissionState = "reserved" | "confirmed" | "expired" | "invalidated";
+
+export type CorrectionSelectionKind = "direct" | "consolidated";
+
 export type CorrectionRoundStatus =
   | "draft"
   | "collecting"
@@ -228,7 +232,7 @@ export interface RoundCoverageSnapshot {
 export interface CorrectionSubmissionSnapshot {
   submissionId: string;
   versionId: string;
-  state: "reserved" | "confirmed" | "expired" | "invalidated";
+  state: CorrectionSubmissionState;
   submitter: EligibleOwner;
   itemIds: string[];
   upload: UploadSnapshot;
@@ -238,7 +242,7 @@ export interface CorrectionSubmissionSnapshot {
 export interface CorrectionCandidateSnapshot {
   candidateId: string;
   versionId: string;
-  selectionKind: "direct" | "consolidated";
+  selectionKind: CorrectionSelectionKind;
   status: CorrectionCandidateStatus;
   processingStatus: ProcessingStatus;
   versionStatus: VersionStatus | null;
