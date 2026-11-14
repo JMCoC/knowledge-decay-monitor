@@ -2,9 +2,8 @@ import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { localSupabaseTarget } from "./local-supabase-target";
 
-const LOCAL_API_URL = "http://127.0.0.1:54321";
-const LOCAL_PROJECT_ID = "knowledge-decay-monitor-s1-02";
 const QUERY_TIMEOUT_MS = 5000;
 const MAX_QUERY_TIMEOUT_MS = 45_000;
 
@@ -14,7 +13,11 @@ export interface LocalSqlSessionOptions {
 }
 
 export class LocalSqlError extends Error {
-  constructor(readonly sqlState: string | null, reason: "query" | "timeout" | "session") {
+  constructor(
+    readonly sqlState: string | null,
+    reason: "query" | "timeout" | "session",
+    readonly safeContext: string | null = null,
+  ) {
     super(reason === "query"
       ? `Local SQL operation failed${sqlState ? ` (SQLSTATE ${sqlState})` : ""}.`
       : reason === "timeout"
@@ -24,6 +27,11 @@ export class LocalSqlError extends Error {
   }
 }
 
+function safeSqlContext(output: string) {
+  const context = [...output.matchAll(/PL\/pgSQL function ((?:pg_temp|private)\.[a-z0-9_]+)(?:\([^)]*\))? line (\d+)/gi)].at(-1);
+  return context ? `${context[1]}#${context[2]}` : null;
+}
+
 export interface LocalSqlSession {
   readonly pid: number;
   query(sql: string): Promise<string>;
@@ -31,25 +39,26 @@ export interface LocalSqlSession {
 }
 
 function localDatabaseContainer() {
-  if (process.env.KDM_LOCAL_SUPABASE_URL !== LOCAL_API_URL) {
+  const target = localSupabaseTarget();
+  if (process.env.KDM_LOCAL_SUPABASE_URL !== target.apiUrl) {
     throw new Error("Refusing to open SQL outside the expected local Supabase API.");
   }
   let config: string;
   let names: string;
   try {
-    config = readFileSync(resolve(process.cwd(), "supabase/config.toml"), "utf8");
+    config = readFileSync(resolve(target.workdir, "supabase/config.toml"), "utf8");
     names = execFileSync(
       "docker",
-      ["ps", "--filter", `name=supabase_db_${LOCAL_PROJECT_ID}`, "--format", "{{.Names}}"],
+      ["ps", "--filter", `name=supabase_db_${target.projectId}`, "--format", "{{.Names}}"],
       { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
     ).trim();
   } catch {
     throw new Error("The expected local Supabase project is unavailable.");
   }
-  if (!new RegExp(`^\\s*project_id\\s*=\\s*"${LOCAL_PROJECT_ID}"\\s*$`, "m").test(config)) {
+  if (!config.split(/\r?\n/).some((line) => line.trim() === `project_id = "${target.projectId}"`)) {
     throw new Error("The local Supabase project ID does not match the integration fixture.");
   }
-  const matches = names.split(/\r?\n/).filter((name) => name === `supabase_db_${LOCAL_PROJECT_ID}`);
+  const matches = names.split(/\r?\n/).filter((name) => name === `supabase_db_${target.projectId}`);
   if (matches.length !== 1) throw new Error("Expected exactly one local project database container.");
   return matches[0];
 }
@@ -95,10 +104,11 @@ export async function openLocalSqlSession(
       if (line === active.marker) {
         const sqlState = [...`${active.output.join("\n")}\n${active.errors}`
           .matchAll(/(?:ERROR|FATAL):\s*(\d{5}):/g)].at(-1)?.[1] ?? null;
+        const context = safeSqlContext(`${active.output.join("\n")}\n${active.errors}`);
         const request = active;
         active = null;
         clearTimeout(request.timer);
-        if (sqlState) request.reject(new LocalSqlError(sqlState, "query"));
+        if (sqlState) request.reject(new LocalSqlError(sqlState, "query", context));
         else request.resolve(request.output.join("\n").trim());
       } else {
         active.output.push(line);
@@ -121,7 +131,10 @@ export async function openLocalSqlSession(
     closed = true;
     if (active) {
       clearTimeout(active.timer);
-      active.reject(new LocalSqlError(null, "session"));
+      const sqlState = [...`${active.output.join("\n")}\n${active.errors}`
+        .matchAll(/(?:ERROR|FATAL):\s*(\d{5}):/g)].at(-1)?.[1] ?? null;
+      const context = safeSqlContext(`${active.output.join("\n")}\n${active.errors}`);
+      active.reject(new LocalSqlError(sqlState, sqlState ? "query" : "session", context));
       active = null;
     }
   });
@@ -155,7 +168,7 @@ export async function openLocalSqlSession(
   };
 
   try {
-    const identity = await query(`\\set VERBOSITY verbose\n\\set SHOW_CONTEXT never\nSET application_name = '${applicationName}';\nSELECT pg_backend_pid();`);
+    const identity = await query(`\\set VERBOSITY verbose\n\\set SHOW_CONTEXT always\nSET application_name = '${applicationName}';\nSELECT pg_backend_pid();`);
     const pid = Number(identity.split(/\r?\n/).at(-1));
     if (!Number.isInteger(pid) || pid < 1) throw new LocalSqlError(null, "session");
     return {

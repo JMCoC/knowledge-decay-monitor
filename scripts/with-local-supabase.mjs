@@ -33,6 +33,24 @@ export function runWithLocalSupabase({
     return 2;
   }
 
+  const reviewIsolationFile = "tests/integration/review-foundation-isolation.test.ts";
+  if (selected === "integration" && forwardedArgs.some((argument) => argument.replaceAll("\\", "/") === reviewIsolationFile)) {
+    const result = spawnCommand(process.execPath, [
+      resolve(PROJECT_ROOT, "scripts/run-review-isolated-integration.mjs"),
+      ...forwardedArgs,
+    ], {
+      cwd: PROJECT_ROOT,
+      env,
+      stdio: "inherit",
+      windowsHide: true,
+    });
+    if (result.error) {
+      logError("Could not start the disposable review integration runner.");
+      return 1;
+    }
+    return result.status ?? 1;
+  }
+
   let runtime;
   try {
     runtime = runtimeReader();

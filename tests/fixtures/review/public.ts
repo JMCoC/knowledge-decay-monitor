@@ -128,6 +128,22 @@ export const memberThreeFindingsRoundFixture: ReviewRound = {
   candidate: null,
 };
 
+/** A returned middle finding clears only its own coverage and preserves F1/F3. */
+export const partialReturnRoundFixture: ReviewRound = {
+  ...memberThreeFindingsRoundFixture,
+  status: "collecting",
+  revision: 4,
+  items: allItems.map((item) => item.itemId === itemTwo.itemId
+    ? { ...item, currentSubmissionId: null }
+    : item),
+  coverage: {
+    revision: 4,
+    complete: false,
+    coveredItemCount: 2,
+    requiredItemCount: 3,
+  },
+};
+
 const memberBGroupedSubmission: CorrectionSubmissionSnapshot = {
   ...groupedSubmission,
   submissionId: "00000000-0000-4000-8000-000000000503",

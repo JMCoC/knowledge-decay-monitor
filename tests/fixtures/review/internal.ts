@@ -27,6 +27,24 @@ export const groupedCoverageFixture: CoverageSnapshot = {
   ],
 };
 
+/** A partial return removes F2 while the latest confirmed F1/F3 files stay current. */
+export const partialReturnCoverageFixture: CoverageSnapshot = {
+  roundId: "00000000-0000-4000-8000-000000000701",
+  revision: 4,
+  items: [
+    {
+      itemId: "00000000-0000-4000-8000-000000000401",
+      submissionId: "00000000-0000-4000-8000-000000000501",
+      revision: 1,
+    },
+    {
+      itemId: "00000000-0000-4000-8000-000000000403",
+      submissionId: "00000000-0000-4000-8000-000000000502",
+      revision: 1,
+    },
+  ],
+};
+
 export const reviewAuditAppendFixture: ReviewAuditAppend = {
   context: {
     userId: "00000000-0000-4000-8000-000000000102",
