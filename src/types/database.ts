@@ -1763,9 +1763,12 @@ export type Database = {
       analysis_findings: {
         Row: {
           analysis_id: string | null
+          assignee_full_name: string | null
+          assignee_id: string | null
           created_at: string | null
           explanation: string | null
           id: string | null
+          review_revision: number | null
           severity_current:
             | Database["public"]["Enums"]["finding_severity"]
             | null
@@ -1790,6 +1793,13 @@ export type Database = {
             columns: ["analysis_id", "workspace_id"]
             isOneToOne: false
             referencedRelation: "analysis_runs"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "findings_assignee_id_workspace_id_fkey"
+            columns: ["assignee_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
             referencedColumns: ["id", "workspace_id"]
           },
         ]

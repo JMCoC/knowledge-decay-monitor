@@ -55,6 +55,16 @@ export function mapFindingRowToSummary(row: FindingRow): FindingSummary {
     throw new Error("Finding projection is missing required fields.");
   }
 
+  let assignee: FindingSummary["assignee"];
+  if (row.assignee_id === null) {
+    assignee = null;
+  } else {
+    if (!row.assignee_id || !row.assignee_full_name?.trim()) {
+      throw new Error("Finding assignee projection is incomplete.");
+    }
+    assignee = { id: row.assignee_id, fullName: row.assignee_full_name };
+  }
+
   return {
     id: row.id,
     analysisId: row.analysis_id,
@@ -63,7 +73,7 @@ export function mapFindingRowToSummary(row: FindingRow): FindingSummary {
     severityOriginal: row.severity_original,
     severityCurrent: row.severity_current,
     status: row.status,
-    assignee: null, // S2 invariant: Unassigned
+    assignee,
     createdAt: row.created_at,
   };
 }

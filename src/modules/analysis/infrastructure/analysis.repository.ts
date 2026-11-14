@@ -104,7 +104,7 @@ export async function findFindingsByAnalysis(
   let query = supabase
     .from("analysis_findings")
     .select(
-      "id, workspace_id, analysis_id, type, severity_original, severity_current, explanation, status, created_at, updated_at",
+      "id, workspace_id, analysis_id, type, severity_original, severity_current, explanation, status, created_at, updated_at, review_revision, assignee_id, assignee_full_name",
       { count: "exact" },
     )
     .eq("workspace_id", params.workspaceId)
@@ -119,10 +119,9 @@ export async function findFindingsByAnalysis(
   if (params.status) {
     query = query.eq("status", params.status);
   }
-
-  // S2 exposes only unassigned findings. The validated `all` and `unassigned`
-  // options therefore return the same set until assignment is introduced in S3.
-  void params.assignee;
+  if (params.assignee === "unassigned") {
+    query = query.is("assignee_id", null);
+  }
 
   query = query
     .order("severity_current", { ascending: true })
@@ -147,7 +146,7 @@ export async function findFindingWithEvidence(
 ) {
   const { data: finding, error: findingError } = await supabase
     .from("analysis_findings")
-    .select("id, workspace_id, analysis_id, type, severity_original, severity_current, explanation, status, created_at, updated_at")
+    .select("id, workspace_id, analysis_id, type, severity_original, severity_current, explanation, status, created_at, updated_at, review_revision, assignee_id, assignee_full_name")
     .eq("workspace_id", params.workspaceId)
     .eq("id", params.findingId)
     .maybeSingle();

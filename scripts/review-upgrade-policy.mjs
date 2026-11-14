@@ -16,6 +16,7 @@ const s302Names = new Set([
   "20261114150300_s3_02_review_command_support.sql",
   "20261114150400_s3_02_finding_commands.sql",
   "20261114150500_s3_02_round_commands.sql",
+  "20261114150600_s3_02_findings_projection.sql",
 ]);
 
 function migrationName(path) {
