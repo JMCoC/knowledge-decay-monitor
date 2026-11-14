@@ -164,8 +164,8 @@ select lives_ok(format(
 ), 'An evidenced confirmed finding assigned to a Member can open');
 select lives_ok(format(
   'update public.correction_rounds set status = %L, opened_at = now(), revision = revision + 1 where id = %L',
-  'collecting', (select round_id from pg_temp.review_integrity_rounds where round_name = 'admin')
-), 'An administrative proposal can open without Member items');
+  'consolidating', (select round_id from pg_temp.review_integrity_rounds where round_name = 'admin')
+), 'An administrative proposal opens directly to consolidation without Member items');
 select throws_ok(format(
   'insert into public.correction_round_items(workspace_id, round_id, document_id, finding_id, initial_assignee_id, assignee_id) '
   || 'select f.workspace_id, %L, f.document_id, f.finding_c_id, f.member_a_id, f.member_a_id '
@@ -484,9 +484,6 @@ select is((select c.version_id from public.correction_candidates c
    where s.id = (select submission_id from pg_temp.review_integrity_submissions where submission_name = 'direct_member_a_group')),
   'Direct selection preserves the original submission version');
 
-update public.correction_rounds
-set status = 'consolidating', revision = revision + 1
-where id = (select round_id from pg_temp.review_integrity_rounds where round_name = 'admin');
 insert into pg_temp.review_integrity_candidates(candidate_name, candidate_id)
 select 'admin_rejected', pg_temp.create_consolidated_candidate(r.round_id, f.admin_id, false)
 from pg_temp.review_integrity_rounds r

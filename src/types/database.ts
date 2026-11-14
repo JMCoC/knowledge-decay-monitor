@@ -736,36 +736,42 @@ export type Database = {
       correction_round_items: {
         Row: {
           assignee_id: string | null
+          coverage_revision: number
           created_at: string
           current_submission_id: string | null
           document_id: string
           finding_id: string
           id: string
           initial_assignee_id: string | null
+          opened_assignee_id: string | null
           revision: number
           round_id: string
           workspace_id: string
         }
         Insert: {
           assignee_id?: string | null
+          coverage_revision?: number
           created_at?: string
           current_submission_id?: string | null
           document_id: string
           finding_id: string
           id?: string
           initial_assignee_id?: string | null
+          opened_assignee_id?: string | null
           revision?: number
           round_id: string
           workspace_id: string
         }
         Update: {
           assignee_id?: string | null
+          coverage_revision?: number
           created_at?: string
           current_submission_id?: string | null
           document_id?: string
           finding_id?: string
           id?: string
           initial_assignee_id?: string | null
+          opened_assignee_id?: string | null
           revision?: number
           round_id?: string
           workspace_id?: string
@@ -812,6 +818,13 @@ export type Database = {
             referencedColumns: ["id", "workspace_id"]
           },
           {
+            foreignKeyName: "correction_round_items_opened_assignee_workspace_fkey"
+            columns: ["opened_assignee_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
             foreignKeyName: "correction_round_items_round_id_document_id_workspace_id_fkey"
             columns: ["round_id", "document_id", "workspace_id"]
             isOneToOne: false
@@ -824,6 +837,7 @@ export type Database = {
         Row: {
           active_candidate_id: string | null
           base_version_id: string
+          coverage_revision: number
           created_at: string
           created_by: string
           document_id: string
@@ -838,6 +852,7 @@ export type Database = {
         Insert: {
           active_candidate_id?: string | null
           base_version_id: string
+          coverage_revision?: number
           created_at?: string
           created_by: string
           document_id: string
@@ -852,6 +867,7 @@ export type Database = {
         Update: {
           active_candidate_id?: string | null
           base_version_id?: string
+          coverage_revision?: number
           created_at?: string
           created_by?: string
           document_id?: string
@@ -2499,6 +2515,7 @@ export type Database = {
         | "correction_candidate_approved"
         | "correction_candidate_rejected"
         | "correction_candidate_invalidated"
+        | "correction_round_draft_updated"
       review_audit_entity_type:
         | "finding"
         | "correction_round"
@@ -2728,6 +2745,7 @@ export const Constants = {
         "correction_candidate_approved",
         "correction_candidate_rejected",
         "correction_candidate_invalidated",
+        "correction_round_draft_updated",
       ],
       review_audit_entity_type: [
         "finding",

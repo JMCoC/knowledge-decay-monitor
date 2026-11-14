@@ -239,11 +239,13 @@ export interface CorrectionRoundItemSnapshot {
   finding: FindingReviewSnapshot;
   initialAssignee: EligibleOwner | null;
   assignee: EligibleOwner | null;
+  /** Current authorization revision; confirmed coverage has its own revision. */
   revision: number;
   currentSubmissionId: string | null;
 }
 
 export interface RoundCoverageSnapshot {
+  /** The round coverage_revision, which changes only when covered contributions change. */
   revision: number;
   complete: boolean;
   coveredItemCount: number;
@@ -268,6 +270,7 @@ export interface CorrectionCandidateSnapshot {
   processingStatus: ProcessingStatus;
   versionStatus: VersionStatus | null;
   revision: number;
+  /** The round coverage_revision captured when this candidate was selected. */
   coverageRevision: number;
   itemIds: string[];
 }

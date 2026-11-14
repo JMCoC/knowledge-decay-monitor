@@ -23,9 +23,6 @@ order by f.workspace_id;
 update pg_temp.audit_outbox_fixtures f
 set round_id = pg_temp.create_review_round(f.workspace_id, 'administrative', '{}'::uuid[])
 where f.workspace_id = (select workspace_id from pg_temp.audit_outbox_fixtures order by workspace_id limit 1);
-update public.correction_rounds r
-set status = 'consolidating', revision = revision + 1
-where r.id = (select round_id from pg_temp.audit_outbox_fixtures order by workspace_id limit 1);
 update pg_temp.audit_outbox_fixtures f
 set candidate_id = pg_temp.create_consolidated_candidate(f.round_id, f.admin_id)
 where f.round_id is not null;

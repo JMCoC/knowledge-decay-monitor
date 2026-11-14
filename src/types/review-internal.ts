@@ -11,13 +11,15 @@ export interface VerifiedReviewContext {
   role: WorkspaceRole;
 }
 
-/** Snapshot used by a transaction to prove which confirmed files cover a round. */
+/** Snapshot of confirmed coverage; its revisions use coverage clocks, not assignment permissions. */
 export interface CoverageSnapshot {
   roundId: string;
+  /** correction_rounds.coverage_revision */
   revision: number;
   items: {
     itemId: string;
     submissionId: string;
+    /** correction_round_items.coverage_revision */
     revision: number;
   }[];
 }
@@ -29,6 +31,7 @@ export type ReviewAuditAction =
   | "finding_severity_changed"
   | "finding_assigned"
   | "correction_round_prepared"
+  | "correction_round_draft_updated"
   | "correction_round_opened"
   | "correction_round_cancelled"
   | "correction_submission_confirmed"
@@ -72,7 +75,11 @@ export type ReviewAuditAppend = ReviewAuditAppendBase & (
       metadata: { previousAssigneeId: string | null; assigneeId: string | null };
     }
   | {
-      action: "correction_round_prepared" | "correction_round_opened" | "correction_round_cancelled";
+      action:
+        | "correction_round_prepared"
+        | "correction_round_draft_updated"
+        | "correction_round_opened"
+        | "correction_round_cancelled";
       entityType: "correction_round";
       metadata: { roundId: string };
     }
