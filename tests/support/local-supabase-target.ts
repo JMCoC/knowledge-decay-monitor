@@ -39,7 +39,7 @@ export function localSupabaseTarget(): LocalSupabaseTarget {
     const relativeRoot = relative(tempRoot, workdir);
     if (
       !/^kdm-review-[a-f0-9]{16}$/i.test(projectId)
-      || !basename(workdir).startsWith("kdm-s3-01-review-")
+      || !basename(workdir).startsWith("kdm-s3-02-review-")
       || !isAbsolute(workdir)
       || relativeRoot === ""
       || relativeRoot === ".."

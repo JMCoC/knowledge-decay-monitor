@@ -103,6 +103,35 @@ export interface ReviewFixture {
       returnedRevision: number;
     };
   };
+  prepareProcessingCandidate(): Promise<{ candidateId: string; versionId: string; roundId: string; submissionId: string }>;
+  completeProcessingCandidate(candidateId: string): Promise<void>;
+  createRoundWithReservedCandidate(): Promise<{ candidateId: string; versionId: string; roundId: string }>;
+  addCrossDocumentEvidenceForFinding(findingId: string, documentOrdinal?: 2 | 3): Promise<string>;
+  readReservationAssignment(submissionId: string): Promise<{
+    roundItemId: string;
+    findingId: string;
+    documentId: string;
+    itemRevision: number;
+    expectedRevision: number;
+  }>;
+  readSubmissionState(submissionId: string): Promise<string>;
+  readRoundItems(roundId: string): Promise<string[]>;
+  countOpenRounds(documentId: string): Promise<number>;
+  readCandidateState(candidateId: string): Promise<{
+    id: string;
+    status: string;
+    versionId: string;
+    sourceSubmissionId: string | null;
+    selectedBy: string;
+  }>;
+  readVersionState(versionId: string): Promise<{ id: string; processingStatus: string; versionStatus: string | null }>;
+  readRoundState(roundId: string): Promise<{
+    status: string;
+    activeCandidateId: string | null;
+    documentId: string;
+    revision: number;
+  }>;
+  closeSqlSession(): Promise<void>;
   dispose(): Promise<void>;
 }
 
@@ -252,6 +281,160 @@ export async function createReviewFixture(): Promise<ReviewFixture> {
     if (upload.error) throw new Error("A synthetic private original could not be installed in local Storage.");
 
     const users = authUsers(analysisA, memberA2, ownerA, analysisB);
+    const analysisAFixture = analysisA;
+    const verifiedAdminId = analysisA.adminId;
+    const prepareProcessingCandidate = async () => {
+      if (!sql) throw new Error("The local review SQL fixture session is closed.");
+      const output = await sql.query([
+        "\\set ON_ERROR_STOP on",
+        `select revision as previous_round_revision from public.correction_rounds where id=${requireUuid(persisted.mainRound.id)} \\gset`,
+        `select (public.review_cancel_round(${requireUuid(verifiedAdminId)}, ${requireUuid(persisted.mainRound.id)}, :'previous_round_revision'::bigint, 'Synthetic candidate fixture preparation.', 'kdm_fixture_cancel_main')->>'status');`,
+        `select pg_temp.create_review_round_for_document(${requireUuid(analysisAFixture.workspaceId)}, ${requireUuid(analysisAFixture.versions[0].documentId)}, ${requireUuid(verifiedAdminId)}, 'assigned_findings', array[${persisted.findingsA.memberA.map(requireUuid).join(", ")}]) as new_round_id \\gset`,
+        "select array_agg(i.id order by i.finding_id)::text as new_item_ids from public.correction_round_items i where i.round_id=:'new_round_id'::uuid \\gset",
+        `select pg_temp.create_review_submission(:'new_round_id'::uuid, ${requireUuid(analysisAFixture.memberId)}, :'new_item_ids'::uuid[]) as new_submission_id \\gset`,
+        `select pg_temp.select_direct_review_candidate(:'new_round_id'::uuid, ${requireUuid(verifiedAdminId)}, :'new_submission_id'::uuid) as candidate_id \\gset`,
+        "select pg_temp.start_review_candidate(:'candidate_id'::uuid);",
+        "select c.id::text || '|' || c.version_id::text || '|' || c.round_id::text || '|' || c.source_submission_id::text from public.correction_candidates c where c.id = :'candidate_id'::uuid;",
+      ].join("\n"));
+      const match = output.match(/([0-9a-f-]{36})\|([0-9a-f-]{36})\|([0-9a-f-]{36})\|([0-9a-f-]{36})/i);
+      if (!match) throw new Error("The local review fixture did not produce a synthetic processing candidate.");
+      return { candidateId: match[1], versionId: match[2], roundId: match[3], submissionId: match[4] };
+    };
+    const completeProcessingCandidate = async (candidateId: string) => {
+      if (!UUID_PATTERN.test(candidateId) || !sql) throw new Error("A local synthetic candidate is required.");
+      await sql.query(`select pg_temp.complete_review_candidate(${requireUuid(candidateId)});`);
+      const output = await sql.query(`select status::text from public.correction_candidates where id = ${requireUuid(candidateId)};`);
+      if (output.trim() !== "pending_approval") throw new Error("The synthetic review candidate did not reach pending approval.");
+    };
+    const createRoundWithReservedCandidate = async () => {
+      if (!sql) throw new Error("The local review SQL fixture session is closed.");
+      let output: string;
+      try {
+        output = await sql.query([
+        `select revision as previous_round_revision from public.correction_rounds where id=${requireUuid(persisted.secondary.administrativeRound)} \\gset`,
+        `select (public.review_cancel_round(${requireUuid(verifiedAdminId)}, ${requireUuid(persisted.secondary.administrativeRound)}, :'previous_round_revision'::bigint, 'Synthetic candidate selection fixture preparation.', 'kdm_fixture_cancel_admin')->>'status');`,
+        `select (public.review_prepare_round(${requireUuid(verifiedAdminId)}, ${requireUuid(analysisAFixture.versions[2].documentId)}, 'administrative', '{}'::uuid[], 'kdm_fixture_candidate_prepare')->>'roundId') as new_round_id \\gset`,
+        `select (public.review_open_round(${requireUuid(verifiedAdminId)}, :'new_round_id'::uuid, (select revision from public.correction_rounds where id=:'new_round_id'::uuid), 'kdm_fixture_candidate_open')->>'status');`,
+        `select pg_temp.create_consolidated_candidate(:'new_round_id'::uuid, ${requireUuid(verifiedAdminId)}, true) as candidate_id \\gset`,
+        "select c.id::text || '|' || c.version_id::text || '|' || c.round_id::text from public.correction_candidates c where c.id = :'candidate_id'::uuid;",
+        ].join("\n"));
+      } catch (error) {
+        const sqlState = typeof error === "object" && error !== null && "sqlState" in error
+          ? String((error as { sqlState?: unknown }).sqlState ?? "unknown")
+          : "unknown";
+        const context = typeof error === "object" && error !== null && "safeContext" in error
+          ? String((error as { safeContext?: unknown }).safeContext ?? "")
+          : "";
+        const safeLocation = /^[a-z_]+\.[a-z_]+#\d+$/i.test(context) ? ` at ${context}` : "";
+        throw new Error(`Reserved candidate fixture failed (SQLSTATE ${sqlState})${safeLocation}.`);
+      }
+      const match = output.match(/([0-9a-f-]{36})\|([0-9a-f-]{36})\|([0-9a-f-]{36})/i);
+      if (!match) throw new Error("The local review fixture did not produce a reserved candidate round.");
+      return { candidateId: match[1], versionId: match[2], roundId: match[3] };
+    };
+    const addCrossDocumentEvidenceForFinding = async (findingId: string, documentOrdinal: 2 | 3 = 2) => {
+      if (!sql || !persisted.findingsA.memberA.includes(findingId)) {
+        throw new Error("Cross-document evidence requires a synthetic assigned finding.");
+      }
+      const version = analysisAFixture.versions[documentOrdinal - 1];
+      const output = await sql.query(`select pg_temp.insert_evidence_row(
+        ${requireUuid(analysisAFixture.workspaceId)}, ${requireUuid(analysisAFixture.analysisId)}, ${requireUuid(findingId)},
+        ${requireUuid(version.documentId)}, ${requireUuid(version.versionId)}, ${requireUuid(version.chunkId)},
+        'Synthetic cross-document review evidence'
+      )::text;`);
+      const evidenceId = output.trim();
+      if (!UUID_PATTERN.test(evidenceId)) throw new Error("Cross-document review evidence was not persisted.");
+      return version.documentId;
+    };
+    const readReservationAssignment = async (submissionId: string) => {
+      if (!sql || !UUID_PATTERN.test(submissionId)) throw new Error("A synthetic reservation is required for this local read.");
+      const values = (await sql.query(`
+        select si.round_item_id::text || '|' || i.finding_id::text || '|' || i.document_id::text || '|' || i.revision::text || '|' || si.expected_revision::text
+        from public.correction_submission_items si join public.correction_round_items i on i.id=si.round_item_id
+        where si.submission_id=${requireUuid(submissionId)};
+      `)).trim().split("|");
+      if (values.length !== 5 || !UUID_PATTERN.test(values[0]) || !UUID_PATTERN.test(values[1]) || !UUID_PATTERN.test(values[2])
+        || !/^\d+$/.test(values[3]) || !/^\d+$/.test(values[4])) {
+        throw new Error("The local synthetic reservation returned an invalid assignment marker.");
+      }
+      return {
+        roundItemId: values[0],
+        findingId: values[1],
+        documentId: values[2],
+        itemRevision: Number(values[3]),
+        expectedRevision: Number(values[4]),
+      };
+    };
+    const readSubmissionState = async (submissionId: string) => {
+      if (!sql || !UUID_PATTERN.test(submissionId)) throw new Error("A synthetic submission is required for this local read.");
+      const state = (await sql.query(`select state::text from public.correction_submissions where id=${requireUuid(submissionId)};`)).trim();
+      if (!/^(reserved|confirmed|expired|invalidated)$/.test(state)) {
+        throw new Error("The local synthetic submission returned an invalid state marker.");
+      }
+      return state;
+    };
+    const readRoundItems = async (roundId: string) => {
+      if (!sql || !UUID_PATTERN.test(roundId)) throw new Error("A synthetic round is required for this local read.");
+      const output = (await sql.query(`select coalesce(string_agg(finding_id::text, '|' order by finding_id), '') from public.correction_round_items where round_id=${requireUuid(roundId)};`)).trim();
+      const findingIds = output ? output.split("|") : [];
+      if (findingIds.some((findingId) => !UUID_PATTERN.test(findingId))) {
+        throw new Error("The local synthetic round returned an invalid finding marker.");
+      }
+      return findingIds;
+    };
+    const countOpenRounds = async (documentId: string) => {
+      if (!sql || !UUID_PATTERN.test(documentId)) throw new Error("A synthetic document is required for this local read.");
+      const count = (await sql.query(`select count(*)::text from public.correction_rounds where document_id=${requireUuid(documentId)} and status not in ('approved','cancelled');`)).trim();
+      if (!/^\d+$/.test(count)) throw new Error("The local synthetic document returned an invalid active-round count.");
+      return Number(count);
+    };
+    const readCandidateState = async (candidateId: string) => {
+      if (!sql || !UUID_PATTERN.test(candidateId)) throw new Error("A synthetic candidate is required for this local read.");
+      const values = (await sql.query(`select id::text || '|' || status::text || '|' || version_id::text || '|' || coalesce(source_submission_id::text,'NONE') || '|' || selected_by::text from public.correction_candidates where id=${requireUuid(candidateId)};`)).trim().split("|");
+      if (values.length !== 5 || !UUID_PATTERN.test(values[0]) || !UUID_PATTERN.test(values[2]) || !UUID_PATTERN.test(values[4])
+        || !/^(reserved|selected|processing|failed|pending_approval|approved|rejected|invalidated)$/.test(values[1])
+        || (values[3] !== "NONE" && !UUID_PATTERN.test(values[3]))) {
+        throw new Error("The local synthetic candidate returned an invalid state marker.");
+      }
+      return {
+        id: values[0],
+        status: values[1],
+        versionId: values[2],
+        sourceSubmissionId: values[3] === "NONE" ? null : values[3],
+        selectedBy: values[4],
+      };
+    };
+    const readVersionState = async (versionId: string) => {
+      if (!sql || !UUID_PATTERN.test(versionId)) throw new Error("A synthetic version is required for this local read.");
+      const values = (await sql.query(`select id::text || '|' || processing_status::text || '|' || coalesce(version_status::text,'NONE') from public.document_versions where id=${requireUuid(versionId)};`)).trim().split("|");
+      if (values.length !== 3 || !UUID_PATTERN.test(values[0])
+        || !/^(uploaded|processing|processing_failed|ready)$/.test(values[1])
+        || (values[2] !== "NONE" && !/^(active|historical|pending_approval|rejected)$/.test(values[2]))) {
+        throw new Error("The local synthetic version returned an invalid state marker.");
+      }
+      return { id: values[0], processingStatus: values[1], versionStatus: values[2] === "NONE" ? null : values[2] };
+    };
+    const readRoundState = async (roundId: string) => {
+      if (!sql || !UUID_PATTERN.test(roundId)) throw new Error("A synthetic round is required for this local read.");
+      const values = (await sql.query(`select document_id::text || '|' || status::text || '|' || coalesce(active_candidate_id::text,'NONE') || '|' || revision::text from public.correction_rounds where id=${requireUuid(roundId)};`)).trim().split("|");
+      if (values.length !== 4 || !UUID_PATTERN.test(values[0])
+        || !/^(draft|collecting|consolidating|candidate_processing|candidate_failed|pending_approval|approved|cancelled)$/.test(values[1])
+        || (values[2] !== "NONE" && !UUID_PATTERN.test(values[2])) || !/^\d+$/.test(values[3])) {
+        throw new Error("The local synthetic round returned an invalid state marker.");
+      }
+      return {
+        documentId: values[0],
+        status: values[1],
+        activeCandidateId: values[2] === "NONE" ? null : values[2],
+        revision: Number(values[3]),
+      };
+    };
+    const closeSqlSession = async () => {
+      if (!sql) return;
+      const activeSession = sql;
+      sql = undefined;
+      await activeSession.close();
+    };
     let disposing: Promise<void> | undefined;
     const dispose = () => {
       if (disposing) return disposing;
@@ -325,6 +508,18 @@ export async function createReviewFixture(): Promise<ReviewFixture> {
           returnedRevision: persisted.secondary.returnState.returnedRevision,
         },
       },
+      prepareProcessingCandidate,
+      completeProcessingCandidate,
+      createRoundWithReservedCandidate,
+      addCrossDocumentEvidenceForFinding,
+      readReservationAssignment,
+      readSubmissionState,
+      readRoundItems,
+      countOpenRounds,
+      readCandidateState,
+      readVersionState,
+      readRoundState,
+      closeSqlSession,
       dispose,
     };
   } catch (error) {
