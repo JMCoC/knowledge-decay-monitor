@@ -78,7 +78,15 @@ const s301Names = new Set([
   "20261108150500_s3_01_approval_contribution_check.sql",
 ]);
 
-const stageOrder = Object.freeze({ s1: 0, s2_01: 1, s2_02: 2, s2_03: 3, s2_04: 4, s2_06: 5, s2_08a: 6, s2_08b: 7, s2_11: 8, s3_01: 9 });
+const s302Names = new Set([
+  "20261114150000_s3_02_review_audit_enums.sql",
+  "20261114150100_s3_02_review_model.sql",
+  "20261114150200_s3_02_review_coverage_guards.sql",
+  "20261114150300_s3_02_review_command_support.sql",
+  "20261114150400_s3_02_finding_commands.sql",
+]);
+
+const stageOrder = Object.freeze({ s1: 0, s2_01: 1, s2_02: 2, s2_03: 3, s2_04: 4, s2_06: 5, s2_08a: 6, s2_08b: 7, s2_11: 8, s3_01: 9, s3_02: 10 });
 
 const functionStage = Object.freeze({
   "supabase/functions/embed/": "s1",
@@ -106,12 +114,13 @@ export function migrationStage(path) {
   if (s208bNames.has(name)) return "s2_08b";
   if (s211Names.has(name)) return "s2_11";
   if (s301Names.has(name)) return "s3_01";
+  if (s302Names.has(name)) return "s3_02";
   throw new Error("Unreviewed migration in upgrade inventory.");
 }
 
 /**
  * @param {string} path
- * @param {"s1" | "s2_01" | "s2_02" | "s2_03" | "s2_04" | "s2_06" | "s2_08a" | "s2_08b" | "s2_11" | "s3_01"} stage
+ * @param {"s1" | "s2_01" | "s2_02" | "s2_03" | "s2_04" | "s2_06" | "s2_08a" | "s2_08b" | "s2_11" | "s3_01" | "s3_02"} stage
  */
 export function includeMigration(path, stage) {
   if (!Object.hasOwn(stageOrder, stage)) throw new Error("Unknown upgrade stage.");
@@ -120,7 +129,7 @@ export function includeMigration(path, stage) {
 
 /**
  * @param {string} path
- * @param {"s1" | "s2_01" | "s2_02" | "s2_03" | "s2_04" | "s2_06" | "s2_08a" | "s2_08b" | "s2_11" | "s3_01"} stage
+ * @param {"s1" | "s2_01" | "s2_02" | "s2_03" | "s2_04" | "s2_06" | "s2_08a" | "s2_08b" | "s2_11" | "s3_01" | "s3_02"} stage
  */
 export function includeFunction(path, stage) {
   if (!Object.hasOwn(stageOrder, stage)) throw new Error("Unknown upgrade stage.");

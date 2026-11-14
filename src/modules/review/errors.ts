@@ -5,6 +5,7 @@ import { captureOperationFailure } from "@/lib/observability/operation-events";
 import type { ActionError, ActionErrorCode, ActionResult } from "@/types/contracts";
 
 type ReviewFailure = Extract<ActionResult<never>, { ok: false }>;
+type ReviewOperation = "read" | "change" | "assign";
 
 const messages: Record<Exclude<ActionErrorCode,
   | "PROCESSING_FAILED"
@@ -48,12 +49,12 @@ function identityFailureCode(error: unknown): IdentityError["code"] | null {
   }
 }
 
-function reportInternalFailure(): string {
+function reportInternalFailure(operation: ReviewOperation): string {
   const correlationId = crypto.randomUUID();
   try {
     captureOperationFailure({
       module: "review",
-      operation: "read",
+      operation,
       code: "INTERNAL_ERROR",
       correlationId,
     });
@@ -64,7 +65,7 @@ function reportInternalFailure(): string {
 }
 
 /** Converts only stable identity and SQLSTATE codes to public ActionResult errors. */
-export function toReviewFailure(error: unknown): ReviewFailure {
+export function toReviewFailure(error: unknown, operation: ReviewOperation = "read"): ReviewFailure {
   const identityCode = identityFailureCode(error);
   if (identityCode) {
     switch (identityCode) {
@@ -74,7 +75,7 @@ export function toReviewFailure(error: unknown): ReviewFailure {
       case "WORKSPACE_REQUIRED":
         return failure("FORBIDDEN");
       case "INTERNAL_ERROR":
-        return failure("INTERNAL_ERROR", reportInternalFailure());
+        return failure("INTERNAL_ERROR", reportInternalFailure(operation));
     }
   }
 
@@ -91,6 +92,6 @@ export function toReviewFailure(error: unknown): ReviewFailure {
     case "40P01":
       return failure("CONFLICT");
     default:
-      return failure("INTERNAL_ERROR", reportInternalFailure());
+      return failure("INTERNAL_ERROR", reportInternalFailure(operation));
   }
 }

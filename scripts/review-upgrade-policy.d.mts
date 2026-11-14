@@ -1,4 +1,4 @@
-export type ReviewMigrationStage = "s2" | "s3_01";
+export type ReviewMigrationStage = "s2" | "s3_01" | "s3_02";
 
 export function reviewMigrationStage(path: string): ReviewMigrationStage;
 export function includeReviewMigration(path: string, stage: ReviewMigrationStage): boolean;

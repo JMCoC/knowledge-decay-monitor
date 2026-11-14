@@ -9,6 +9,14 @@ const s3Names = new Set([
   "20261108150500_s3_01_approval_contribution_check.sql",
 ]);
 
+const s302Names = new Set([
+  "20261114150000_s3_02_review_audit_enums.sql",
+  "20261114150100_s3_02_review_model.sql",
+  "20261114150200_s3_02_review_coverage_guards.sql",
+  "20261114150300_s3_02_review_command_support.sql",
+  "20261114150400_s3_02_finding_commands.sql",
+]);
+
 function migrationName(path) {
   const normalized = path.replaceAll("\\", "/");
   if (!/^supabase\/migrations\/[a-z0-9_]+\.sql$/.test(normalized)) {
@@ -17,17 +25,19 @@ function migrationName(path) {
   return normalized.slice("supabase/migrations/".length);
 }
 
-/** @param {string} path @returns {"s2" | "s3_01"} */
+/** @param {string} path @returns {"s2" | "s3_01" | "s3_02"} */
 export function reviewMigrationStage(path) {
   const name = migrationName(path);
+  if (s302Names.has(name)) return "s3_02";
   if (s3Names.has(name)) return "s3_01";
   const stage = migrationStage(`supabase/migrations/${name}`);
-  return stage === "s3_01" ? "s3_01" : "s2";
+  return stage === "s3_02" ? "s3_02" : stage === "s3_01" ? "s3_01" : "s2";
 }
 
-/** @param {string} path @param {"s2" | "s3_01"} stage */
+/** @param {string} path @param {"s2" | "s3_01" | "s3_02"} stage */
 export function includeReviewMigration(path, stage) {
-  if (stage !== "s2" && stage !== "s3_01") throw new Error("Unknown review upgrade stage.");
+  if (stage !== "s2" && stage !== "s3_01" && stage !== "s3_02") throw new Error("Unknown review upgrade stage.");
   const migration = reviewMigrationStage(path);
-  return stage === "s3_01" || migration === "s2";
+  const stageOrder = { s2: 0, s3_01: 1, s3_02: 2 };
+  return stageOrder[migration] <= stageOrder[stage];
 }

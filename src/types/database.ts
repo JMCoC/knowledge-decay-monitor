@@ -2417,6 +2417,26 @@ export type Database = {
         Args: { p_event_id: string; p_operation_id: string }
         Returns: boolean
       }
+      review_assign_finding: {
+        Args: {
+          p_actor_id: string
+          p_assignee_id: string
+          p_finding_id: string
+          p_idempotency_key: string
+          p_revision: number
+        }
+        Returns: Json
+      }
+      review_change_finding: {
+        Args: {
+          p_actor_id: string
+          p_change: Json
+          p_finding_id: string
+          p_idempotency_key: string
+          p_revision: number
+        }
+        Returns: Json
+      }
       review_get_finding: {
         Args: { p_actor_id: string; p_finding_id: string }
         Returns: Json

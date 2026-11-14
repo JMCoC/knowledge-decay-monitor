@@ -1,3 +1,3 @@
 import "server-only";
 
-export { getFindingReview, getRoundDraft, listAssignees } from "./actions";
+export { assignFinding, changeFinding, getFindingReview, getRoundDraft, listAssignees } from "./actions";

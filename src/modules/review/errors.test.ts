@@ -67,4 +67,20 @@ describe("review failure mapping", () => {
     expect(result.error.code).toBe("INTERNAL_ERROR");
     expect(JSON.stringify(result)).not.toContain("PRIVATE_");
   });
+
+  it("uses operation-specific allowlisted telemetry for review commands", () => {
+    toReviewFailure(new Error("PRIVATE_CHANGE_FAILURE"), "change");
+    toReviewFailure(new Error("PRIVATE_ASSIGN_FAILURE"), "assign");
+
+    expect(captureOperationFailure).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      module: "review",
+      operation: "change",
+      code: "INTERNAL_ERROR",
+    }));
+    expect(captureOperationFailure).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      module: "review",
+      operation: "assign",
+      code: "INTERNAL_ERROR",
+    }));
+  });
 });

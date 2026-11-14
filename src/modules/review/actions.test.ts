@@ -7,7 +7,7 @@ vi.mock("@/lib/supabase/service", () => ({ createServiceClient: vi.fn() }));
 import { IdentityError } from "@/modules/identity/errors";
 import { requireDocumentActor } from "@/modules/identity";
 import { createServiceClient } from "@/lib/supabase/service";
-import { getFindingReview, getRoundDraft, listAssignees } from "./actions";
+import { assignFinding, changeFinding, getFindingReview, getRoundDraft, listAssignees } from "./actions";
 
 const findingId = "10000000-0000-4000-8000-000000000001";
 const actor = {
@@ -116,5 +116,101 @@ describe("review server actions", () => {
         findingIds: [findingId],
       },
     });
+  });
+
+  it("validates strict change commands and derives the reviewer identity on the server", async () => {
+    const changed = await changeFinding({
+      findingId,
+      revision: 1,
+      idempotencyKey: "change-status-1",
+      change: { field: "status", value: "confirmed" },
+      actor: { userId: "60000000-0000-4000-8000-000000000001", role: "Admin" },
+    } as never);
+
+    expect(changed).toEqual({
+      ok: false,
+      error: { code: "INVALID_INPUT", message: "Some review details are invalid." },
+    });
+    expect(createServiceClient).not.toHaveBeenCalled();
+
+    rpc.mockResolvedValue({
+      data: {
+        id: findingId,
+        analysisId: "60000000-0000-4000-8000-000000000002",
+        type: "contradiction",
+        explanation: "Synthetic evidence",
+        severityOriginal: "High",
+        severityCurrent: "Medium",
+        status: "confirmed",
+        assignee: { id: actor.userId, fullName: "Reviewer", email: "PRIVATE_EMAIL" },
+        createdAt: "2026-11-14T00:00:00Z",
+        revision: 2,
+        canChangeStatus: true,
+        canChangeSeverity: true,
+        canAssign: true,
+        canPrepareRound: true,
+        confidence: 0.99,
+      },
+      error: null,
+    });
+
+    const result = await changeFinding({
+      findingId: findingId.toUpperCase(),
+      revision: 1,
+      idempotencyKey: "change-status-1",
+      change: { field: "status", value: "confirmed" },
+    });
+
+    expect(rpc).toHaveBeenCalledWith("review_change_finding", {
+      p_actor_id: actor.userId,
+      p_finding_id: findingId,
+      p_revision: 1,
+      p_change: { field: "status", value: "confirmed" },
+      p_idempotency_key: "change-status-1",
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.data.status).toBe("confirmed");
+      expect(result.data).not.toHaveProperty("confidence");
+      expect(JSON.stringify(result)).not.toContain("PRIVATE_EMAIL");
+    }
+  });
+
+  it("rejects an unauthorized reviewer before the service RPC and sends only a valid assignment", async () => {
+    vi.mocked(requireDocumentActor).mockRejectedValue(new IdentityError("FORBIDDEN"));
+    const denied = await assignFinding({
+      findingId,
+      revision: 1,
+      assigneeId: null,
+      idempotencyKey: "unassign-1",
+    });
+
+    expect(denied).toEqual({
+      ok: false,
+      error: { code: "FORBIDDEN", message: "You don't have permission to access review." },
+    });
+    expect(createServiceClient).not.toHaveBeenCalled();
+
+    vi.mocked(requireDocumentActor).mockResolvedValue(actor);
+    rpc.mockResolvedValue({ data: null, error: { code: "P0001", message: "PRIVATE_CONFLICT" } });
+    const conflict = await assignFinding({
+      findingId,
+      revision: 8,
+      assigneeId: null,
+      idempotencyKey: "unassign-1",
+    });
+
+    expect(rpc).toHaveBeenCalledWith("review_assign_finding", {
+      p_actor_id: actor.userId,
+      p_finding_id: findingId,
+      p_revision: 8,
+      p_assignee_id: null,
+      p_idempotency_key: "unassign-1",
+    });
+    expect(conflict.ok).toBe(false);
+    if (!conflict.ok) {
+      expect(conflict.error.code).toBe("CONFLICT");
+      expect(JSON.stringify(conflict)).not.toContain("PRIVATE_CONFLICT");
+    }
   });
 });

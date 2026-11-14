@@ -49,11 +49,10 @@ begin
   v_finding_a := pg_temp.insert_finding_row(v_analysis, v_workspace, 0.91);
   v_finding_b := pg_temp.insert_finding_row(v_analysis, v_workspace, 0.82);
   v_finding_c := pg_temp.insert_finding_row(v_analysis, v_workspace, 0.73);
-  update public.findings
-  set assignee_id = case id
+  update public.findings set status = 'confirmed', assignee_id = case id
     when v_finding_a then v_member_a
     when v_finding_b then v_member_b
-    when v_finding_c then v_member_a
+    else v_member_a
   end
   where id in (v_finding_a, v_finding_b, v_finding_c);
   perform pg_temp.insert_evidence_row(v_workspace, v_analysis, v_finding_a, v_document, v_version, v_chunk, 'Synthetic review evidence A');
@@ -697,7 +696,7 @@ begin
   d3f1 := pg_temp.insert_finding_row(p_analysis_id, p_workspace_id, 0.92, 'Synthetic document three finding one');
   d3f2 := pg_temp.insert_finding_row(p_analysis_id, p_workspace_id, 0.82, 'Synthetic document three finding two');
   d3f3 := pg_temp.insert_finding_row(p_analysis_id, p_workspace_id, 0.72, 'Synthetic document three finding three');
-  update public.findings set assignee_id = case
+  update public.findings set status = 'confirmed', assignee_id = case
     when id in (f2, f3, d2f1, d2f2, d2f3, d3f1, d3f2, d3f3) then p_member_a_id
     when id = f4 then p_member_b_id
   end
@@ -732,7 +731,7 @@ begin
   reserved_submission := pg_temp.create_review_reservation(main_round, p_member_a_id, item_ids_a[1:1]);
   expired_submission := pg_temp.create_review_reservation(main_round, p_member_a_id, item_ids_a[2:2], true);
   f4_after_round := pg_temp.insert_finding_row(p_analysis_id, p_workspace_id, 0.44, 'Finding created after the round opened');
-  update public.findings set assignee_id = p_member_b_id where id = f4_after_round;
+  update public.findings set status = 'confirmed', assignee_id = p_member_b_id where id = f4_after_round;
   perform pg_temp.insert_evidence_row(p_workspace_id, p_analysis_id, f4_after_round, p_document_ids[1], p_version_ids[1], p_chunk_ids[1], 'Evidence for a finding outside the open round');
 
   approval_round := pg_temp.create_review_round_for_document(
