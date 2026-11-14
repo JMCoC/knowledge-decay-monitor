@@ -2427,6 +2427,16 @@ export type Database = {
         }
         Returns: Json
       }
+      review_cancel_round: {
+        Args: {
+          p_actor_id: string
+          p_idempotency_key: string
+          p_reason: string
+          p_revision: number
+          p_round_id: string
+        }
+        Returns: Json
+      }
       review_change_finding: {
         Args: {
           p_actor_id: string
@@ -2447,6 +2457,35 @@ export type Database = {
       }
       review_list_assignees: {
         Args: { p_actor_id: string; p_page?: number; p_page_size?: number }
+        Returns: Json
+      }
+      review_open_round: {
+        Args: {
+          p_actor_id: string
+          p_idempotency_key: string
+          p_revision: number
+          p_round_id: string
+        }
+        Returns: Json
+      }
+      review_prepare_round: {
+        Args: {
+          p_actor_id: string
+          p_document_id: string
+          p_finding_ids: string[]
+          p_idempotency_key: string
+          p_mode: string
+        }
+        Returns: Json
+      }
+      review_update_round_draft: {
+        Args: {
+          p_actor_id: string
+          p_finding_ids: string[]
+          p_idempotency_key: string
+          p_revision: number
+          p_round_id: string
+        }
         Returns: Json
       }
       run_analysis: {

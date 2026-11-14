@@ -7,9 +7,23 @@ vi.mock("@/lib/supabase/service", () => ({ createServiceClient: vi.fn() }));
 import { IdentityError } from "@/modules/identity/errors";
 import { requireDocumentActor } from "@/modules/identity";
 import { createServiceClient } from "@/lib/supabase/service";
-import { assignFinding, changeFinding, getFindingReview, getRoundDraft, listAssignees } from "./actions";
+import {
+  assignFinding,
+  cancelRound,
+  changeFinding,
+  getFindingReview,
+  getRoundDraft,
+  listAssignees,
+  openRound,
+  prepareRound,
+  updateRoundDraft,
+} from "./actions";
 
 const findingId = "10000000-0000-4000-8000-000000000001";
+const findingId2 = "10000000-0000-4000-8000-000000000002";
+const roundId = "20000000-0000-4000-8000-000000000001";
+const documentId = "30000000-0000-4000-8000-000000000001";
+const versionId = "40000000-0000-4000-8000-000000000001";
 const actor = {
   userId: "50000000-0000-4000-8000-000000000001",
   workspaceId: "60000000-0000-4000-8000-000000000001",
@@ -212,5 +226,158 @@ describe("review server actions", () => {
       expect(conflict.error.code).toBe("CONFLICT");
       expect(JSON.stringify(conflict)).not.toContain("PRIVATE_CONFLICT");
     }
+  });
+
+  it("prepares a sorted assigned draft and sends an empty list for an administrative draft", async () => {
+    const draft = {
+      roundId,
+      documentId,
+      mode: "assigned_findings",
+      baseActiveVersionId: versionId,
+      status: "draft",
+      revision: 1,
+      createdAt: "2026-11-14T00:00:00Z",
+      openedAt: null,
+    };
+    rpc.mockResolvedValueOnce({ data: draft, error: null });
+    const assigned = await prepareRound({
+      documentId,
+      mode: "assigned_findings",
+      findingIds: [findingId2, findingId],
+      idempotencyKey: "prepare-assigned-1",
+    });
+
+    expect(rpc).toHaveBeenLastCalledWith("review_prepare_round", {
+      p_actor_id: actor.userId,
+      p_document_id: documentId,
+      p_mode: "assigned_findings",
+      p_finding_ids: [findingId, findingId2],
+      p_idempotency_key: "prepare-assigned-1",
+    });
+    expect(assigned).toEqual({ ok: true, data: draft });
+
+    rpc.mockResolvedValueOnce({ data: { ...draft, mode: "administrative" }, error: null });
+    const administrative = await prepareRound({
+      documentId,
+      mode: "administrative",
+      idempotencyKey: "prepare-admin-1",
+    });
+    expect(rpc).toHaveBeenLastCalledWith("review_prepare_round", {
+      p_actor_id: actor.userId,
+      p_document_id: documentId,
+      p_mode: "administrative",
+      p_finding_ids: [],
+      p_idempotency_key: "prepare-admin-1",
+    });
+    expect(administrative.ok).toBe(true);
+  });
+
+  it("validates and sends editable draft commands with the verified actor", async () => {
+    const invalid = await updateRoundDraft({
+      roundId,
+      revision: 0,
+      findingIds: [findingId],
+      idempotencyKey: "update-draft-1",
+    });
+    expect(invalid).toEqual({
+      ok: false,
+      error: { code: "INVALID_INPUT", message: "Some review details are invalid." },
+    });
+    expect(createServiceClient).not.toHaveBeenCalled();
+
+    const draft = {
+      roundId,
+      documentId,
+      mode: "assigned_findings",
+      baseActiveVersionId: versionId,
+      status: "draft",
+      revision: 2,
+      createdAt: "2026-11-14T00:00:00Z",
+      openedAt: null,
+    };
+    rpc.mockResolvedValue({ data: draft, error: null });
+    const updated = await updateRoundDraft({
+      roundId: roundId.toUpperCase(),
+      revision: 1,
+      findingIds: [findingId2, findingId],
+      idempotencyKey: "update-draft-1",
+    });
+    expect(rpc).toHaveBeenCalledWith("review_update_round_draft", {
+      p_actor_id: actor.userId,
+      p_round_id: roundId,
+      p_revision: 1,
+      p_finding_ids: [findingId, findingId2],
+      p_idempotency_key: "update-draft-1",
+    });
+    expect(updated).toEqual({ ok: true, data: draft });
+  });
+
+  it("opens rounds as full snapshots and returns a closed conflict for stale commands", async () => {
+    rpc.mockResolvedValueOnce({
+      data: {
+        roundId,
+        documentId,
+        mode: "assigned_findings",
+        baseActiveVersionId: versionId,
+        status: "collecting",
+        revision: 2,
+        createdAt: "2026-11-14T00:00:00Z",
+        openedAt: "2026-11-14T00:01:00Z",
+        items: [],
+        submissions: [],
+        coverage: { revision: 1, complete: false, coveredItemCount: 0, requiredItemCount: 0 },
+        candidate: null,
+      },
+      error: null,
+    });
+    const opened = await openRound({ roundId, revision: 1, idempotencyKey: "open-round-1" });
+    expect(rpc).toHaveBeenCalledWith("review_open_round", {
+      p_actor_id: actor.userId,
+      p_round_id: roundId,
+      p_revision: 1,
+      p_idempotency_key: "open-round-1",
+    });
+    expect(opened.ok).toBe(true);
+    if (opened.ok) expect(opened.data.status).toBe("collecting");
+
+    rpc.mockResolvedValueOnce({ data: null, error: { code: "P0001", message: "PRIVATE_STALE" } });
+    const stale = await openRound({ roundId, revision: 1, idempotencyKey: "open-round-stale" });
+    expect(stale).toEqual({
+      ok: false,
+      error: { code: "CONFLICT", message: "This review item changed. Refresh and try again." },
+    });
+    expect(JSON.stringify(stale)).not.toContain("PRIVATE_STALE");
+  });
+
+  it("trims cancellation reasons and never sends a command for invalid reason input", async () => {
+    const invalid = await cancelRound({ roundId, revision: 1, reason: "  ", idempotencyKey: "cancel-round-1" });
+    expect(invalid.ok).toBe(false);
+    expect(createServiceClient).not.toHaveBeenCalled();
+
+    const draft = {
+      roundId,
+      documentId,
+      mode: "assigned_findings",
+      baseActiveVersionId: versionId,
+      status: "cancelled",
+      revision: 2,
+      createdAt: "2026-11-14T00:00:00Z",
+      openedAt: null,
+    };
+    rpc.mockResolvedValue({ data: draft, error: null });
+    const cancelled = await cancelRound({
+      roundId,
+      revision: 1,
+      reason: "  Duplicate request  ",
+      idempotencyKey: "cancel-round-1",
+    });
+    expect(rpc).toHaveBeenCalledWith("review_cancel_round", {
+      p_actor_id: actor.userId,
+      p_round_id: roundId,
+      p_revision: 1,
+      p_reason: "Duplicate request",
+      p_idempotency_key: "cancel-round-1",
+    });
+    expect(cancelled).toEqual({ ok: true, data: draft });
   });
 });

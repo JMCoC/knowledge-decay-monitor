@@ -7,25 +7,37 @@ import { createServiceClient } from "@/lib/supabase/service";
 import type { ActionResult, EligibleOwner } from "@/types/contracts";
 import type {
   AssignFindingInput,
+  CancelRoundInput,
   ChangeFindingInput,
+  CorrectionRoundSnapshot,
   FindingReviewSnapshot,
   GetFindingReviewInput,
   GetRoundDraftInput,
   ListAssigneesInput,
+  OpenRoundInput,
+  PrepareRoundInput,
   ReviewPage,
+  ReviewRound,
   RoundDraftSnapshot,
+  UpdateRoundDraftInput,
 } from "@/types/review-contracts";
 import {
   assignFindingSchema,
+  cancelRoundSchema,
   changeFindingSchema,
   getFindingReviewSchema,
   getRoundDraftSchema,
+  openRoundSchema,
+  prepareRoundSchema,
   reviewPageSchema,
+  updateRoundDraftSchema,
 } from "./schemas";
 import { toReviewFailure } from "./errors";
 import {
   parseAssigneesPage,
+  parseCorrectionRoundSnapshot,
   parseFindingReviewSnapshot,
+  parseReviewRound,
   parseRoundDraftSnapshot,
 } from "./mappers";
 
@@ -133,5 +145,91 @@ export async function assignFinding(
     return { ok: true, data: parseFindingReviewSnapshot(data) };
   } catch (error) {
     return toReviewFailure(error, "assign");
+  }
+}
+
+export async function prepareRound(
+  input: PrepareRoundInput,
+): Promise<ActionResult<CorrectionRoundSnapshot>> {
+  const parsed = prepareRoundSchema.safeParse(input);
+  if (!parsed.success) return invalidInput();
+
+  try {
+    const actor = await requireDocumentActor();
+    const findingIds = parsed.data.mode === "assigned_findings" ? parsed.data.findingIds : [];
+    const { data, error } = await createServiceClient().rpc("review_prepare_round", {
+      p_actor_id: actor.userId,
+      p_document_id: parsed.data.documentId,
+      p_mode: parsed.data.mode,
+      p_finding_ids: findingIds,
+      p_idempotency_key: parsed.data.idempotencyKey,
+    });
+    if (error) return toReviewFailure(error, "prepare_round");
+    return { ok: true, data: parseCorrectionRoundSnapshot(data) };
+  } catch (error) {
+    return toReviewFailure(error, "prepare_round");
+  }
+}
+
+export async function updateRoundDraft(
+  input: UpdateRoundDraftInput,
+): Promise<ActionResult<CorrectionRoundSnapshot>> {
+  const parsed = updateRoundDraftSchema.safeParse(input);
+  if (!parsed.success) return invalidInput();
+
+  try {
+    const actor = await requireDocumentActor();
+    const { data, error } = await createServiceClient().rpc("review_update_round_draft", {
+      p_actor_id: actor.userId,
+      p_round_id: parsed.data.roundId,
+      p_revision: parsed.data.revision,
+      p_finding_ids: parsed.data.findingIds,
+      p_idempotency_key: parsed.data.idempotencyKey,
+    });
+    if (error) return toReviewFailure(error, "update_round_draft");
+    return { ok: true, data: parseCorrectionRoundSnapshot(data) };
+  } catch (error) {
+    return toReviewFailure(error, "update_round_draft");
+  }
+}
+
+export async function openRound(input: OpenRoundInput): Promise<ActionResult<ReviewRound>> {
+  const parsed = openRoundSchema.safeParse(input);
+  if (!parsed.success) return invalidInput();
+
+  try {
+    const actor = await requireDocumentActor();
+    const { data, error } = await createServiceClient().rpc("review_open_round", {
+      p_actor_id: actor.userId,
+      p_round_id: parsed.data.roundId,
+      p_revision: parsed.data.revision,
+      p_idempotency_key: parsed.data.idempotencyKey,
+    });
+    if (error) return toReviewFailure(error, "open_round");
+    return { ok: true, data: parseReviewRound(data) };
+  } catch (error) {
+    return toReviewFailure(error, "open_round");
+  }
+}
+
+export async function cancelRound(
+  input: CancelRoundInput,
+): Promise<ActionResult<CorrectionRoundSnapshot>> {
+  const parsed = cancelRoundSchema.safeParse(input);
+  if (!parsed.success) return invalidInput();
+
+  try {
+    const actor = await requireDocumentActor();
+    const { data, error } = await createServiceClient().rpc("review_cancel_round", {
+      p_actor_id: actor.userId,
+      p_round_id: parsed.data.roundId,
+      p_revision: parsed.data.revision,
+      p_reason: parsed.data.reason,
+      p_idempotency_key: parsed.data.idempotencyKey,
+    });
+    if (error) return toReviewFailure(error, "cancel_round");
+    return { ok: true, data: parseCorrectionRoundSnapshot(data) };
+  } catch (error) {
+    return toReviewFailure(error, "cancel_round");
   }
 }

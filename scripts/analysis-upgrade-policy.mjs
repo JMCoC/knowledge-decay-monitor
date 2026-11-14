@@ -84,6 +84,7 @@ const s302Names = new Set([
   "20261114150200_s3_02_review_coverage_guards.sql",
   "20261114150300_s3_02_review_command_support.sql",
   "20261114150400_s3_02_finding_commands.sql",
+  "20261114150500_s3_02_round_commands.sql",
 ]);
 
 const stageOrder = Object.freeze({ s1: 0, s2_01: 1, s2_02: 2, s2_03: 3, s2_04: 4, s2_06: 5, s2_08a: 6, s2_08b: 7, s2_11: 8, s3_01: 9, s3_02: 10 });

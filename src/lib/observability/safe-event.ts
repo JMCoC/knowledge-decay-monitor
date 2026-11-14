@@ -5,7 +5,7 @@ export const operationCatalog = {
   repository: ["list", "open"],
   credits: ["snapshot", "ledger"],
   analysis: ["selection", "scope_validation", "estimate", "run", "retry", "trigger", "findings_read"],
-  review: ["read", "change", "assign"],
+  review: ["read", "change", "assign", "prepare_round", "update_round_draft", "open_round", "cancel_round"],
   notifications: ["dispatch", "deliver", "recover", "alert"],
   application: ["request", "render", "unhandled", "transport", "diagnostic"],
 } as const;

@@ -71,6 +71,10 @@ describe("review failure mapping", () => {
   it("uses operation-specific allowlisted telemetry for review commands", () => {
     toReviewFailure(new Error("PRIVATE_CHANGE_FAILURE"), "change");
     toReviewFailure(new Error("PRIVATE_ASSIGN_FAILURE"), "assign");
+    toReviewFailure(new Error("PRIVATE_PREPARE_FAILURE"), "prepare_round");
+    toReviewFailure(new Error("PRIVATE_UPDATE_FAILURE"), "update_round_draft");
+    toReviewFailure(new Error("PRIVATE_OPEN_FAILURE"), "open_round");
+    toReviewFailure(new Error("PRIVATE_CANCEL_FAILURE"), "cancel_round");
 
     expect(captureOperationFailure).toHaveBeenNthCalledWith(1, expect.objectContaining({
       module: "review",
@@ -80,6 +84,26 @@ describe("review failure mapping", () => {
     expect(captureOperationFailure).toHaveBeenNthCalledWith(2, expect.objectContaining({
       module: "review",
       operation: "assign",
+      code: "INTERNAL_ERROR",
+    }));
+    expect(captureOperationFailure).toHaveBeenNthCalledWith(3, expect.objectContaining({
+      module: "review",
+      operation: "prepare_round",
+      code: "INTERNAL_ERROR",
+    }));
+    expect(captureOperationFailure).toHaveBeenNthCalledWith(4, expect.objectContaining({
+      module: "review",
+      operation: "update_round_draft",
+      code: "INTERNAL_ERROR",
+    }));
+    expect(captureOperationFailure).toHaveBeenNthCalledWith(5, expect.objectContaining({
+      module: "review",
+      operation: "open_round",
+      code: "INTERNAL_ERROR",
+    }));
+    expect(captureOperationFailure).toHaveBeenNthCalledWith(6, expect.objectContaining({
+      module: "review",
+      operation: "cancel_round",
       code: "INTERNAL_ERROR",
     }));
   });

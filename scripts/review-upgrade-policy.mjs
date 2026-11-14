@@ -15,6 +15,7 @@ const s302Names = new Set([
   "20261114150200_s3_02_review_coverage_guards.sql",
   "20261114150300_s3_02_review_command_support.sql",
   "20261114150400_s3_02_finding_commands.sql",
+  "20261114150500_s3_02_round_commands.sql",
 ]);
 
 function migrationName(path) {

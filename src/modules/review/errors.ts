@@ -5,7 +5,7 @@ import { captureOperationFailure } from "@/lib/observability/operation-events";
 import type { ActionError, ActionErrorCode, ActionResult } from "@/types/contracts";
 
 type ReviewFailure = Extract<ActionResult<never>, { ok: false }>;
-type ReviewOperation = "read" | "change" | "assign";
+type ReviewOperation = "read" | "change" | "assign" | "prepare_round" | "update_round_draft" | "open_round" | "cancel_round";
 
 const messages: Record<Exclude<ActionErrorCode,
   | "PROCESSING_FAILED"
