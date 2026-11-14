@@ -423,9 +423,9 @@ end;
 $credit_workspace_backfill$;
 `;
 
-function runExpectedPromotionConflict(projectRoot) {
+function runExpectedPromotionConflict(workdir) {
   const result = spawnSync("pnpm", [
-    "exec", "supabase", "migration", "up", "--local", "--workdir", projectRoot,
+    "exec", "supabase", "migration", "up", "--local", "--workdir", workdir,
   ], {
     cwd: projectRoot,
     encoding: "utf8",
