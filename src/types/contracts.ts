@@ -1,5 +1,5 @@
 import type { Database } from "./database.ts";
-import type { ReviewFindingStatus } from "./review-contracts";
+import type { ReviewFindingStatus } from "./review-contracts.ts";
 
 type Tables = Database["public"]["Tables"];
 type Enums = Database["public"]["Enums"];
@@ -390,4 +390,4 @@ export type {
   RoundCoverageSnapshot,
   SelectFinalCandidateInput,
   ReturnRoundItemsInput,
-} from "./review-contracts";
+} from "./review-contracts.ts";

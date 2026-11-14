@@ -10,7 +10,7 @@ import type {
   UploadSnapshot,
   UploadTarget,
   VersionStatus,
-} from "./contracts";
+} from "./contracts.ts";
 
 export type ReviewFindingStatus =
   | "pending_review"
