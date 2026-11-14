@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolve } from "node:path";
 
 const mocks = vi.hoisted(() => ({
   spawnSync: vi.fn(),
@@ -7,7 +8,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("node:child_process", () => ({ spawnSync: mocks.spawnSync }));
 vi.mock("../../scripts/local-supabase.mjs", () => ({
-  PROJECT_ROOT: "C:/KDM/knowledge-decay-monitor",
+  PROJECT_ROOT: process.cwd(),
   LOCAL_API_URL: "http://127.0.0.1:54321",
   readLocalSupabaseRuntime: mocks.readLocalSupabaseRuntime,
 }));
@@ -88,10 +89,10 @@ describe("local Supabase test runner isolation", () => {
     ];
     expect(reviewCommand).toBe(process.execPath);
     expect(reviewArgs[0]?.replaceAll("\\", "/")).toBe(
-      "C:/KDM/knowledge-decay-monitor/scripts/run-review-isolated-integration.mjs",
+      resolve(process.cwd(), "scripts/run-review-isolated-integration.mjs").replaceAll("\\", "/"),
     );
     expect(reviewArgs[1]).toBe("tests/integration/review-foundation-isolation.test.ts");
-    expect(reviewOptions.cwd).toBe("C:/KDM/knowledge-decay-monitor");
+    expect(reviewOptions.cwd).toBe(process.cwd());
     expect(reviewOptions.env).toMatchObject({
       NEXT_PUBLIC_SUPABASE_URL: "http://127.0.0.1:54321",
       SUPABASE_SERVICE_ROLE_KEY: "LOCAL_SERVICE_ROLE_SENTINEL",
