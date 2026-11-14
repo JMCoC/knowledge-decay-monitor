@@ -5,10 +5,15 @@ import type {
   CorrectionRoundMode,
   CorrectionRoundStatus,
   CorrectionSubmissionState,
+  GetFindingReviewInput,
+  GetRoundDraftInput,
   MemberAssignment,
   OwnApprovalItem,
   ReviewFindingStatus,
+  ReviewApi,
   ReserveCorrectionInput,
+  RoundDraftSnapshot,
+  UpdateRoundDraftInput,
 } from "./review-contracts";
 import type {
   CorrectionDecisionOutcome,
@@ -65,7 +70,12 @@ export type WorkflowNotificationKindMatchesDatabase = Assert<Equal<
 >>;
 
 declare const corrections: CorrectionIngestionApi;
+declare const review: ReviewApi;
 declare const draft: ReserveCorrectionInput;
+declare const roundDraft: UpdateRoundDraftInput;
+declare const getFindingReview: GetFindingReviewInput;
+declare const getRoundDraft: GetRoundDraftInput;
+declare const roundDraftSnapshot: RoundDraftSnapshot;
 declare const memberView: MemberAssignment;
 declare const ownApproval: OwnApprovalItem;
 declare const accessResult: ActionResult<void>;
@@ -92,3 +102,14 @@ if (!accessResult.ok) {
 
 // @ts-expect-error approval explicitly chooses retention
 void corrections.approveCorrection({ candidateId: "candidate-id", revision: 1, idempotencyKey: "key" });
+
+void review.updateRoundDraft(roundDraft);
+void review.getFindingReview(getFindingReview);
+void review.getRoundDraft(getRoundDraft);
+void roundDraftSnapshot.findingIds;
+
+// @ts-expect-error drafts cannot be updated with an empty finding set
+void review.updateRoundDraft({ ...roundDraft, findingIds: [] });
+
+// @ts-expect-error tenant is not part of a round draft read input
+void getRoundDraft.workspaceId;

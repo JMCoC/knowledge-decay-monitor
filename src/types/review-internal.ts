@@ -41,7 +41,7 @@ export type ReviewAuditAction =
 export type ReviewAuditMetadata =
   | { previousStatus: ReviewFindingStatus; status: ReviewFindingStatus }
   | { previousSeverity: FindingSeverity; severity: FindingSeverity }
-  | { assigneeId: string | null }
+  | { previousAssigneeId: string | null; assigneeId: string | null }
   | { roundId: string }
   | { roundId: string; outcome: Exclude<CorrectionDecisionOutcome, "approved"> }
   | { roundId: string; submissionId: string }
@@ -69,7 +69,7 @@ export type ReviewAuditAppend = ReviewAuditAppendBase & (
   | {
       action: "finding_assigned";
       entityType: "finding";
-      metadata: { assigneeId: string | null };
+      metadata: { previousAssigneeId: string | null; assigneeId: string | null };
     }
   | {
       action: "correction_round_prepared" | "correction_round_opened" | "correction_round_cancelled";

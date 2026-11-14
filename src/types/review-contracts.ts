@@ -83,6 +83,22 @@ export interface AssignFindingInput {
 
 export type ListAssigneesInput = ReviewPageQuery;
 
+export interface UpdateRoundDraftInput {
+  roundId: string;
+  revision: number;
+  /** Full replacement set; non-empty, unique and normalized at the boundary. */
+  findingIds: [string, ...string[]];
+  idempotencyKey: string;
+}
+
+export interface GetFindingReviewInput {
+  findingId: string;
+}
+
+export interface GetRoundDraftInput {
+  roundId: string;
+}
+
 export type PrepareRoundInput =
   | {
       documentId: string;
@@ -213,6 +229,11 @@ export interface CorrectionRoundSnapshot {
   openedAt: string | null;
 }
 
+/** A draft's proposed finding set. Only reviewer APIs can read this selection. */
+export interface RoundDraftSnapshot extends CorrectionRoundSnapshot {
+  findingIds: string[];
+}
+
 export interface CorrectionRoundItemSnapshot {
   itemId: string;
   finding: FindingReviewSnapshot;
@@ -323,7 +344,10 @@ export interface ReviewApi {
   changeFinding(input: ChangeFindingInput): Promise<ActionResult<FindingReviewSnapshot>>;
   assignFinding(input: AssignFindingInput): Promise<ActionResult<FindingReviewSnapshot>>;
   listAssignees(input: ListAssigneesInput): Promise<ActionResult<ReviewPage<EligibleOwner>>>;
+  getFindingReview(input: GetFindingReviewInput): Promise<ActionResult<FindingReviewSnapshot>>;
+  getRoundDraft(input: GetRoundDraftInput): Promise<ActionResult<RoundDraftSnapshot>>;
   prepareRound(input: PrepareRoundInput): Promise<ActionResult<CorrectionRoundSnapshot>>;
+  updateRoundDraft(input: UpdateRoundDraftInput): Promise<ActionResult<CorrectionRoundSnapshot>>;
   openRound(input: OpenRoundInput): Promise<ActionResult<ReviewRound>>;
   cancelRound(input: CancelRoundInput): Promise<ActionResult<CorrectionRoundSnapshot>>;
 }
