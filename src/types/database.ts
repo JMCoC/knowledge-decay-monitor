@@ -2417,6 +2417,18 @@ export type Database = {
         Args: { p_event_id: string; p_operation_id: string }
         Returns: boolean
       }
+      review_get_finding: {
+        Args: { p_actor_id: string; p_finding_id: string }
+        Returns: Json
+      }
+      review_get_round_draft: {
+        Args: { p_actor_id: string; p_round_id: string }
+        Returns: Json
+      }
+      review_list_assignees: {
+        Args: { p_actor_id: string; p_page?: number; p_page_size?: number }
+        Returns: Json
+      }
       run_analysis: {
         Args: {
           p_actor_id: string
