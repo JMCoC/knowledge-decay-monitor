@@ -33,6 +33,24 @@ export function runWithLocalSupabase({
     return 2;
   }
 
+  const reviewIsolationFile = "tests/integration/review-foundation-isolation.test.ts";
+  if (selected === "integration" && forwardedArgs.some((argument) => argument.replaceAll("\\", "/") === reviewIsolationFile)) {
+    const result = spawnCommand(process.execPath, [
+      resolve(PROJECT_ROOT, "scripts/run-review-isolated-integration.mjs"),
+      ...forwardedArgs,
+    ], {
+      cwd: PROJECT_ROOT,
+      env,
+      stdio: "inherit",
+      windowsHide: true,
+    });
+    if (result.error) {
+      logError("Could not start the disposable review integration runner.");
+      return 1;
+    }
+    return result.status ?? 1;
+  }
+
   let runtime;
   try {
     runtime = runtimeReader();
@@ -88,7 +106,11 @@ export function runWithLocalSupabase({
     childEnv.SUPABASE_SERVICE_ROLE_KEY = runtime.serviceRoleKey;
   }
 
-  const result = spawnCommand(process.execPath, [script, ...args, ...forwardedArgs], {
+  const runReviewSeparately = selected === "integration" && forwardedArgs.length === 0;
+  const commandArgs = [...args, ...forwardedArgs];
+  if (runReviewSeparately) commandArgs.push("--exclude", reviewIsolationFile);
+
+  const result = spawnCommand(process.execPath, [script, ...commandArgs], {
     cwd: PROJECT_ROOT,
     env: /** @type {NodeJS.ProcessEnv} */ (childEnv),
     stdio: "inherit",
@@ -99,7 +121,23 @@ export function runWithLocalSupabase({
     logError("Could not start the requested local test command.");
     return 1;
   }
-  return result.status ?? 1;
+  const status = result.status ?? 1;
+  if (status !== 0 || !runReviewSeparately) return status;
+
+  const reviewResult = spawnCommand(process.execPath, [
+    resolve(PROJECT_ROOT, "scripts/run-review-isolated-integration.mjs"),
+    reviewIsolationFile,
+  ], {
+    cwd: PROJECT_ROOT,
+    env: /** @type {NodeJS.ProcessEnv} */ (childEnv),
+    stdio: "inherit",
+    windowsHide: true,
+  });
+  if (reviewResult.error) {
+    logError("Could not start the disposable review integration runner.");
+    return 1;
+  }
+  return reviewResult.status ?? 1;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

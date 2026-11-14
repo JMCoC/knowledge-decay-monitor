@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolve } from "node:path";
 
 const mocks = vi.hoisted(() => ({
   spawnSync: vi.fn(),
@@ -7,7 +8,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("node:child_process", () => ({ spawnSync: mocks.spawnSync }));
 vi.mock("../../scripts/local-supabase.mjs", () => ({
-  PROJECT_ROOT: "C:/KDM/knowledge-decay-monitor",
+  PROJECT_ROOT: process.cwd(),
   LOCAL_API_URL: "http://127.0.0.1:54321",
   readLocalSupabaseRuntime: mocks.readLocalSupabaseRuntime,
 }));
@@ -69,6 +70,43 @@ describe("local Supabase test runner isolation", () => {
     });
     expect(options.env).not.toHaveProperty("SUPABASE_SECRET_KEY");
     expect(JSON.stringify(options.env)).not.toMatch(/REMOTE_|SENTRY_TOKEN_SENTINEL|example\.invalid/);
+  });
+
+  it("runs review isolation in its disposable runner after the shared integration suite", () => {
+    expect(
+      runWithLocalSupabase({ selected: "integration", forwardedArgs: [], env: hostileParentEnv() }),
+    ).toBe(0);
+
+    expect(mocks.spawnSync).toHaveBeenCalledTimes(2);
+    const [, suiteArgs] = mocks.spawnSync.mock.calls[0] as [string, string[]];
+    expect(suiteArgs).toContain("--exclude");
+    expect(suiteArgs).toContain("tests/integration/review-foundation-isolation.test.ts");
+
+    const [reviewCommand, reviewArgs, reviewOptions] = mocks.spawnSync.mock.calls[1] as [
+      string,
+      string[],
+      { cwd: string; env: Record<string, string> },
+    ];
+    expect(reviewCommand).toBe(process.execPath);
+    expect(reviewArgs[0]?.replaceAll("\\", "/")).toBe(
+      resolve(process.cwd(), "scripts/run-review-isolated-integration.mjs").replaceAll("\\", "/"),
+    );
+    expect(reviewArgs[1]).toBe("tests/integration/review-foundation-isolation.test.ts");
+    expect(reviewOptions.cwd).toBe(process.cwd());
+    expect(reviewOptions.env).toMatchObject({
+      NEXT_PUBLIC_SUPABASE_URL: "http://127.0.0.1:54321",
+      SUPABASE_SERVICE_ROLE_KEY: "LOCAL_SERVICE_ROLE_SENTINEL",
+    });
+    expect(JSON.stringify(reviewOptions.env)).not.toMatch(/REMOTE_|SENTRY_TOKEN_SENTINEL|example\.invalid/);
+  });
+
+  it("does not launch the isolated review runner when the shared integration suite fails", () => {
+    mocks.spawnSync.mockReturnValueOnce({ status: 1, error: undefined });
+
+    expect(
+      runWithLocalSupabase({ selected: "integration", forwardedArgs: [], env: hostileParentEnv() }),
+    ).toBe(1);
+    expect(mocks.spawnSync).toHaveBeenCalledTimes(1);
   });
 
   it("never passes the service key to a build child", () => {

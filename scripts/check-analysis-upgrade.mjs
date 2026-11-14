@@ -274,6 +274,7 @@ function copyS1Workspace(temporaryRoot, stage) {
   for (const relativeFile of trackedFiles) {
     if (!relativeFile.startsWith("supabase/")) throw new Error("Unexpected Supabase source path.");
     if (relativeFile.startsWith(migrationRoot) && !includeMigration(relativeFile, stage)) continue;
+    if (relativeFile.startsWith("supabase/tests/database/s3_01_") && stage !== "s3_01") continue;
     if (relativeFile.startsWith("supabase/functions/") && !includeFunction(relativeFile, stage)) continue;
     if (/(^|\/)\.env(?:\.[^/]*)?$/.test(relativeFile) || /(^|\/)\.temp(?:\/|$)/.test(relativeFile)) continue;
     const source = relativeFile === "supabase/seed.sql" && stage !== "s2_02"
@@ -422,9 +423,9 @@ end;
 $credit_workspace_backfill$;
 `;
 
-function runExpectedPromotionConflict(projectRoot) {
+function runExpectedPromotionConflict(workdir) {
   const result = spawnSync("pnpm", [
-    "exec", "supabase", "migration", "up", "--local", "--workdir", projectRoot,
+    "exec", "supabase", "migration", "up", "--local", "--workdir", workdir,
   ], {
     cwd: projectRoot,
     encoding: "utf8",
@@ -472,11 +473,13 @@ function main() {
   assertNoExistingStack(projectId);
   let s1Root = mkdtempSync(join(tmpdir(), "kdm-s2-02-s1-"));
   let s201Root = mkdtempSync(join(tmpdir(), "kdm-s2-02-s201-"));
+  let s211Root = mkdtempSync(join(tmpdir(), "kdm-s2-02-s211-"));
   let conflictRoot;
   const failures = [];
   try {
     copyS1Workspace(s1Root, "s1");
     copyS1Workspace(s201Root, "s2_01");
+    copyS1Workspace(s211Root, "s2_11");
 
     runSupabase(["start", "--workdir", s1Root], "S1 disposable stack start");
     const container = databaseContainer(projectId, s1Root);
@@ -490,7 +493,7 @@ function main() {
     const s201HistoryBaseline = seedS201CreditHistory(container);
     assertS1Unchanged(container, baseline);
 
-    runSupabase(["migration", "up", "--local", "--workdir", projectRoot], "S2-02 migration upgrade");
+    runSupabase(["migration", "up", "--local", "--workdir", s211Root], "S2-11 migration upgrade");
     assertS1Unchanged(container, baseline);
     assertS2Security(container);
     assertPromotionBalances(container);
@@ -504,7 +507,7 @@ function main() {
       throw new Error("Replaying the promotion backfill changed existing S2-01 history.");
     }
 
-    runSupabase(["test", "db", "--local", "--workdir", projectRoot], "Database regression tests");
+    runSupabase(["test", "db", "--local", "--workdir", s211Root], "Database regression tests");
     assertS1Unchanged(container, baseline);
     assertS2Security(container);
     assertPromotionBalances(container);
@@ -512,7 +515,7 @@ function main() {
       throw new Error("Database regression tests changed the preserved S2-01 history.");
     }
 
-    if (stopOwnedStack(projectId, s1Root, "S1 through S2-02 stack", failures)) s1Root = null;
+    if (stopOwnedStack(projectId, s1Root, "S1 through S2-11 stack", failures)) s1Root = null;
     else throw new Error(`Could not confirm stack cleanup; retained workdir: ${s1Root}`);
     if (failures.length) throw new Error(failures.join("\n"));
     rmSync(s201Root, { recursive: true, force: true });
@@ -539,7 +542,8 @@ function main() {
       where workspace_id='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'::uuid and event_type='Promotional';
     `, "Conflicting historical promotion snapshot");
 
-    runExpectedPromotionConflict(projectRoot);
+    copyS1Workspace(conflictRoot, "s2_11");
+    runExpectedPromotionConflict(conflictRoot);
     assertS1Unchanged(conflictContainer, conflictBaseline);
     const conflictState = queryDatabase(conflictContainer, `
       select
@@ -562,10 +566,10 @@ function main() {
     if (stopOwnedStack(projectId, conflictRoot, "Conflicting S2-01 stack", failures)) conflictRoot = null;
     else throw new Error(`Could not confirm stack cleanup; retained workdir: ${conflictRoot}`);
   } catch (error) {
-    failures.push(error instanceof Error ? error.message : "Disposable S1 to S2-02 upgrade failed.");
+    failures.push(error instanceof Error ? error.message : "Disposable S1 to S2-11 upgrade failed.");
   } finally {
     if (stopOwnedStack(projectId, conflictRoot, "Conflicting S2-01 stack", failures)) conflictRoot = null;
-    if (stopOwnedStack(projectId, s1Root, "S1 through S2-02 stack", failures)) s1Root = null;
+    if (stopOwnedStack(projectId, s1Root, "S1 through S2-11 stack", failures)) s1Root = null;
     if (s201Root) {
       try {
         rmSync(s201Root, { recursive: true, force: true });
@@ -573,10 +577,17 @@ function main() {
         failures.push("S2-01 temporary workspace cleanup failed.");
       }
     }
+    if (s211Root) {
+      try {
+        rmSync(s211Root, { recursive: true, force: true });
+      } catch {
+        failures.push("S2-11 temporary workspace cleanup failed.");
+      }
+    }
   }
 
   if (failures.length) throw new Error(failures.join("\n"));
-  console.log("S1 to S2-01 to S2-02 disposable upgrade passed; S1 and S2-01 history is preserved.");
+  console.log("S1 to S2-11 disposable upgrade passed; S1 and S2-01 history is preserved.");
 }
 
 try {

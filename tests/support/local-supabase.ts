@@ -3,14 +3,21 @@ import { createHmac, randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { createClient } from "@supabase/supabase-js";
 import type { Database } from "../../src/types/database";
+import { localSupabaseTarget } from "./local-supabase-target";
 
-const LOCAL_API_URL = "http://127.0.0.1:54321";
-const LOCAL_PROJECT_ID = "knowledge-decay-monitor-s1-02";
+function localTarget() {
+  const target = localSupabaseTarget();
+  if (process.env.KDM_LOCAL_SUPABASE_URL !== target.apiUrl) {
+    throw new Error("Local Supabase test environment is missing or has the wrong API URL.");
+  }
+  return target;
+}
 
 function localClient() {
-  const url = process.env.KDM_LOCAL_SUPABASE_URL;
+  const target = localTarget();
+  const url = target.apiUrl;
   const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
-  if (url !== LOCAL_API_URL || !key) {
+  if (!key) {
     throw new Error("Local Supabase test environment is missing or has the wrong API URL.");
   }
   return createClient<Database>(url, key, {
@@ -23,18 +30,19 @@ function localClient() {
 }
 
 function localJwtSecret() {
+  const target = localTarget();
   let status: { API_URL?: string; JWT_SECRET?: string };
   try {
     const output = execFileSync(
       process.execPath,
-      [resolve(process.cwd(), "node_modules/supabase/dist/supabase.js"), "status", "-o", "json"],
+      [resolve(process.cwd(), "node_modules/supabase/dist/supabase.js"), "status", "-o", "json", "--workdir", target.workdir],
       { cwd: process.cwd(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
     );
     status = JSON.parse(output) as { API_URL?: string; JWT_SECRET?: string };
   } catch {
     throw new Error("Could not read the local-only JWT signing fixture.");
   }
-  if (status.API_URL !== LOCAL_API_URL || !status.JWT_SECRET) {
+  if (status.API_URL !== target.apiUrl || !status.JWT_SECRET) {
     throw new Error("Refusing to sign a test token without the expected local Auth configuration.");
   }
   return status.JWT_SECRET;
@@ -59,14 +67,15 @@ export function expiredSignedAccessToken(accessToken: string) {
 }
 
 export async function assertLocalSupabaseReady() {
+  const target = localTarget();
   const url = process.env.KDM_LOCAL_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
-  if (url !== LOCAL_API_URL || !key) {
+  if (url !== target.apiUrl || !key) {
     throw new Error("Local Supabase test environment is missing or has the wrong API URL.");
   }
   let response: Response;
   try {
-    response = await fetch(`${LOCAL_API_URL}/auth/v1/settings`, {
+    response = await fetch(`${target.apiUrl}/auth/v1/settings`, {
       headers: { apikey: key },
       signal: AbortSignal.timeout(5000),
     });
@@ -110,17 +119,18 @@ export async function newLocalUser(): Promise<{
 }
 
 function localDatabaseContainer() {
+  const target = localTarget();
   let names: string;
   try {
     names = execFileSync(
       "docker",
-      ["ps", "--filter", `name=supabase_db_${LOCAL_PROJECT_ID}`, "--format", "{{.Names}}"],
+      ["ps", "--filter", `name=supabase_db_${target.projectId}`, "--format", "{{.Names}}"],
       { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
     ).trim();
   } catch {
     throw new Error("The local Supabase database container is unavailable.");
   }
-  const matches = names.split(/\r?\n/).filter((name) => name === `supabase_db_${LOCAL_PROJECT_ID}`);
+  const matches = names.split(/\r?\n/).filter((name) => name === `supabase_db_${target.projectId}`);
   if (matches.length !== 1) throw new Error("Expected exactly one local project database container.");
   return matches[0];
 }
@@ -142,9 +152,7 @@ function runLocalSql(sql: string, variables: Record<string, string>) {
 
 /** Toggles the disposable local upload gate for isolated integration tests. */
 export function setLocalUploadMode(mode: "paused" | "active") {
-  if (process.env.KDM_LOCAL_SUPABASE_URL !== LOCAL_API_URL) {
-    throw new Error("Refusing to change upload mode outside the expected local Supabase project.");
-  }
+  localTarget();
   const sql = "WITH changed AS (UPDATE private.upload_control SET mode = :'mode'::public.upload_control_mode, updated_at = now() WHERE singleton RETURNING singleton) SELECT count(*)::text FROM changed;";
   if (runLocalSql(sql, { mode }) !== "1") {
     throw new Error("Expected exactly one local upload gate to change.");
@@ -153,9 +161,7 @@ export function setLocalUploadMode(mode: "paused" | "active") {
 
 /** Reads the local upload gate so suites can restore the exact starting state. */
 export function getLocalUploadMode(): "paused" | "active" {
-  if (process.env.KDM_LOCAL_SUPABASE_URL !== LOCAL_API_URL) {
-    throw new Error("Refusing to inspect upload mode outside the expected local Supabase project.");
-  }
+  localTarget();
   const mode = runLocalSql("SELECT mode::text FROM private.upload_control WHERE singleton;", {});
   if (mode !== "paused" && mode !== "active") {
     throw new Error("The local upload gate did not return one supported mode.");
@@ -165,10 +171,8 @@ export function getLocalUploadMode(): "paused" | "active" {
 
 /** Looks up only an Auth user created by the local UI acceptance tests. */
 export function localTestUserIdByEmail(email: string): string | null {
-  if (
-    process.env.KDM_LOCAL_SUPABASE_URL !== LOCAL_API_URL
-    || !/^kdm-[0-9a-f-]{36}@example\.test$/i.test(email)
-  ) {
+  localTarget();
+  if (!/^kdm-[0-9a-f-]{36}@example\.test$/i.test(email)) {
     throw new Error("Refusing to look up an Auth user outside the synthetic local test namespace.");
   }
   const rows = runLocalSql(
@@ -185,8 +189,9 @@ export function localTestUserIdByEmail(email: string): string | null {
 
 /** Expires only a synthetic local verification lease to test retry after a lost response. */
 export function expireLocalVerificationLease(versionId: string) {
+  localTarget();
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-  if (process.env.KDM_LOCAL_SUPABASE_URL !== LOCAL_API_URL || !uuid.test(versionId)) {
+  if (!uuid.test(versionId)) {
     throw new Error("Refusing to change a verification lease outside the local synthetic fixture.");
   }
   const sql = "WITH changed AS (UPDATE public.document_versions SET upload_lease_expires_at = now() - interval '1 second' WHERE id = :'version_id'::uuid AND upload_state = 'verifying' RETURNING id) SELECT count(*)::text FROM changed;";
@@ -197,8 +202,9 @@ export function expireLocalVerificationLease(versionId: string) {
 
 /** Expires only a synthetic local recovery lease so maintenance cleanup can retry its retired attempt. */
 export function expireLocalRecoveryLease(versionId: string) {
+  localTarget();
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-  if (process.env.KDM_LOCAL_SUPABASE_URL !== LOCAL_API_URL || !uuid.test(versionId)) {
+  if (!uuid.test(versionId)) {
     throw new Error("Refusing to change a recovery lease outside the local synthetic fixture.");
   }
   const sql = "WITH changed AS (UPDATE public.document_versions SET upload_lease_expires_at = now() - interval '1 second' WHERE id = :'version_id'::uuid AND upload_state = 'recovering' RETURNING id) SELECT count(*)::text FROM changed;";
@@ -209,7 +215,8 @@ export function expireLocalRecoveryLease(versionId: string) {
 
 /** Installs only a synthetic test claim; never usable against a remote project. */
 export function seedLocalProcessingClaim(versionId: string,operationId: string,startedAt: string) {
-  if(process.env.KDM_LOCAL_SUPABASE_URL!==LOCAL_API_URL || !/^[0-9a-f-]{36}$/i.test(versionId)
+  localTarget();
+  if(!/^[0-9a-f-]{36}$/i.test(versionId)
     || !/^[0-9a-f-]{36}$/i.test(operationId) || !Number.isFinite(Date.parse(startedAt))) throw new Error("Invalid local claim fixture.");
   const sql=`WITH fixture AS (
     SELECT v.id,v.workspace_id FROM public.document_versions v JOIN public.documents d ON d.id=v.document_id
@@ -226,7 +233,8 @@ export function seedLocalProcessingClaim(versionId: string,operationId: string,s
 
 /** Deletes only the workspace/profile generated for a synthetic local Auth user. */
 export async function cleanupLocalUser(userId: string) {
-  if (!/^[0-9a-f-]{36}$/i.test(userId) || process.env.KDM_LOCAL_SUPABASE_URL !== LOCAL_API_URL) {
+  localTarget();
+  if (!/^[0-9a-f-]{36}$/i.test(userId)) {
     throw new Error("Refusing to clean up outside the synthetic local Auth fixture.");
   }
   const cleanupWorkspaceSql = [
@@ -287,7 +295,7 @@ export async function cleanupLocalUser(userId: string) {
 
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!key) throw new Error("Local Auth cleanup requires the local-only service role.");
-  const admin = createClient<Database>(LOCAL_API_URL, key, {
+  const admin = createClient<Database>(localTarget().apiUrl, key, {
     auth: { autoRefreshToken: false, detectSessionInUrl: false, persistSession: false },
   });
   let cleanupError: { status?: number; code?: string } | null = null;
@@ -352,10 +360,10 @@ export function insertLocalProfile(input: {
   fullName: string;
   email: string;
 }) {
+  localTarget();
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   if (
-    process.env.KDM_LOCAL_SUPABASE_URL !== LOCAL_API_URL
-    || !uuid.test(input.userId)
+    !uuid.test(input.userId)
     || !uuid.test(input.workspaceId)
     || !["Admin", "QA Lead", "Member"].includes(input.role)
     || !/^kdm-[0-9a-f-]{36}@example\.test$/i.test(input.email)
@@ -387,10 +395,10 @@ export function insertLocalActiveVersion(input: {
   documentId: string;
   versionId: string;
 }) {
+  localTarget();
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   if (
-    process.env.KDM_LOCAL_SUPABASE_URL !== LOCAL_API_URL
-    || !uuid.test(input.workspaceId)
+    !uuid.test(input.workspaceId)
     || !uuid.test(input.documentId)
     || !uuid.test(input.versionId)
   ) {

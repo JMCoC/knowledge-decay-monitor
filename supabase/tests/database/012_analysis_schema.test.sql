@@ -43,9 +43,11 @@ select is((
   where e.enumtypid = 'public.finding_severity'::regtype
 ), ARRAY['High', 'Medium', 'Low']::text[], 'Finding severity values are stable');
 select is((
-  select array_agg(e.enumlabel::text order by e.enumsortorder) from pg_enum e
+  select e.enumlabel::text from pg_enum e
   where e.enumtypid = 'public.finding_status'::regtype
-), ARRAY['pending_review']::text[], 'S2 finding status stays pending review');
+  order by e.enumsortorder
+  limit 1
+), 'pending_review', 'The initial S2 finding status remains first');
 
 select has_column('public', 'analyses', 'workspace_id', 'Analysis carries its tenant');
 select has_column('public', 'analyses', 'reserved_credits', 'Analysis keeps historical reserved amount');

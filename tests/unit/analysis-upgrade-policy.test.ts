@@ -77,6 +77,15 @@ const s211Names = [
   "20261101190100_s2_11_notification_scheduler.sql",
 ];
 
+const s301Names = [
+  "20261108150000_s3_01_review_enums.sql",
+  "20261108150100_s3_01_review_model.sql",
+  "20261108150200_s3_01_review_integrity.sql",
+  "20261108150300_s3_01_review_security.sql",
+  "20261108150400_s3_01_review_audit_outbox.sql",
+  "20261108150500_s3_01_approval_contribution_check.sql",
+];
+
 describe("analysis migration upgrade stages", () => {
   it("classifies every reviewed S1 and S2 migration by its exact name", () => {
     for (const name of s1Names) {
@@ -103,6 +112,9 @@ describe("analysis migration upgrade stages", () => {
     for (const name of s211Names) {
       expect(migrationStage(`supabase/migrations/${name}`)).toBe("s2_11");
     }
+    for (const name of s301Names) {
+      expect(migrationStage(`supabase/migrations/${name}`)).toBe("s3_01");
+    }
     for (const name of [
       "20261011013954_s2_02_credit_operations.sql",
       "20261011014828_s2_02_credit_reads.sql",
@@ -128,6 +140,23 @@ describe("analysis migration upgrade stages", () => {
     }
     expect(() => migrationStage("supabase/migrations/20261101190200_s2_11_unreviewed.sql"))
       .toThrow("Unreviewed migration in upgrade inventory.");
+  });
+
+  it("keeps all S3-01 migrations out of the historical S2-11 stage", () => {
+    for (const name of s301Names) {
+      const migration = `supabase/migrations/${name}`;
+      expect(includeMigration(migration, "s2_11")).toBe(false);
+      expect(includeMigration(migration, "s3_01")).toBe(true);
+    }
+  });
+
+  it("pins the historical upgrade and database suite to a filtered S2-11 workspace", () => {
+    const upgradeScript = readFileSync("scripts/check-analysis-upgrade.mjs", "utf8");
+    expect(upgradeScript.includes('copyS1Workspace(s211Root, "s2_11")')).toBe(true);
+    expect(upgradeScript.includes('"S2-11 migration upgrade"')).toBe(true);
+    expect(upgradeScript.includes('"Database regression tests"')).toBe(true);
+    expect(upgradeScript.includes('["test", "db", "--local", "--workdir", s211Root]')).toBe(true);
+    expect(upgradeScript.includes('relativeFile.startsWith("supabase/tests/database/s3_01_")')).toBe(true);
   });
 
   it("excludes only S2-11 lease fields from the S2-01 notification history hash", () => {
