@@ -542,7 +542,8 @@ function main() {
       where workspace_id='bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'::uuid and event_type='Promotional';
     `, "Conflicting historical promotion snapshot");
 
-    runExpectedPromotionConflict(s211Root);
+    copyS1Workspace(conflictRoot, "s2_11");
+    runExpectedPromotionConflict(conflictRoot);
     assertS1Unchanged(conflictContainer, conflictBaseline);
     const conflictState = queryDatabase(conflictContainer, `
       select
