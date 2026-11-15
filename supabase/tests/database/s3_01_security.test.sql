@@ -247,7 +247,7 @@ set assignee_id = (select member_b_id from pg_temp.review_security_context where
 where id = (select finding_a_id from pg_temp.review_security_context where case_name = 'a');
 update public.correction_round_items
 set assignee_id = (select member_b_id from pg_temp.review_security_context where case_name = 'a'),
-    revision = revision + 1, current_submission_id = null
+    revision = revision + 1
 where id = (select item_id from pg_temp.review_security_items where finding_key = 'a');
 insert into pg_temp.review_security_submissions(submission_name, submission_id)
 values ('member_b_current', pg_temp.create_review_submission(

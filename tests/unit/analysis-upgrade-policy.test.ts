@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import {
+  databaseTestSourceForStage,
   filterFunctionConfigForStage,
   includeFunction,
   includeMigration,
@@ -85,8 +86,61 @@ const s301Names = [
   "20261108150400_s3_01_review_audit_outbox.sql",
   "20261108150500_s3_01_approval_contribution_check.sql",
 ];
+const s302Names = [
+  "20261114150000_s3_02_review_audit_enum.sql",
+  "20261114150100_s3_02_review_model.sql",
+  "20261114150200_s3_02_review_coverage_guards.sql",
+  "20261114150300_s3_02_review_command_support.sql",
+  "20261114150400_s3_02_finding_commands.sql",
+  "20261114150500_s3_02_round_commands.sql",
+  "20261114150600_s3_02_findings_projection.sql",
+];
 
 describe("analysis migration upgrade stages", () => {
+  it("keeps later-schema assertions out of the historical S2-11 database suite", () => {
+    expect(databaseTestSourceForStage(
+      "supabase/tests/database/004_bootstrap.test.sql",
+      "s2_11",
+    )).toBe("supabase/fixtures/upgrade/s2_11-tests/004_bootstrap.test.sql");
+    expect(databaseTestSourceForStage(
+      "supabase/tests/database/015_analysis_finding_initial_state.test.sql",
+      "s2_11",
+    )).toBe("supabase/fixtures/upgrade/s2_11-tests/015_analysis_finding_initial_state.test.sql");
+    expect(databaseTestSourceForStage(
+      "supabase/tests/database/004_bootstrap.test.sql",
+      "s3_02",
+    )).toBe("supabase/tests/database/004_bootstrap.test.sql");
+    expect(databaseTestSourceForStage(
+      "supabase/tests/database/014_analysis_security.test.sql",
+      "s2_11",
+    )).toBe("supabase/tests/database/014_analysis_security.test.sql");
+    expect(databaseTestSourceForStage(
+      "supabase/tests/database/004_bootstrap.test.sql",
+      "s3_01",
+    )).toBe("supabase/tests/database/004_bootstrap.test.sql");
+    expect(readFileSync(databaseTestSourceForStage(
+      "supabase/tests/database/004_bootstrap.test.sql",
+      "s2_11",
+    ), "utf8")).toContain("Email comes from Auth");
+    expect(readFileSync(databaseTestSourceForStage(
+      "supabase/tests/database/015_analysis_finding_initial_state.test.sql",
+      "s2_11",
+    ), "utf8")).toContain("severity_current = ''Medium'', assignee_id =");
+    expect(readFileSync("supabase/tests/database/004_bootstrap.test.sql", "utf8"))
+      .toContain("Authenticated Profile reads do not expose email");
+    expect(readFileSync("supabase/tests/database/015_analysis_finding_initial_state.test.sql", "utf8"))
+      .toContain("status = ''confirmed''");
+    expect(readFileSync("scripts/check-analysis-upgrade.mjs", "utf8"))
+      .toContain("databaseTestSourceForStage(relativeFile, stage)");
+  });
+
+  it("pins the S3-02 stage to the migration files in the repository", () => {
+    const files = readdirSync("supabase/migrations")
+      .filter((name) => name.includes("_s3_02_"))
+      .sort();
+    expect(files).toEqual([...s302Names].sort());
+  });
+
   it("classifies every reviewed S1 and S2 migration by its exact name", () => {
     for (const name of s1Names) {
       expect(migrationStage(`supabase/migrations/${name}`)).toBe("s1");
@@ -114,6 +168,9 @@ describe("analysis migration upgrade stages", () => {
     }
     for (const name of s301Names) {
       expect(migrationStage(`supabase/migrations/${name}`)).toBe("s3_01");
+    }
+    for (const name of s302Names) {
+      expect(migrationStage(`supabase/migrations/${name}`)).toBe("s3_02");
     }
     for (const name of [
       "20261011013954_s2_02_credit_operations.sql",
@@ -150,6 +207,15 @@ describe("analysis migration upgrade stages", () => {
     }
   });
 
+  it("keeps every S3-02 migration out of the S3-01 baseline", () => {
+    for (const name of s302Names) {
+      const migration = `supabase/migrations/${name}`;
+      expect(includeMigration(migration, "s2_11")).toBe(false);
+      expect(includeMigration(migration, "s3_01")).toBe(false);
+      expect(includeMigration(migration, "s3_02")).toBe(true);
+    }
+  });
+
   it("pins the historical upgrade and database suite to a filtered S2-11 workspace", () => {
     const upgradeScript = readFileSync("scripts/check-analysis-upgrade.mjs", "utf8");
     expect(upgradeScript.includes('copyS1Workspace(s211Root, "s2_11")')).toBe(true);
@@ -157,6 +223,7 @@ describe("analysis migration upgrade stages", () => {
     expect(upgradeScript.includes('"Database regression tests"')).toBe(true);
     expect(upgradeScript.includes('["test", "db", "--local", "--workdir", s211Root]')).toBe(true);
     expect(upgradeScript.includes('relativeFile.startsWith("supabase/tests/database/s3_01_")')).toBe(true);
+    expect(upgradeScript.includes('relativeFile.startsWith("supabase/tests/database/s3_02_")')).toBe(true);
   });
 
   it("excludes only S2-11 lease fields from the S2-01 notification history hash", () => {

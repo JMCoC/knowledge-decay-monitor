@@ -79,8 +79,11 @@ describe("local Supabase test runner isolation", () => {
 
     expect(mocks.spawnSync).toHaveBeenCalledTimes(2);
     const [, suiteArgs] = mocks.spawnSync.mock.calls[0] as [string, string[]];
-    expect(suiteArgs).toContain("--exclude");
-    expect(suiteArgs).toContain("tests/integration/review-foundation-isolation.test.ts");
+    expect(suiteArgs.slice(-6)).toEqual([
+      "--exclude", "tests/integration/review-foundation-isolation.test.ts",
+      "--exclude", "tests/integration/review-commands-isolation.test.ts",
+      "--exclude", "tests/integration/review-command-concurrency.test.ts",
+    ]);
 
     const [reviewCommand, reviewArgs, reviewOptions] = mocks.spawnSync.mock.calls[1] as [
       string,
@@ -91,13 +94,49 @@ describe("local Supabase test runner isolation", () => {
     expect(reviewArgs[0]?.replaceAll("\\", "/")).toBe(
       resolve(process.cwd(), "scripts/run-review-isolated-integration.mjs").replaceAll("\\", "/"),
     );
-    expect(reviewArgs[1]).toBe("tests/integration/review-foundation-isolation.test.ts");
+    expect(reviewArgs.slice(1)).toEqual([
+      "tests/integration/review-foundation-isolation.test.ts",
+      "tests/integration/review-commands-isolation.test.ts",
+      "tests/integration/review-command-concurrency.test.ts",
+    ]);
     expect(reviewOptions.cwd).toBe(process.cwd());
     expect(reviewOptions.env).toMatchObject({
       NEXT_PUBLIC_SUPABASE_URL: "http://127.0.0.1:54321",
       SUPABASE_SERVICE_ROLE_KEY: "LOCAL_SERVICE_ROLE_SENTINEL",
     });
     expect(JSON.stringify(reviewOptions.env)).not.toMatch(/REMOTE_|SENTRY_TOKEN_SENTINEL|example\.invalid/);
+  });
+
+  it("keeps review suites isolated when full-suite Vitest options are forwarded", () => {
+    expect(runWithLocalSupabase({
+      selected: "integration",
+      forwardedArgs: ["--reporter=dot"],
+      env: hostileParentEnv(),
+    })).toBe(0);
+
+    expect(mocks.spawnSync).toHaveBeenCalledTimes(2);
+    const [, suiteArgs] = mocks.spawnSync.mock.calls[0] as [string, string[]];
+    expect(suiteArgs).toContain("--reporter=dot");
+    expect(suiteArgs.slice(-6)).toEqual([
+      "--exclude", "tests/integration/review-foundation-isolation.test.ts",
+      "--exclude", "tests/integration/review-commands-isolation.test.ts",
+      "--exclude", "tests/integration/review-command-concurrency.test.ts",
+    ]);
+  });
+
+  it("runs an explicitly requested review batch only through the disposable project", () => {
+    const requested = [
+      "tests/integration/review-command-concurrency.test.ts",
+      "tests/integration/review-commands-isolation.test.ts",
+    ];
+
+    expect(runWithLocalSupabase({ selected: "integration", forwardedArgs: requested, env: hostileParentEnv() })).toBe(0);
+
+    expect(mocks.readLocalSupabaseRuntime).not.toHaveBeenCalled();
+    expect(mocks.spawnSync).toHaveBeenCalledTimes(1);
+    const [reviewCommand, reviewArgs] = mocks.spawnSync.mock.calls[0] as [string, string[]];
+    expect(reviewCommand).toBe(process.execPath);
+    expect(reviewArgs.slice(1)).toEqual(requested);
   });
 
   it("does not launch the isolated review runner when the shared integration suite fails", () => {

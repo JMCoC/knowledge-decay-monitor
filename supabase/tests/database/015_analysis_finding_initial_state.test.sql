@@ -30,7 +30,7 @@ select throws_ok(format(
 ), '23514', null, 'A new finding cannot start assigned');
 
 select lives_ok(format(
-  'update public.findings set severity_current = ''Medium'', assignee_id = ''10000000-0000-4000-8000-000000000001''::uuid where fingerprint = ''initial-valid'''
+  'update public.findings set status = ''confirmed'', severity_current = ''Medium'' where fingerprint = ''initial-valid'''
 ), 'The insert guard leaves later review updates available');
 
 select * from finish();

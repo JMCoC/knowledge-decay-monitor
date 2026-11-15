@@ -36,7 +36,7 @@ select is((
   where table_schema = 'public'
     and table_name in ('analysis_runs', 'analysis_scope', 'analysis_findings', 'analysis_finding_evidence')
     and column_name in (
-      'confidence', 'assignee_id', 'lease_expires_at', 'operation_id', 'idempotency_key',
+      'confidence', 'lease_expires_at', 'operation_id', 'idempotency_key',
       'request_fingerprint', 'retrieval_config', 'provider_config', 'attempt_count', 'error_code'
     )
 ), 0, 'Read projections exclude internal analysis and provider data');

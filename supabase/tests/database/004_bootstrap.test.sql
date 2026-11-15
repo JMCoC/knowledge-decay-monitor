@@ -12,7 +12,8 @@ select is((select count(*) from workspaces),0::bigint,'Unassigned user sees no w
 select lives_ok($$select bootstrap_workspace('New workspace','New Admin')$$,'Authenticated user can bootstrap');
 select is((select count(*) from workspaces),1::bigint,'Creator sees exactly one workspace');
 select is((select role::text from profiles where id = auth.uid()),'Admin','Creator becomes Admin');
-select is((select email from profiles where id = auth.uid()),'new@example.test','Email comes from Auth');
+select throws_ok($$select email from profiles where id = auth.uid()$$,
+ '42501', null, 'Authenticated Profile reads do not expose email');
 select is((select count(*)::integer from credit_ledger
   where workspace_id = (select workspace_id from profiles where id = auth.uid())
     and event_type = 'Promotional'), 1, 'Bootstrap records exactly one promotion');
@@ -32,6 +33,8 @@ select throws_ok($$select bootstrap_workspace('Anonymous','Nobody')$$,'42501',nu
 set local role anon;
 select throws_ok($$select bootstrap_workspace('Anonymous','Nobody')$$,'42501',null,'Anon cannot execute bootstrap');
 reset role;
+select is((select email from public.profiles where id = '10000000-0000-4000-8000-000000000099'),
+  'new@example.test', 'Bootstrap persists the email copied from Auth for server-side use');
 select is((select count(*) from workspaces w
   join profiles p on p.workspace_id = w.id
   where p.id = '10000000-0000-4000-8000-000000000099'

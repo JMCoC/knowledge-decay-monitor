@@ -49,11 +49,10 @@ begin
   v_finding_a := pg_temp.insert_finding_row(v_analysis, v_workspace, 0.91);
   v_finding_b := pg_temp.insert_finding_row(v_analysis, v_workspace, 0.82);
   v_finding_c := pg_temp.insert_finding_row(v_analysis, v_workspace, 0.73);
-  update public.findings
-  set assignee_id = case id
+  update public.findings set status = 'confirmed', assignee_id = case id
     when v_finding_a then v_member_a
     when v_finding_b then v_member_b
-    when v_finding_c then v_member_a
+    else v_member_a
   end
   where id in (v_finding_a, v_finding_b, v_finding_c);
   perform pg_temp.insert_evidence_row(v_workspace, v_analysis, v_finding_a, v_document, v_version, v_chunk, 'Synthetic review evidence A');
@@ -157,7 +156,10 @@ begin
     end loop;
   end if;
   update public.correction_rounds
-  set status = 'collecting', revision = revision + 1, opened_at = now()
+  set status = case when mode = 'administrative'
+    then 'consolidating'::public.correction_round_status
+    else 'collecting'::public.correction_round_status end,
+      revision = revision + 1, opened_at = now()
   where id = v_round_id;
   return v_round_id;
 end;
@@ -319,8 +321,12 @@ begin
   set state = 'confirmed', confirmed_at = v_confirmed_at
   where id = v_submission_id;
   update public.correction_round_items
-  set current_submission_id = v_submission_id
+  set current_submission_id = v_submission_id,
+      coverage_revision = coverage_revision + 1
   where id = any(p_item_ids) and round_id = r.id;
+  update public.correction_rounds
+  set revision = revision + 1, coverage_revision = coverage_revision + 1
+  where id = r.id;
   return v_submission_id;
 end;
 $$;
@@ -349,7 +355,7 @@ begin
     coverage_revision, revision, idempotency_key
   ) values (
     v_candidate_id, r.workspace_id, r.id, r.document_id, r.base_version_id, v_version_id,
-    null, p_admin_id, 'consolidated', 'reserved', r.revision, 1, gen_random_uuid()::text
+    null, p_admin_id, 'consolidated', 'reserved', r.coverage_revision, 1, gen_random_uuid()::text
   );
   if p_confirm_upload then
     perform pg_temp.confirm_review_upload(v_version_id);
@@ -375,7 +381,7 @@ begin
       document_id, item_revision
     )
     select c.id, i.id, i.current_submission_id, i.workspace_id, i.round_id,
-      i.document_id, i.revision
+      i.document_id, i.coverage_revision
     from public.correction_round_items i where i.round_id = c.round_id;
   else
     insert into public.correction_candidate_items(
@@ -383,7 +389,7 @@ begin
       document_id, item_revision
     )
     select c.id, i.id, i.current_submission_id, i.workspace_id, i.round_id,
-      i.document_id, i.revision
+      i.document_id, i.coverage_revision
     from public.correction_round_items i where i.round_id = c.round_id;
   end if;
   update public.correction_rounds
@@ -427,7 +433,7 @@ begin
 end;
 $$;
 
-create function pg_temp.complete_review_candidate(p_candidate_id uuid) returns void
+create function pg_temp.start_review_candidate(p_candidate_id uuid) returns void
 language plpgsql
 set search_path = pg_temp, public
 as $$
@@ -437,6 +443,9 @@ declare
   v_started_at timestamptz := clock_timestamp();
 begin
   select x.* into strict c from public.correction_candidates x where x.id = p_candidate_id;
+  if c.status <> 'selected' then
+    raise exception 'Only a selected candidate can start fixture processing';
+  end if;
   update public.correction_candidates
   set status = 'processing', revision = revision + 1 where id = c.id;
   insert into private.ingestion_jobs(
@@ -450,6 +459,36 @@ begin
     processing_started_at = v_started_at,
     processing_lease_expires_at = v_started_at + interval '180 seconds'
   where id = c.version_id and workspace_id = c.workspace_id;
+end;
+$$;
+
+create function pg_temp.complete_review_candidate(p_candidate_id uuid) returns void
+language plpgsql
+set search_path = pg_temp, public
+as $$
+declare
+  c public.correction_candidates%rowtype;
+  v_operation_id uuid := gen_random_uuid();
+  v_started_at timestamptz := clock_timestamp();
+begin
+  select x.* into strict c from public.correction_candidates x where x.id = p_candidate_id;
+  if c.status = 'selected' then
+    update public.correction_candidates
+    set status = 'processing', revision = revision + 1 where id = c.id;
+    insert into private.ingestion_jobs(
+      version_id, workspace_id, status, attempt_count, operation_id, started_at, lease_expires_at
+    ) values (
+      c.version_id, c.workspace_id, 'running', 1, v_operation_id,
+      v_started_at, v_started_at + interval '180 seconds'
+    );
+    update public.document_versions set processing_status = 'processing',
+      processing_queued = false, processing_operation_id = v_operation_id,
+      processing_started_at = v_started_at,
+      processing_lease_expires_at = v_started_at + interval '180 seconds'
+    where id = c.version_id and workspace_id = c.workspace_id;
+  elsif c.status <> 'processing' then
+    raise exception 'Only a selected or processing candidate can complete fixture processing';
+  end if;
   update public.document_versions set processing_status = 'ready',
     version_status = 'pending_approval', processing_operation_id = null,
     processing_started_at = null, processing_lease_expires_at = null
@@ -503,9 +542,11 @@ begin
   update public.correction_candidates
   set status = 'invalidated', revision = revision + 1 where id = c.id;
   update public.correction_round_items
-  set current_submission_id = null, revision = revision + 1 where id = i.id;
+  set current_submission_id = null, revision = revision + 1,
+      coverage_revision = coverage_revision + 1 where id = i.id;
   update public.correction_rounds
-  set status = 'collecting', active_candidate_id = null, revision = revision + 1
+  set status = 'collecting', active_candidate_id = null, revision = revision + 1,
+      coverage_revision = coverage_revision + 1
   where id = c.round_id;
   return v_return_id;
 end;
@@ -534,14 +575,14 @@ begin
     coverage_revision, revision, idempotency_key
   ) values (
     v_candidate_id, r.workspace_id, r.id, r.document_id, r.base_version_id, s.version_id,
-    s.id, p_admin_id, 'direct', 'selected', r.revision + 1, 1, gen_random_uuid()::text
+    s.id, p_admin_id, 'direct', 'selected', r.coverage_revision, 1, gen_random_uuid()::text
   );
   insert into public.correction_candidate_items(
     candidate_id, round_item_id, submission_id, workspace_id,
     round_id, document_id, item_revision
   )
   select v_candidate_id, i.id, i.current_submission_id, i.workspace_id,
-    i.round_id, i.document_id, i.revision
+    i.round_id, i.document_id, i.coverage_revision
   from public.correction_round_items i where i.round_id = r.id;
   update public.correction_rounds
   set status = 'candidate_processing', active_candidate_id = v_candidate_id, revision = revision + 1
@@ -655,7 +696,7 @@ begin
   d3f1 := pg_temp.insert_finding_row(p_analysis_id, p_workspace_id, 0.92, 'Synthetic document three finding one');
   d3f2 := pg_temp.insert_finding_row(p_analysis_id, p_workspace_id, 0.82, 'Synthetic document three finding two');
   d3f3 := pg_temp.insert_finding_row(p_analysis_id, p_workspace_id, 0.72, 'Synthetic document three finding three');
-  update public.findings set assignee_id = case
+  update public.findings set status = 'confirmed', assignee_id = case
     when id in (f2, f3, d2f1, d2f2, d2f3, d3f1, d3f2, d3f3) then p_member_a_id
     when id = f4 then p_member_b_id
   end
@@ -690,7 +731,7 @@ begin
   reserved_submission := pg_temp.create_review_reservation(main_round, p_member_a_id, item_ids_a[1:1]);
   expired_submission := pg_temp.create_review_reservation(main_round, p_member_a_id, item_ids_a[2:2], true);
   f4_after_round := pg_temp.insert_finding_row(p_analysis_id, p_workspace_id, 0.44, 'Finding created after the round opened');
-  update public.findings set assignee_id = p_member_b_id where id = f4_after_round;
+  update public.findings set status = 'confirmed', assignee_id = p_member_b_id where id = f4_after_round;
   perform pg_temp.insert_evidence_row(p_workspace_id, p_analysis_id, f4_after_round, p_document_ids[1], p_version_ids[1], p_chunk_ids[1], 'Evidence for a finding outside the open round');
 
   approval_round := pg_temp.create_review_round_for_document(

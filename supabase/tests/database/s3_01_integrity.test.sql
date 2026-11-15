@@ -42,7 +42,7 @@ begin
   into strict v_document, v_version, v_chunk
   from pg_temp.analysis_case where analysis_id = v_analysis and ordinal = 1;
   v_finding := pg_temp.insert_finding_row(v_analysis, v_workspace, 0.5);
-  update public.findings set assignee_id = v_member where id = v_finding;
+  update public.findings set status = 'confirmed', assignee_id = v_member where id = v_finding;
   perform pg_temp.insert_evidence_row(
     v_workspace, v_analysis, v_finding, v_document, v_version, v_chunk, 'Synthetic secondary evidence'
   );
@@ -76,6 +76,40 @@ insert into pg_temp.review_integrity_rounds
 select 'admin', 'empty', r.id from public.correction_rounds r
 join pg_temp.review_integrity_secondary_case s on s.document_id = r.document_id
 where r.mode = 'administrative';
+
+create temporary table review_integrity_pending_round(round_id uuid not null) on commit drop;
+do $$
+declare
+  s pg_temp.review_integrity_secondary_case%rowtype;
+  f pg_temp.review_fixture_case%rowtype;
+  v_analysis uuid;
+  v_document uuid;
+  v_version uuid;
+  v_chunk uuid;
+  v_finding uuid;
+  v_round uuid := gen_random_uuid();
+begin
+  select * into strict s from pg_temp.review_integrity_secondary_case;
+  select x.* into strict f from pg_temp.review_fixture_case x where x.workspace_id = s.workspace_id;
+  v_analysis := pg_temp.create_analysis_fixture(s.workspace_id, f.admin_id, 'completed', 1);
+  select document_id, version_id, chunk_id into strict v_document, v_version, v_chunk
+  from pg_temp.analysis_case where analysis_id = v_analysis and ordinal = 1;
+  v_finding := pg_temp.insert_finding_row(v_analysis, s.workspace_id, 0.37, 'Pending review integrity regression');
+  perform pg_temp.insert_evidence_row(s.workspace_id, v_analysis, v_finding, v_document, v_version, v_chunk,
+    'Evidence for a still pending finding');
+  insert into public.correction_rounds(id, workspace_id, document_id, mode, base_version_id, created_by)
+  values (v_round, s.workspace_id, v_document, 'assigned_findings', v_version, f.admin_id);
+  insert into public.correction_round_items(workspace_id, round_id, document_id, finding_id,
+    initial_assignee_id, assignee_id)
+  values (s.workspace_id, v_round, v_document, v_finding, null, null);
+  insert into pg_temp.review_integrity_pending_round values (v_round);
+end;
+$$;
+select throws_ok(format(
+  'update public.correction_rounds set status = %L, opened_at = now(), revision = revision + 1 where id = %L',
+  'collecting', (select round_id from pg_temp.review_integrity_pending_round)
+), '23514', null,
+  'A round cannot open while one of its selected findings is still pending review');
 
 insert into pg_temp.review_integrity_rounds
 select 'coverage', 'coverage', pg_temp.create_review_round(
@@ -151,21 +185,14 @@ from pg_temp.review_integrity_rounds r
 join pg_temp.review_integrity_cases c on c.case_name = r.case_name
 join pg_temp.review_fixture_case f on f.workspace_id = c.workspace_id
 where r.round_name = 'empty_assigned';
-select throws_ok(format(
-  'update public.correction_rounds set status = %L, opened_at = now(), revision = revision + 1 where id = %L',
-  'collecting', (select round_id from pg_temp.review_integrity_rounds where round_name = 'empty_assigned')
-), '23514', null, 'A round cannot open while a selected finding is still pending review');
-update public.findings set status = 'confirmed'
-where id = (select f.finding_a_id from pg_temp.review_fixture_case f
-  join pg_temp.review_integrity_cases c on c.workspace_id = f.workspace_id where c.case_name = 'empty');
 select lives_ok(format(
   'update public.correction_rounds set status = %L, opened_at = now(), revision = revision + 1 where id = %L',
   'collecting', (select round_id from pg_temp.review_integrity_rounds where round_name = 'empty_assigned')
-), 'An evidenced confirmed finding assigned to a Member can open');
+), 'A finding assigned to a Member is confirmed before the round draft is created');
 select lives_ok(format(
   'update public.correction_rounds set status = %L, opened_at = now(), revision = revision + 1 where id = %L',
-  'collecting', (select round_id from pg_temp.review_integrity_rounds where round_name = 'admin')
-), 'An administrative proposal can open without Member items');
+  'consolidating', (select round_id from pg_temp.review_integrity_rounds where round_name = 'admin')
+), 'An administrative proposal opens directly to consolidation without Member items');
 select throws_ok(format(
   'insert into public.correction_round_items(workspace_id, round_id, document_id, finding_id, initial_assignee_id, assignee_id) '
   || 'select f.workspace_id, %L, f.document_id, f.finding_c_id, f.member_a_id, f.member_a_id '
@@ -238,7 +265,7 @@ select throws_ok(format(
 select is((select review_revision from public.findings where id =
   (select f.finding_a_id from pg_temp.review_fixture_case f
    join pg_temp.review_integrity_cases c on c.workspace_id = f.workspace_id where c.case_name = 'empty')),
-  3::bigint, 'Human assignment and status mutations advance the finding review revision');
+  2::bigint, 'A combined status and assignment change advances the finding review revision once');
 select throws_ok(format(
   'update public.findings set review_revision = review_revision + 1 where id = %L',
   (select f.finding_a_id from pg_temp.review_fixture_case f
@@ -484,9 +511,6 @@ select is((select c.version_id from public.correction_candidates c
    where s.id = (select submission_id from pg_temp.review_integrity_submissions where submission_name = 'direct_member_a_group')),
   'Direct selection preserves the original submission version');
 
-update public.correction_rounds
-set status = 'consolidating', revision = revision + 1
-where id = (select round_id from pg_temp.review_integrity_rounds where round_name = 'admin');
 insert into pg_temp.review_integrity_candidates(candidate_name, candidate_id)
 select 'admin_rejected', pg_temp.create_consolidated_candidate(r.round_id, f.admin_id, false)
 from pg_temp.review_integrity_rounds r

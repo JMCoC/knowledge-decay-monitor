@@ -2,6 +2,10 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { LOCAL_API_URL, PROJECT_ROOT, readLocalSupabaseRuntime } from "./local-supabase.mjs";
+import {
+  normalizeReviewIntegrationFile,
+  REVIEW_INTEGRATION_FILES,
+} from "./review-integration-policy.mjs";
 
 const commands = {
   image: [resolve(PROJECT_ROOT, "node_modules/vitest/vitest.mjs"), "run", "--config", "vitest.image.config.ts"],
@@ -33,11 +37,29 @@ export function runWithLocalSupabase({
     return 2;
   }
 
-  const reviewIsolationFile = "tests/integration/review-foundation-isolation.test.ts";
-  if (selected === "integration" && forwardedArgs.some((argument) => argument.replaceAll("\\", "/") === reviewIsolationFile)) {
+  const reviewFiles = forwardedArgs.flatMap((argument) => {
+    const file = normalizeReviewIntegrationFile(argument);
+    return file ? [file] : [];
+  });
+  const isTestFileFilter = (argument) => !argument.startsWith("-")
+    && /\.(?:test|spec)\.(?:[cm]?[jt]sx?)$/i.test(argument);
+  const hasExplicitTestFileFilter = forwardedArgs.some(isTestFileFilter);
+  const regularTestFiles = forwardedArgs.filter((argument) =>
+    isTestFileFilter(argument) && normalizeReviewIntegrationFile(argument) === null);
+  const runReviewSeparately = selected === "integration"
+    && (!hasExplicitTestFileFilter || reviewFiles.length > 0);
+  const regularArgs = reviewFiles.length
+    ? forwardedArgs.filter((argument) => normalizeReviewIntegrationFile(argument) === null)
+    : forwardedArgs;
+  const runRegularIntegration = selected !== "integration"
+    || !runReviewSeparately
+    || !hasExplicitTestFileFilter
+    || regularTestFiles.length > 0;
+
+  if (!runRegularIntegration) {
     const result = spawnCommand(process.execPath, [
       resolve(PROJECT_ROOT, "scripts/run-review-isolated-integration.mjs"),
-      ...forwardedArgs,
+      ...reviewFiles,
     ], {
       cwd: PROJECT_ROOT,
       env,
@@ -106,9 +128,10 @@ export function runWithLocalSupabase({
     childEnv.SUPABASE_SERVICE_ROLE_KEY = runtime.serviceRoleKey;
   }
 
-  const runReviewSeparately = selected === "integration" && forwardedArgs.length === 0;
-  const commandArgs = [...args, ...forwardedArgs];
-  if (runReviewSeparately) commandArgs.push("--exclude", reviewIsolationFile);
+  const commandArgs = [...args, ...regularArgs];
+  if (selected === "integration") {
+    commandArgs.push(...REVIEW_INTEGRATION_FILES.flatMap((file) => ["--exclude", file]));
+  }
 
   const result = spawnCommand(process.execPath, [script, ...commandArgs], {
     cwd: PROJECT_ROOT,
@@ -126,7 +149,7 @@ export function runWithLocalSupabase({
 
   const reviewResult = spawnCommand(process.execPath, [
     resolve(PROJECT_ROOT, "scripts/run-review-isolated-integration.mjs"),
-    reviewIsolationFile,
+    ...(reviewFiles.length ? reviewFiles : REVIEW_INTEGRATION_FILES),
   ], {
     cwd: PROJECT_ROOT,
     env: /** @type {NodeJS.ProcessEnv} */ (childEnv),

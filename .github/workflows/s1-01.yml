@@ -58,7 +58,7 @@ jobs:
       - name: Verify S1 through S2-11 analysis upgrade
         run: node scripts/check-analysis-upgrade.mjs
 
-      - name: Verify S2 to S3-01 human review upgrade
+      - name: Verify S2 through S3-02 human review upgrade
         run: node scripts/check-review-upgrade.mjs --ci
 
       - name: Start disposable local Supabase

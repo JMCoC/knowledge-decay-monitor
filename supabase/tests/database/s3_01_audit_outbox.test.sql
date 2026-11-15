@@ -23,9 +23,6 @@ order by f.workspace_id;
 update pg_temp.audit_outbox_fixtures f
 set round_id = pg_temp.create_review_round(f.workspace_id, 'administrative', '{}'::uuid[])
 where f.workspace_id = (select workspace_id from pg_temp.audit_outbox_fixtures order by workspace_id limit 1);
-update public.correction_rounds r
-set status = 'consolidating', revision = revision + 1
-where r.id = (select round_id from pg_temp.audit_outbox_fixtures order by workspace_id limit 1);
 update pg_temp.audit_outbox_fixtures f
 set candidate_id = pg_temp.create_consolidated_candidate(f.round_id, f.admin_id)
 where f.round_id is not null;
@@ -115,7 +112,10 @@ select is(private.append_review_audit(
     (select admin_id from pg_temp.audit_outbox_fixtures order by workspace_id limit 1),
     'finding_assigned', 'finding',
     (select finding_a_id from pg_temp.audit_outbox_fixtures order by workspace_id limit 1),
-    jsonb_build_object('assigneeId', (select member_b_id from pg_temp.audit_outbox_fixtures order by workspace_id limit 1)),
+    jsonb_build_object(
+      'previousAssigneeId', (select member_a_id from pg_temp.audit_outbox_fixtures order by workspace_id limit 1),
+      'assigneeId', (select member_b_id from pg_temp.audit_outbox_fixtures order by workspace_id limit 1)
+    ),
     (select event_id from pg_temp.audit_outbox_event_ids where event_name = 'assignment')),
   (select event_id from pg_temp.audit_outbox_event_ids where event_name = 'assignment'),
   'A valid assignment audit event is appended');
@@ -187,7 +187,10 @@ select is(private.append_review_audit(
     (select admin_id from pg_temp.audit_outbox_fixtures order by workspace_id limit 1),
     'finding_assigned', 'finding',
     (select finding_a_id from pg_temp.audit_outbox_fixtures order by workspace_id limit 1),
-    jsonb_build_object('assigneeId', (select member_b_id from pg_temp.audit_outbox_fixtures order by workspace_id limit 1)),
+    jsonb_build_object(
+      'previousAssigneeId', (select member_a_id from pg_temp.audit_outbox_fixtures order by workspace_id limit 1),
+      'assigneeId', (select member_b_id from pg_temp.audit_outbox_fixtures order by workspace_id limit 1)
+    ),
     (select event_id from pg_temp.audit_outbox_event_ids where event_name = 'assignment')),
   (select event_id from pg_temp.audit_outbox_event_ids where event_name = 'assignment'),
   'An exact event retry is idempotent');
@@ -196,7 +199,10 @@ select throws_ok(format(
   (select admin_id from pg_temp.audit_outbox_fixtures order by workspace_id limit 1),
   'finding_assigned', 'finding',
   (select finding_a_id from pg_temp.audit_outbox_fixtures order by workspace_id limit 1),
-  jsonb_build_object('assigneeId', (select member_a_id from pg_temp.audit_outbox_fixtures order by workspace_id limit 1)),
+  jsonb_build_object(
+    'previousAssigneeId', null,
+    'assigneeId', (select member_a_id from pg_temp.audit_outbox_fixtures order by workspace_id limit 1)
+  ),
   (select event_id from pg_temp.audit_outbox_event_ids where event_name = 'assignment')),
   '23505', null, 'An event id cannot be replayed with different metadata');
 select throws_ok(format(
@@ -204,7 +210,7 @@ select throws_ok(format(
   (select admin_id from pg_temp.audit_outbox_fixtures order by workspace_id limit 1),
   'finding_assigned', 'finding',
   (select finding_a_id from pg_temp.audit_outbox_fixtures order by workspace_id limit 1),
-  '{"assigneeId":null,"reason":"private text"}', gen_random_uuid()),
+  '{"previousAssigneeId":"10000000-0000-4000-8000-000000000001","assigneeId":null,"reason":"private text"}', gen_random_uuid()),
   '22023', null, 'Reasons are rejected from assignment audit metadata');
 select throws_ok(format(
   'select private.append_review_audit(%L, %L, %L, %L, %L::jsonb, %L)',
@@ -225,7 +231,7 @@ select throws_ok(format(
   (select admin_id from pg_temp.audit_outbox_fixtures order by workspace_id limit 1),
   'finding_assigned', 'finding',
   (select finding_a_id from pg_temp.audit_outbox_fixtures order by workspace_id limit 1),
-  '{"assigneeId":null,"fileName":"source.docx"}', gen_random_uuid()),
+  '{"previousAssigneeId":null,"assigneeId":null,"fileName":"source.docx"}', gen_random_uuid()),
   '22023', null, 'Filenames are rejected from audit metadata');
 select throws_ok(format(
   'select private.append_review_audit(%L, %L, %L, %L, %L::jsonb, %L)',
@@ -279,7 +285,10 @@ select throws_ok(format(
   (select admin_id from pg_temp.audit_outbox_fixtures order by workspace_id limit 1),
   'finding_assigned', 'finding',
   (select finding_a_id from pg_temp.audit_outbox_fixtures order by workspace_id limit 1),
-  jsonb_build_object('assigneeId', (select member_b_id from pg_temp.audit_outbox_fixtures order by workspace_id limit 1)),
+  jsonb_build_object(
+    'previousAssigneeId', (select member_a_id from pg_temp.audit_outbox_fixtures order by workspace_id limit 1),
+    'assigneeId', (select member_b_id from pg_temp.audit_outbox_fixtures order by workspace_id limit 1)
+  ),
   '20000000-0000-4000-8000-000000000099',
   (select admin_id from pg_temp.audit_outbox_fixtures order by workspace_id limit 1),
   '30000000-0000-4000-8000-000000000099', 'assignment',

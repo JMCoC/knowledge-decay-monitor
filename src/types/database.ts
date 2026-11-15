@@ -736,36 +736,42 @@ export type Database = {
       correction_round_items: {
         Row: {
           assignee_id: string | null
+          coverage_revision: number
           created_at: string
           current_submission_id: string | null
           document_id: string
           finding_id: string
           id: string
           initial_assignee_id: string | null
+          opened_assignee_id: string | null
           revision: number
           round_id: string
           workspace_id: string
         }
         Insert: {
           assignee_id?: string | null
+          coverage_revision?: number
           created_at?: string
           current_submission_id?: string | null
           document_id: string
           finding_id: string
           id?: string
           initial_assignee_id?: string | null
+          opened_assignee_id?: string | null
           revision?: number
           round_id: string
           workspace_id: string
         }
         Update: {
           assignee_id?: string | null
+          coverage_revision?: number
           created_at?: string
           current_submission_id?: string | null
           document_id?: string
           finding_id?: string
           id?: string
           initial_assignee_id?: string | null
+          opened_assignee_id?: string | null
           revision?: number
           round_id?: string
           workspace_id?: string
@@ -812,6 +818,13 @@ export type Database = {
             referencedColumns: ["id", "workspace_id"]
           },
           {
+            foreignKeyName: "correction_round_items_opened_assignee_workspace_fkey"
+            columns: ["opened_assignee_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
             foreignKeyName: "correction_round_items_round_id_document_id_workspace_id_fkey"
             columns: ["round_id", "document_id", "workspace_id"]
             isOneToOne: false
@@ -824,6 +837,7 @@ export type Database = {
         Row: {
           active_candidate_id: string | null
           base_version_id: string
+          coverage_revision: number
           created_at: string
           created_by: string
           document_id: string
@@ -838,6 +852,7 @@ export type Database = {
         Insert: {
           active_candidate_id?: string | null
           base_version_id: string
+          coverage_revision?: number
           created_at?: string
           created_by: string
           document_id: string
@@ -852,6 +867,7 @@ export type Database = {
         Update: {
           active_candidate_id?: string | null
           base_version_id?: string
+          coverage_revision?: number
           created_at?: string
           created_by?: string
           document_id?: string
@@ -1747,9 +1763,12 @@ export type Database = {
       analysis_findings: {
         Row: {
           analysis_id: string | null
+          assignee_full_name: string | null
+          assignee_id: string | null
           created_at: string | null
           explanation: string | null
           id: string | null
+          review_revision: number | null
           severity_current:
             | Database["public"]["Enums"]["finding_severity"]
             | null
@@ -1774,6 +1793,13 @@ export type Database = {
             columns: ["analysis_id", "workspace_id"]
             isOneToOne: false
             referencedRelation: "analysis_runs"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "findings_assignee_id_workspace_id_fkey"
+            columns: ["assignee_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
             referencedColumns: ["id", "workspace_id"]
           },
         ]
@@ -2401,6 +2427,77 @@ export type Database = {
         Args: { p_event_id: string; p_operation_id: string }
         Returns: boolean
       }
+      review_assign_finding: {
+        Args: {
+          p_actor_id: string
+          p_assignee_id: string
+          p_finding_id: string
+          p_idempotency_key: string
+          p_revision: number
+        }
+        Returns: Json
+      }
+      review_cancel_round: {
+        Args: {
+          p_actor_id: string
+          p_idempotency_key: string
+          p_reason: string
+          p_revision: number
+          p_round_id: string
+        }
+        Returns: Json
+      }
+      review_change_finding: {
+        Args: {
+          p_actor_id: string
+          p_change: Json
+          p_finding_id: string
+          p_idempotency_key: string
+          p_revision: number
+        }
+        Returns: Json
+      }
+      review_get_finding: {
+        Args: { p_actor_id: string; p_finding_id: string }
+        Returns: Json
+      }
+      review_get_round_draft: {
+        Args: { p_actor_id: string; p_round_id: string }
+        Returns: Json
+      }
+      review_list_assignees: {
+        Args: { p_actor_id: string; p_page?: number; p_page_size?: number }
+        Returns: Json
+      }
+      review_open_round: {
+        Args: {
+          p_actor_id: string
+          p_idempotency_key: string
+          p_revision: number
+          p_round_id: string
+        }
+        Returns: Json
+      }
+      review_prepare_round: {
+        Args: {
+          p_actor_id: string
+          p_document_id: string
+          p_finding_ids: string[]
+          p_idempotency_key: string
+          p_mode: string
+        }
+        Returns: Json
+      }
+      review_update_round_draft: {
+        Args: {
+          p_actor_id: string
+          p_finding_ids: string[]
+          p_idempotency_key: string
+          p_revision: number
+          p_round_id: string
+        }
+        Returns: Json
+      }
       run_analysis: {
         Args: {
           p_actor_id: string
@@ -2499,6 +2596,7 @@ export type Database = {
         | "correction_candidate_approved"
         | "correction_candidate_rejected"
         | "correction_candidate_invalidated"
+        | "correction_round_draft_updated"
       review_audit_entity_type:
         | "finding"
         | "correction_round"
@@ -2728,6 +2826,7 @@ export const Constants = {
         "correction_candidate_approved",
         "correction_candidate_rejected",
         "correction_candidate_invalidated",
+        "correction_round_draft_updated",
       ],
       review_audit_entity_type: [
         "finding",

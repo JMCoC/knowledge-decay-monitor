@@ -1,4 +1,4 @@
-// Runs only the S3-01 HTTP isolation suite against a runner-owned Supabase project.
+// Runs only the allowlisted S3-01/S3-02 review suites against a runner-owned project.
 // The review model intentionally retains immutable history, so the whole generated
 // local stack is the cleanup boundary for these real Auth/PostgREST/Storage fixtures.
 import { execFileSync, spawnSync } from "node:child_process";
@@ -9,10 +9,12 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { redactCliOutput } from "./cli-output-redaction.mjs";
+import {
+  validateReviewIntegrationBatch,
+} from "./review-integration-policy.mjs";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const supabaseCli = resolve(projectRoot, "node_modules/supabase/dist/supabase.js");
-const testFile = "tests/integration/review-foundation-isolation.test.ts";
 const portOffsets = Array.from({ length: 10 }, (_, index) => index);
 
 function runCaptured(command, args, stage, cwd = projectRoot) {
@@ -218,7 +220,7 @@ function stopAndRemove(projectId, temporaryRoot, failures) {
   const normalizedTemp = resolve(tmpdir());
   const relativeRoot = relative(normalizedTemp, normalizedRoot);
   if (!relativeRoot || relativeRoot.startsWith(`..${sep}`) || relativeRoot === ".."
-      || !relativeRoot.startsWith("kdm-s3-01-review-")) {
+      || !relativeRoot.startsWith("kdm-s3-02-review-")) {
     failures.push("Refusing to remove a path outside the generated review temp workspace.");
     return false;
   }
@@ -244,11 +246,12 @@ function runVitest(testArgs, env) {
 }
 
 async function main(args) {
-  if (args.length !== 1 || args[0].replaceAll("\\", "/") !== testFile) {
-    throw new Error("The disposable review runner accepts only the S3-01 isolation integration test.");
+  const reviewFiles = validateReviewIntegrationBatch(args);
+  if (!reviewFiles) {
+    throw new Error("The disposable review runner accepts only an exact nonempty batch of reviewed integration files.");
   }
 
-  const temporaryRoot = mkdtempSync(join(tmpdir(), "kdm-s3-01-review-"));
+  const temporaryRoot = mkdtempSync(join(tmpdir(), "kdm-s3-02-review-"));
   const projectId = `kdm-review-${randomUUID().replaceAll("-", "").slice(0, 16)}`;
   const failures = [];
   let code = 1;
@@ -256,7 +259,7 @@ async function main(args) {
     assertNoStack(projectId);
     const portBase = await choosePortBase();
     copyTemporaryProject(temporaryRoot, projectId, portBase);
-    console.log("Starting isolated local Supabase for review isolation tests.");
+    console.log(`Starting isolated local Supabase for ${reviewFiles.length} review integration test(s).`);
     const excludedServices = [
       "studio", "edge-runtime", "logflare", "vector", "supavisor",
       "realtime", "analytics", "postgres-meta", "mailpit", "imgproxy",
@@ -295,7 +298,7 @@ async function main(args) {
     };
     delete env.INGESTION_INTERNAL_TOKEN;
     delete env.SUPABASE_SECRET_KEY;
-    code = runVitest(args, env);
+    code = runVitest(reviewFiles, env);
   } catch (error) {
     console.error(error instanceof Error ? error.message : "Disposable review integration failed.");
     code = 1;
