@@ -90,6 +90,28 @@ const s302Names = new Set([
 
 const stageOrder = Object.freeze({ s1: 0, s2_01: 1, s2_02: 2, s2_03: 3, s2_04: 4, s2_06: 5, s2_08a: 6, s2_08b: 7, s2_11: 8, s3_01: 9, s3_02: 10 });
 
+const s2_11DatabaseTestSources = new Map([
+  [
+    "supabase/tests/database/004_bootstrap.test.sql",
+    "supabase/fixtures/upgrade/s2_11-tests/004_bootstrap.test.sql",
+  ],
+  [
+    "supabase/tests/database/015_analysis_finding_initial_state.test.sql",
+    "supabase/fixtures/upgrade/s2_11-tests/015_analysis_finding_initial_state.test.sql",
+  ],
+]);
+
+/**
+ * @param {string} path
+ * @param {"s1" | "s2_01" | "s2_02" | "s2_03" | "s2_04" | "s2_06" | "s2_08a" | "s2_08b" | "s2_11" | "s3_01" | "s3_02"} stage
+ */
+export function databaseTestSourceForStage(path, stage) {
+  if (!Object.hasOwn(stageOrder, stage)) throw new Error("Unknown upgrade stage.");
+  const normalized = path.replaceAll("\\", "/");
+  if (stage === "s2_11") return s2_11DatabaseTestSources.get(normalized) ?? normalized;
+  return normalized;
+}
+
 const functionStage = Object.freeze({
   "supabase/functions/embed/": "s1",
   "supabase/functions/analyze/": "s2_06",

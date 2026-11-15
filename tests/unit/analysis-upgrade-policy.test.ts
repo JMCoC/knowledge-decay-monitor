@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import {
+  databaseTestSourceForStage,
   filterFunctionConfigForStage,
   includeFunction,
   includeMigration,
@@ -96,6 +97,43 @@ const s302Names = [
 ];
 
 describe("analysis migration upgrade stages", () => {
+  it("keeps later-schema assertions out of the historical S2-11 database suite", () => {
+    expect(databaseTestSourceForStage(
+      "supabase/tests/database/004_bootstrap.test.sql",
+      "s2_11",
+    )).toBe("supabase/fixtures/upgrade/s2_11-tests/004_bootstrap.test.sql");
+    expect(databaseTestSourceForStage(
+      "supabase/tests/database/015_analysis_finding_initial_state.test.sql",
+      "s2_11",
+    )).toBe("supabase/fixtures/upgrade/s2_11-tests/015_analysis_finding_initial_state.test.sql");
+    expect(databaseTestSourceForStage(
+      "supabase/tests/database/004_bootstrap.test.sql",
+      "s3_02",
+    )).toBe("supabase/tests/database/004_bootstrap.test.sql");
+    expect(databaseTestSourceForStage(
+      "supabase/tests/database/014_analysis_security.test.sql",
+      "s2_11",
+    )).toBe("supabase/tests/database/014_analysis_security.test.sql");
+    expect(databaseTestSourceForStage(
+      "supabase/tests/database/004_bootstrap.test.sql",
+      "s3_01",
+    )).toBe("supabase/tests/database/004_bootstrap.test.sql");
+    expect(readFileSync(databaseTestSourceForStage(
+      "supabase/tests/database/004_bootstrap.test.sql",
+      "s2_11",
+    ), "utf8")).toContain("Email comes from Auth");
+    expect(readFileSync(databaseTestSourceForStage(
+      "supabase/tests/database/015_analysis_finding_initial_state.test.sql",
+      "s2_11",
+    ), "utf8")).toContain("severity_current = ''Medium'', assignee_id =");
+    expect(readFileSync("supabase/tests/database/004_bootstrap.test.sql", "utf8"))
+      .toContain("Authenticated Profile reads do not expose email");
+    expect(readFileSync("supabase/tests/database/015_analysis_finding_initial_state.test.sql", "utf8"))
+      .toContain("status = ''confirmed''");
+    expect(readFileSync("scripts/check-analysis-upgrade.mjs", "utf8"))
+      .toContain("databaseTestSourceForStage(relativeFile, stage)");
+  });
+
   it("pins the S3-02 stage to the migration files in the repository", () => {
     const files = readdirSync("supabase/migrations")
       .filter((name) => name.includes("_s3_02_"))

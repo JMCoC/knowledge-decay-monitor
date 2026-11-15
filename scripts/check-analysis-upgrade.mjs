@@ -3,7 +3,12 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { filterFunctionConfigForStage, includeFunction, includeMigration } from "./analysis-upgrade-policy.mjs";
+import {
+  databaseTestSourceForStage,
+  filterFunctionConfigForStage,
+  includeFunction,
+  includeMigration,
+} from "./analysis-upgrade-policy.mjs";
 import { redactCliOutput } from "./cli-output-redaction.mjs";
 
 if (process.env.CI !== "true" || process.env.GITHUB_ACTIONS !== "true") {
@@ -280,7 +285,7 @@ function copyS1Workspace(temporaryRoot, stage) {
     if (/(^|\/)\.env(?:\.[^/]*)?$/.test(relativeFile) || /(^|\/)\.temp(?:\/|$)/.test(relativeFile)) continue;
     const source = relativeFile === "supabase/seed.sql" && stage !== "s2_02"
       ? historicalSeed
-      : resolve(projectRoot, relativeFile);
+      : resolve(projectRoot, databaseTestSourceForStage(relativeFile, stage));
     const destination = resolve(supabaseRoot, relativeFile.slice("supabase/".length).split("/").join(sep));
     if (!destination.startsWith(`${supabaseRoot}${sep}`)) throw new Error("Unexpected Supabase copy destination.");
     mkdirSync(dirname(destination), { recursive: true });
