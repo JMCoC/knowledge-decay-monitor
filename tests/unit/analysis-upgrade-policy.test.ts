@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import {
   filterFunctionConfigForStage,
   includeFunction,
@@ -86,7 +86,7 @@ const s301Names = [
   "20261108150500_s3_01_approval_contribution_check.sql",
 ];
 const s302Names = [
-  "20261114150000_s3_02_review_audit_enums.sql",
+  "20261114150000_s3_02_review_audit_enum.sql",
   "20261114150100_s3_02_review_model.sql",
   "20261114150200_s3_02_review_coverage_guards.sql",
   "20261114150300_s3_02_review_command_support.sql",
@@ -96,6 +96,13 @@ const s302Names = [
 ];
 
 describe("analysis migration upgrade stages", () => {
+  it("pins the S3-02 stage to the migration files in the repository", () => {
+    const files = readdirSync("supabase/migrations")
+      .filter((name) => name.includes("_s3_02_"))
+      .sort();
+    expect(files).toEqual([...s302Names].sort());
+  });
+
   it("classifies every reviewed S1 and S2 migration by its exact name", () => {
     for (const name of s1Names) {
       expect(migrationStage(`supabase/migrations/${name}`)).toBe("s1");
@@ -165,6 +172,7 @@ describe("analysis migration upgrade stages", () => {
   it("keeps every S3-02 migration out of the S3-01 baseline", () => {
     for (const name of s302Names) {
       const migration = `supabase/migrations/${name}`;
+      expect(includeMigration(migration, "s2_11")).toBe(false);
       expect(includeMigration(migration, "s3_01")).toBe(false);
       expect(includeMigration(migration, "s3_02")).toBe(true);
     }
@@ -177,6 +185,7 @@ describe("analysis migration upgrade stages", () => {
     expect(upgradeScript.includes('"Database regression tests"')).toBe(true);
     expect(upgradeScript.includes('["test", "db", "--local", "--workdir", s211Root]')).toBe(true);
     expect(upgradeScript.includes('relativeFile.startsWith("supabase/tests/database/s3_01_")')).toBe(true);
+    expect(upgradeScript.includes('relativeFile.startsWith("supabase/tests/database/s3_02_")')).toBe(true);
   });
 
   it("excludes only S2-11 lease fields from the S2-01 notification history hash", () => {

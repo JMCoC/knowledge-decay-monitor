@@ -1,0 +1,145 @@
+\set QUIET 1
+begin;
+\ir s3_02_upgrade_s3_01_fixtures.psql
+
+create temporary table s3_02_upgrade_context (
+  workspace_id uuid not null,
+  admin_id uuid not null,
+  member_a_id uuid not null,
+  member_b_id uuid not null,
+  review_fixture jsonb not null,
+  draft_round_id uuid not null,
+  draft_finding_id uuid not null,
+  processing_candidate_id uuid not null,
+  pending_round_id uuid not null,
+  pending_finding_id uuid not null,
+  pending_candidate_id uuid not null
+) on commit drop;
+
+do $s3_02_upgrade_fixture$
+declare
+  v_workspace_id uuid := pg_temp.create_credit_workspace();
+  v_admin_id uuid;
+  v_member_a_id uuid := gen_random_uuid();
+  v_member_b_id uuid := gen_random_uuid();
+  v_analysis_id uuid;
+  v_base_finding_id uuid;
+  v_documents uuid[];
+  v_versions uuid[];
+  v_chunks uuid[];
+  v_review_fixture jsonb;
+  v_draft_analysis_id uuid;
+  v_draft_document_id uuid;
+  v_draft_version_id uuid;
+  v_draft_chunk_id uuid;
+  v_draft_finding_id uuid;
+  v_draft_round_id uuid := gen_random_uuid();
+  v_processing_round_id uuid;
+  v_processing_candidate_id uuid;
+  v_pending_analysis_id uuid;
+  v_pending_document_id uuid;
+  v_pending_version_id uuid;
+  v_pending_chunk_id uuid;
+  v_pending_finding_id uuid;
+  v_pending_round_id uuid;
+  v_pending_item_id uuid;
+  v_pending_submission_id uuid;
+  v_pending_candidate_id uuid;
+begin
+  select w.user_id into strict v_admin_id
+  from pg_temp.credit_workspace w where w.workspace_id = v_workspace_id;
+  insert into auth.users(id, email, aud, role) values
+    (v_member_a_id, 's3-02-upgrade-' || v_member_a_id::text || '@example.test', 'authenticated', 'authenticated'),
+    (v_member_b_id, 's3-02-upgrade-' || v_member_b_id::text || '@example.test', 'authenticated', 'authenticated');
+  insert into public.profiles(id, workspace_id, role, full_name, email) values
+    (v_member_a_id, v_workspace_id, 'Member', 'S3-02 upgrade member A', 's3-02-upgrade-' || v_member_a_id::text || '@example.test'),
+    (v_member_b_id, v_workspace_id, 'Member', 'S3-02 upgrade member B', 's3-02-upgrade-' || v_member_b_id::text || '@example.test');
+
+  v_analysis_id := pg_temp.create_analysis_fixture(v_workspace_id, v_admin_id, 'completed', 3);
+  select array_agg(c.document_id order by c.ordinal),
+         array_agg(c.version_id order by c.ordinal),
+         array_agg(c.chunk_id order by c.ordinal)
+  into strict v_documents, v_versions, v_chunks
+  from pg_temp.analysis_case c where c.analysis_id = v_analysis_id;
+  v_base_finding_id := pg_temp.insert_finding_row(v_analysis_id, v_workspace_id, 0.95, 'S3-02 upgrade base finding');
+  update public.findings set status = 'confirmed', assignee_id = v_member_a_id where id = v_base_finding_id;
+  perform pg_temp.insert_evidence_row(
+    v_workspace_id, v_analysis_id, v_base_finding_id, v_documents[1], v_versions[1], v_chunks[1],
+    'Synthetic S3-02 upgrade base evidence'
+  );
+  v_review_fixture := pg_temp.create_review_http_fixture(
+    v_workspace_id, v_admin_id, v_member_a_id, v_member_b_id, v_member_b_id,
+    v_analysis_id, v_documents, v_versions, v_chunks, v_base_finding_id
+  );
+
+  v_draft_analysis_id := pg_temp.create_analysis_fixture(v_workspace_id, v_admin_id, 'completed', 1);
+  select c.document_id, c.version_id, c.chunk_id into strict v_draft_document_id, v_draft_version_id, v_draft_chunk_id
+  from pg_temp.analysis_case c where c.analysis_id = v_draft_analysis_id and c.ordinal = 1;
+  v_draft_finding_id := pg_temp.insert_finding_row(v_draft_analysis_id, v_workspace_id, 0.64, 'S3-02 upgrade draft finding');
+  update public.findings set status = 'confirmed', assignee_id = v_member_a_id where id = v_draft_finding_id;
+  perform pg_temp.insert_evidence_row(
+    v_workspace_id, v_draft_analysis_id, v_draft_finding_id, v_draft_document_id,
+    v_draft_version_id, v_draft_chunk_id, 'Synthetic S3-02 draft evidence'
+  );
+  insert into public.correction_rounds(id, workspace_id, document_id, mode, base_version_id, created_by)
+  values (v_draft_round_id, v_workspace_id, v_draft_document_id, 'assigned_findings', v_draft_version_id, v_admin_id);
+  insert into public.correction_round_items(
+    workspace_id, round_id, document_id, finding_id, initial_assignee_id, assignee_id
+  ) values (
+    v_workspace_id, v_draft_round_id, v_draft_document_id, v_draft_finding_id, v_member_a_id, v_member_a_id
+  );
+
+  v_processing_round_id := (v_review_fixture->'secondary'->>'administrativeRound')::uuid;
+  update public.correction_rounds
+  set status = 'consolidating', revision = revision + 1
+  where id = v_processing_round_id;
+  v_processing_candidate_id := pg_temp.create_consolidated_candidate(v_processing_round_id, v_admin_id);
+  perform pg_temp.select_review_candidate(v_processing_candidate_id);
+  perform pg_temp.start_review_candidate(v_processing_candidate_id);
+
+  v_pending_analysis_id := pg_temp.create_analysis_fixture(v_workspace_id, v_admin_id, 'completed', 1);
+  select c.document_id, c.version_id, c.chunk_id
+  into strict v_pending_document_id, v_pending_version_id, v_pending_chunk_id
+  from pg_temp.analysis_case c where c.analysis_id = v_pending_analysis_id and c.ordinal = 1;
+  v_pending_finding_id := pg_temp.insert_finding_row(
+    v_pending_analysis_id, v_workspace_id, 0.73, 'S3-02 upgrade pending finding'
+  );
+  update public.findings
+  set status = 'confirmed', assignee_id = v_member_a_id
+  where id = v_pending_finding_id;
+  perform pg_temp.insert_evidence_row(
+    v_workspace_id, v_pending_analysis_id, v_pending_finding_id, v_pending_document_id,
+    v_pending_version_id, v_pending_chunk_id, 'Synthetic S3-02 pending-candidate evidence'
+  );
+  v_pending_round_id := pg_temp.create_review_round_for_document(
+    v_workspace_id, v_pending_document_id, v_admin_id, 'assigned_findings', array[v_pending_finding_id]
+  );
+  select i.id into strict v_pending_item_id
+  from public.correction_round_items i
+  where i.round_id = v_pending_round_id and i.finding_id = v_pending_finding_id;
+  v_pending_submission_id := pg_temp.create_review_submission(
+    v_pending_round_id, v_member_a_id, array[v_pending_item_id]
+  );
+  v_pending_candidate_id := pg_temp.select_direct_review_candidate(
+    v_pending_round_id, v_admin_id, v_pending_submission_id
+  );
+  perform pg_temp.complete_review_candidate(v_pending_candidate_id);
+
+  insert into pg_temp.s3_02_upgrade_context values (
+    v_workspace_id, v_admin_id, v_member_a_id, v_member_b_id,
+    v_review_fixture, v_draft_round_id, v_draft_finding_id,
+    v_processing_candidate_id, v_pending_round_id, v_pending_finding_id, v_pending_candidate_id
+  );
+end;
+$s3_02_upgrade_fixture$;
+
+set constraints all immediate;
+select workspace_id::text || '|' || admin_id::text || '|' || member_a_id::text || '|' || member_b_id::text || '|' ||
+  draft_round_id::text || '|' || draft_finding_id::text || '|' ||
+  (review_fixture->'mainRound'->>'id') || '|' || (review_fixture->'mainRound'->>'memberASubmission') || '|' ||
+  (review_fixture->'secondary'->>'administrativeRound') || '|' || processing_candidate_id::text || '|' ||
+  pending_round_id::text || '|' || pending_candidate_id::text || '|' || pending_finding_id::text || '|' ||
+  (review_fixture->'secondary'->>'rejectedCandidate') || '|' ||
+  (review_fixture->'secondary'->>'approvedCandidate')
+from pg_temp.s3_02_upgrade_context;
+commit;

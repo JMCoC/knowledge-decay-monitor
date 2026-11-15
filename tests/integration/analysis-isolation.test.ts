@@ -80,7 +80,11 @@ describe("analysis authorization through local Supabase Data API", () => {
       expect(findings.error).toBeNull();
       expect(findings.data).toHaveLength(1);
       expect(findings.data?.[0]).not.toHaveProperty("confidence");
-      expect(findings.data?.[0]).not.toHaveProperty("assignee_id");
+      expect(findings.data?.[0]).toMatchObject({
+        assignee_id: null,
+        assignee_full_name: null,
+        review_revision: expect.any(Number),
+      });
 
       const evidence = await tenantA.admin.from("analysis_finding_evidence").select("*")
         .eq("id", tenantA.evidenceId);

@@ -8,7 +8,10 @@ alter table public.correction_rounds
 alter table public.correction_round_items
   add column coverage_revision bigint not null default 1
     constraint correction_round_items_coverage_revision_positive check (coverage_revision > 0),
-  add column opened_assignee_id uuid;
+  add column opened_assignee_id uuid,
+  add constraint correction_round_items_opened_assignee_workspace_fkey
+    foreign key (opened_assignee_id, workspace_id)
+    references public.profiles(id, workspace_id) on delete restrict;
 
 update public.correction_rounds
 set coverage_revision = revision;
@@ -18,11 +21,6 @@ set coverage_revision = i.revision,
     opened_assignee_id = case when r.opened_at is not null then i.initial_assignee_id end
 from public.correction_rounds r
 where r.id = i.round_id and r.workspace_id = i.workspace_id;
-
-alter table public.correction_round_items
-  add constraint correction_round_items_opened_assignee_workspace_fkey
-    foreign key (opened_assignee_id, workspace_id)
-    references public.profiles(id, workspace_id) on delete restrict;
 
 create table private.review_round_cancellations (
   round_id uuid primary key,
@@ -58,4 +56,6 @@ set coverage_revision = r.coverage_revision
 from public.correction_rounds r
 where r.id = c.round_id and r.active_candidate_id = c.id
   and c.status in ('selected', 'processing', 'failed', 'pending_approval', 'approved');
+set constraints correction_candidates_integrity_check immediate;
 alter table public.correction_candidates enable trigger correction_candidates_integrity_guard;
+set constraints correction_candidates_integrity_check deferred;

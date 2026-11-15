@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readdirSync } from "node:fs";
 import {
   includeReviewMigration,
   reviewMigrationStage,
@@ -13,7 +14,7 @@ const s3Migrations = [
   "20261108150500_s3_01_approval_contribution_check.sql",
 ];
 const s302Migrations = [
-  "20261114150000_s3_02_review_audit_enums.sql",
+  "20261114150000_s3_02_review_audit_enum.sql",
   "20261114150100_s3_02_review_model.sql",
   "20261114150200_s3_02_review_coverage_guards.sql",
   "20261114150300_s3_02_review_command_support.sql",
@@ -23,6 +24,13 @@ const s302Migrations = [
 ];
 
 describe("review migration stages", () => {
+  it("pins the S3-02 allowlist to the migration files in the repository", () => {
+    const files = readdirSync("supabase/migrations")
+      .filter((name) => name.includes("_s3_02_"))
+      .sort();
+    expect(files).toEqual([...s302Migrations].sort());
+  });
+
   it("recognizes the S2 baseline and the exact S3-01 migration allowlist", () => {
     expect(reviewMigrationStage("supabase/migrations/20261101190100_s2_11_notification_scheduler.sql"))
       .toBe("s2");

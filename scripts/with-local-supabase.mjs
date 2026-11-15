@@ -41,15 +41,20 @@ export function runWithLocalSupabase({
     const file = normalizeReviewIntegrationFile(argument);
     return file ? [file] : [];
   });
+  const isTestFileFilter = (argument) => !argument.startsWith("-")
+    && /\.(?:test|spec)\.(?:[cm]?[jt]sx?)$/i.test(argument);
+  const hasExplicitTestFileFilter = forwardedArgs.some(isTestFileFilter);
+  const regularTestFiles = forwardedArgs.filter((argument) =>
+    isTestFileFilter(argument) && normalizeReviewIntegrationFile(argument) === null);
   const runReviewSeparately = selected === "integration"
-    && (forwardedArgs.length === 0 || reviewFiles.length > 0);
+    && (!hasExplicitTestFileFilter || reviewFiles.length > 0);
   const regularArgs = reviewFiles.length
     ? forwardedArgs.filter((argument) => normalizeReviewIntegrationFile(argument) === null)
     : forwardedArgs;
   const runRegularIntegration = selected !== "integration"
     || !runReviewSeparately
-    || forwardedArgs.length === 0
-    || regularArgs.length > 0;
+    || !hasExplicitTestFileFilter
+    || regularTestFiles.length > 0;
 
   if (!runRegularIntegration) {
     const result = spawnCommand(process.execPath, [
@@ -124,8 +129,8 @@ export function runWithLocalSupabase({
   }
 
   const commandArgs = [...args, ...regularArgs];
-  if (selected === "integration" && forwardedArgs.length === 0) {
-    commandArgs.push("--exclude", ...REVIEW_INTEGRATION_FILES);
+  if (selected === "integration") {
+    commandArgs.push(...REVIEW_INTEGRATION_FILES.flatMap((file) => ["--exclude", file]));
   }
 
   const result = spawnCommand(process.execPath, [script, ...commandArgs], {

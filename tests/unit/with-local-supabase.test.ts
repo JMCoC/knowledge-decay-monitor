@@ -79,10 +79,11 @@ describe("local Supabase test runner isolation", () => {
 
     expect(mocks.spawnSync).toHaveBeenCalledTimes(2);
     const [, suiteArgs] = mocks.spawnSync.mock.calls[0] as [string, string[]];
-    expect(suiteArgs).toContain("--exclude");
-    expect(suiteArgs).toContain("tests/integration/review-foundation-isolation.test.ts");
-    expect(suiteArgs).toContain("tests/integration/review-commands-isolation.test.ts");
-    expect(suiteArgs).toContain("tests/integration/review-command-concurrency.test.ts");
+    expect(suiteArgs.slice(-6)).toEqual([
+      "--exclude", "tests/integration/review-foundation-isolation.test.ts",
+      "--exclude", "tests/integration/review-commands-isolation.test.ts",
+      "--exclude", "tests/integration/review-command-concurrency.test.ts",
+    ]);
 
     const [reviewCommand, reviewArgs, reviewOptions] = mocks.spawnSync.mock.calls[1] as [
       string,
@@ -104,6 +105,23 @@ describe("local Supabase test runner isolation", () => {
       SUPABASE_SERVICE_ROLE_KEY: "LOCAL_SERVICE_ROLE_SENTINEL",
     });
     expect(JSON.stringify(reviewOptions.env)).not.toMatch(/REMOTE_|SENTRY_TOKEN_SENTINEL|example\.invalid/);
+  });
+
+  it("keeps review suites isolated when full-suite Vitest options are forwarded", () => {
+    expect(runWithLocalSupabase({
+      selected: "integration",
+      forwardedArgs: ["--reporter=dot"],
+      env: hostileParentEnv(),
+    })).toBe(0);
+
+    expect(mocks.spawnSync).toHaveBeenCalledTimes(2);
+    const [, suiteArgs] = mocks.spawnSync.mock.calls[0] as [string, string[]];
+    expect(suiteArgs).toContain("--reporter=dot");
+    expect(suiteArgs.slice(-6)).toEqual([
+      "--exclude", "tests/integration/review-foundation-isolation.test.ts",
+      "--exclude", "tests/integration/review-commands-isolation.test.ts",
+      "--exclude", "tests/integration/review-command-concurrency.test.ts",
+    ]);
   });
 
   it("runs an explicitly requested review batch only through the disposable project", () => {

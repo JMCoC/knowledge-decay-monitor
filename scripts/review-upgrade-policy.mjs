@@ -10,7 +10,7 @@ const s3Names = new Set([
 ]);
 
 const s302Names = new Set([
-  "20261114150000_s3_02_review_audit_enums.sql",
+  "20261114150000_s3_02_review_audit_enum.sql",
   "20261114150100_s3_02_review_model.sql",
   "20261114150200_s3_02_review_coverage_guards.sql",
   "20261114150300_s3_02_review_command_support.sql",

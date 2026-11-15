@@ -274,7 +274,8 @@ function copyS1Workspace(temporaryRoot, stage) {
   for (const relativeFile of trackedFiles) {
     if (!relativeFile.startsWith("supabase/")) throw new Error("Unexpected Supabase source path.");
     if (relativeFile.startsWith(migrationRoot) && !includeMigration(relativeFile, stage)) continue;
-    if (relativeFile.startsWith("supabase/tests/database/s3_01_") && stage !== "s3_01") continue;
+    if (relativeFile.startsWith("supabase/tests/database/s3_01_") && stage !== "s3_01" && stage !== "s3_02") continue;
+    if (relativeFile.startsWith("supabase/tests/database/s3_02_") && stage !== "s3_02") continue;
     if (relativeFile.startsWith("supabase/functions/") && !includeFunction(relativeFile, stage)) continue;
     if (/(^|\/)\.env(?:\.[^/]*)?$/.test(relativeFile) || /(^|\/)\.temp(?:\/|$)/.test(relativeFile)) continue;
     const source = relativeFile === "supabase/seed.sql" && stage !== "s2_02"

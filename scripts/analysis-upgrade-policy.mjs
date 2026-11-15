@@ -79,7 +79,7 @@ const s301Names = new Set([
 ]);
 
 const s302Names = new Set([
-  "20261114150000_s3_02_review_audit_enums.sql",
+  "20261114150000_s3_02_review_audit_enum.sql",
   "20261114150100_s3_02_review_model.sql",
   "20261114150200_s3_02_review_coverage_guards.sql",
   "20261114150300_s3_02_review_command_support.sql",
@@ -144,7 +144,7 @@ export function includeFunction(path, stage) {
 
 /**
  * @param {string} config
- * @param {"s1" | "s2_01" | "s2_02" | "s2_03" | "s2_04" | "s2_06" | "s2_08a" | "s2_08b" | "s2_11" | "s3_01"} stage
+ * @param {"s1" | "s2_01" | "s2_02" | "s2_03" | "s2_04" | "s2_06" | "s2_08a" | "s2_08b" | "s2_11" | "s3_01" | "s3_02"} stage
  */
 export function filterFunctionConfigForStage(config, stage) {
   if (!Object.hasOwn(stageOrder, stage)) throw new Error("Unknown upgrade stage.");

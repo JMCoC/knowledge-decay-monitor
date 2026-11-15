@@ -196,6 +196,12 @@ Registrar qué se ejecutó y qué no. Estado Done, build, mocks o evidencia hist
 * Los acuerdos de rondas/entregas/consolidación fueron aprobados por el usuario el 2026-11-08 y se reflejan en PRD §§12.5/39/67 y slice §6. El diseño técnico de S3-01 fue aprobado por el usuario el 2026-11-08; la revisión de consumidores sigue pendiente y esta actualización documental no acredita implementación.
 * **Acuerdo de trabajo:** se puede comenzar con contratos/fixtures. Los productores de integración deben estar disponibles para aceptar el ticket; un mock no demuestra cierre real.
 
+**Implementación local y handoff (2026-11-14):** S3-02 quedó implementado en la rama local `feat/s3-02-state-machine`; la evidencia está en [el acta de verificación S3-02](../testing/2026-11-14-s3-02-workflow-verification.md). Esta anotación no actualiza el estado de SAA-26 en Linear; la revisión humana de consumidores sigue pendiente.
+
+* **Dev 2 — ingesta:** mantener separados `round.revision`, `expectedRevision`/revisión de autorización por item y `coverage_revision` de la candidata. Los snapshots de items confirmados son inmutables; una reasignación invalida cobertura/reservas afectadas sin completar silenciosamente la ronda. El fence de un worker debe depender de su propia reserva/lease, no de `round.revision`.
+* **Dev 3 — Repository/UI:** consumir la superficie `ReviewApi`: `changeFinding`, `assignFinding`, `listAssignees`, `getFindingReview`, `getRoundDraft`, `prepareRound`, `updateRoundDraft`, `openRound` y `cancelRound`. Las mutaciones llevan revisión e idempotency key y devuelven snapshots/capacidades actuales; en `CONFLICT`, refrescar desde la lectura pública. No llamar RPC internas desde presentación.
+* La aceptación integrada completa queda limitada por el cron local preexistente documentado en el acta. No se cambiaron estados de Linear ni se enviaron mensajes.
+
 **Slice y acuerdos de coordinación:** [Sprint 3 — Human Review & Correction v0.3](<https://linear.app/saasprojectkdm/document/sprint-3-human-review-and-correction-v03-slice-y-coordinacion-45606628ecac>)
 
 **Plan de implementación S3-01:** [Plan para revisión y elección de ejecución](<https://linear.app/saasprojectkdm/document/s3-01-plan-de-implementacion-de-la-base-de-revision-humana-46eeacce89d4>). No inicia otros tickets ni acredita ejecución.

@@ -1,0 +1,840 @@
+-- Frozen S3-01 fixture helpers for testing the S3-02 upgrade path.
+-- Keep this file on the pre-S3-02 schema; it intentionally has no round/item coverage_revision columns.
+-- Based on the S3-01 fixture in commit 1cad456.
+\ir analysis-fixtures.psql
+\ir credit-fixtures.psql
+
+create temporary table review_fixture_case (
+  workspace_id uuid primary key,
+  admin_id uuid not null,
+  member_a_id uuid not null,
+  member_b_id uuid not null,
+  document_id uuid not null,
+  version_id uuid not null,
+  analysis_id uuid not null,
+  finding_a_id uuid not null,
+  finding_b_id uuid not null,
+  finding_c_id uuid not null
+) on commit drop;
+
+create function pg_temp.create_review_fixture_case() returns uuid
+language plpgsql
+set search_path = pg_temp, public, auth, extensions
+as $$
+declare
+  v_workspace uuid;
+  v_admin uuid;
+  v_member_a uuid := gen_random_uuid();
+  v_member_b uuid := gen_random_uuid();
+  v_analysis uuid;
+  v_document uuid;
+  v_version uuid;
+  v_chunk uuid;
+  v_finding_a uuid;
+  v_finding_b uuid;
+  v_finding_c uuid;
+begin
+  v_workspace := pg_temp.create_credit_workspace();
+  select user_id into strict v_admin
+  from pg_temp.credit_workspace where workspace_id = v_workspace;
+
+  insert into auth.users(id, email, aud, role) values
+    (v_member_a, 'review-' || v_member_a::text || '@example.test', 'authenticated', 'authenticated'),
+    (v_member_b, 'review-' || v_member_b::text || '@example.test', 'authenticated', 'authenticated');
+  insert into public.profiles(id, workspace_id, role, full_name, email) values
+    (v_member_a, v_workspace, 'Member', 'Synthetic review member A', 'review-' || v_member_a::text || '@example.test'),
+    (v_member_b, v_workspace, 'Member', 'Synthetic review member B', 'review-' || v_member_b::text || '@example.test');
+
+  v_analysis := pg_temp.create_analysis_fixture(v_workspace, v_admin, 'completed', 1);
+  select document_id, version_id, chunk_id into strict v_document, v_version, v_chunk
+  from pg_temp.analysis_case where analysis_id = v_analysis and ordinal = 1;
+
+  v_finding_a := pg_temp.insert_finding_row(v_analysis, v_workspace, 0.91);
+  v_finding_b := pg_temp.insert_finding_row(v_analysis, v_workspace, 0.82);
+  v_finding_c := pg_temp.insert_finding_row(v_analysis, v_workspace, 0.73);
+  update public.findings
+  set assignee_id = case id
+    when v_finding_a then v_member_a
+    when v_finding_b then v_member_b
+    when v_finding_c then v_member_a
+  end
+  where id in (v_finding_a, v_finding_b, v_finding_c);
+  perform pg_temp.insert_evidence_row(v_workspace, v_analysis, v_finding_a, v_document, v_version, v_chunk, 'Synthetic review evidence A');
+  perform pg_temp.insert_evidence_row(v_workspace, v_analysis, v_finding_b, v_document, v_version, v_chunk, 'Synthetic review evidence B');
+  perform pg_temp.insert_evidence_row(v_workspace, v_analysis, v_finding_c, v_document, v_version, v_chunk, 'Synthetic review evidence C');
+
+  insert into pg_temp.review_fixture_case values (
+    v_workspace, v_admin, v_member_a, v_member_b, v_document, v_version,
+    v_analysis, v_finding_a, v_finding_b, v_finding_c
+  );
+  return v_workspace;
+end;
+$$;
+
+create function pg_temp.append_review_audit_fixture(
+  p_actor_id uuid,
+  p_action text,
+  p_entity_type text,
+  p_entity_id uuid,
+  p_metadata jsonb,
+  p_event_id uuid
+) returns uuid
+language sql
+set search_path = pg_temp, public, private
+as $$
+  select private.append_review_audit(
+    p_actor_id, p_action, p_entity_type, p_entity_id, p_metadata, p_event_id
+  )
+$$;
+
+create function pg_temp.create_review_round(
+  p_workspace_id uuid,
+  p_mode public.correction_round_mode,
+  p_finding_ids uuid[] default '{}'::uuid[]
+) returns uuid
+language plpgsql
+set search_path = pg_temp, public
+as $$
+declare
+  fixture pg_temp.review_fixture_case%rowtype;
+begin
+  select x.* into strict fixture from pg_temp.review_fixture_case x where x.workspace_id = p_workspace_id;
+  return pg_temp.create_review_round_for_document(
+    p_workspace_id, fixture.document_id, fixture.admin_id, p_mode, p_finding_ids
+  );
+end;
+$$;
+
+create function pg_temp.create_review_round_for_document(
+  p_workspace_id uuid,
+  p_document_id uuid,
+  p_admin_id uuid,
+  p_mode public.correction_round_mode,
+  p_finding_ids uuid[] default '{}'::uuid[]
+) returns uuid
+language plpgsql
+set search_path = pg_temp, public
+as $$
+declare
+  v_round_id uuid := gen_random_uuid();
+  v_base_version_id uuid;
+  v_finding record;
+begin
+  select d.active_version_id into strict v_base_version_id
+  from public.documents d where d.id = p_document_id and d.workspace_id = p_workspace_id;
+  if v_base_version_id is null then
+    raise exception 'Review fixture document must have an active version';
+  end if;
+  if p_mode = 'administrative' and cardinality(p_finding_ids) <> 0 then
+    raise exception 'Administrative test rounds cannot take finding items';
+  end if;
+  if p_mode = 'assigned_findings' then
+    update public.findings set status = 'confirmed'
+    where id = any(p_finding_ids) and workspace_id = p_workspace_id
+      and status in ('pending_review', 'update_planned');
+  end if;
+  insert into public.correction_rounds(
+    id, workspace_id, document_id, mode, base_version_id, created_by
+  ) values (
+    v_round_id, p_workspace_id, p_document_id, p_mode,
+    v_base_version_id, p_admin_id
+  );
+  if p_mode = 'assigned_findings' then
+    for v_finding in
+      select f.id, f.assignee_id
+      from public.findings f
+      where f.id = any(p_finding_ids) and f.workspace_id = p_workspace_id
+        and exists (
+          select 1 from public.finding_evidence e
+          where e.finding_id = f.id and e.document_id = p_document_id and e.workspace_id = p_workspace_id
+        )
+      order by f.id
+    loop
+      insert into public.correction_round_items(
+        workspace_id, round_id, document_id, finding_id,
+        initial_assignee_id, assignee_id
+      ) values (
+        p_workspace_id, v_round_id, p_document_id, v_finding.id,
+        v_finding.assignee_id, v_finding.assignee_id
+      );
+    end loop;
+  end if;
+  update public.correction_rounds
+  set status = 'collecting', revision = revision + 1, opened_at = now()
+  where id = v_round_id;
+  return v_round_id;
+end;
+$$;
+
+create function pg_temp.create_review_upload_version(
+  p_workspace_id uuid,
+  p_document_id uuid,
+  p_actor_id uuid,
+  p_workflow_kind text
+) returns uuid
+language plpgsql
+set search_path = pg_temp, public
+as $$
+declare
+  v_version_id uuid := gen_random_uuid();
+  v_attempt_id uuid := gen_random_uuid();
+  v_number integer;
+begin
+  if p_workflow_kind not in ('correction_submission', 'correction_candidate') then
+    raise exception 'Synthetic review uploads need correction workflow provenance';
+  end if;
+  select coalesce(max(v.version_number), 0) + 1 into v_number
+  from public.document_versions v
+  where v.document_id = p_document_id and v.workspace_id = p_workspace_id;
+  insert into public.document_versions(
+    id, workspace_id, document_id, version_number, storage_path,
+    processing_status, version_status, size_bytes, workflow_kind,
+    upload_state, expected_sha256, hash_source, upload_initiator_id,
+    idempotency_key, request_fingerprint, current_upload_attempt_id,
+    reference_set_at, reference_set_by
+  ) values (
+    v_version_id, p_workspace_id, p_document_id, v_number,
+    p_workspace_id::text || '/' || p_document_id::text || '/' || v_version_id::text || '/original.md',
+    'uploaded', null, 1, p_workflow_kind,
+    'pending', repeat('a', 64), 'client_declared', p_actor_id,
+    gen_random_uuid(), repeat('b', 64), v_attempt_id,
+    now(), p_actor_id
+  );
+  perform private.insert_upload_attempt(p_workspace_id, p_document_id, v_version_id, v_attempt_id);
+  return v_version_id;
+end;
+$$;
+
+create function pg_temp.confirm_review_upload(p_version_id uuid) returns void
+language plpgsql
+set search_path = pg_temp, public
+as $$
+declare
+  v_attempt_id uuid;
+begin
+  update public.document_versions v
+  set upload_state = 'confirmed', upload_confirmed_at = now()
+  where v.id = p_version_id
+  returning v.current_upload_attempt_id into strict v_attempt_id;
+  update public.document_upload_attempts a
+  set retired_at = coalesce(a.retired_at, now()), cleanup_status = 'pending'
+  where a.id = v_attempt_id;
+end;
+$$;
+
+create function pg_temp.create_review_reservation(
+  p_round_id uuid,
+  p_member_id uuid,
+  p_round_item_ids uuid[],
+  p_expires_soon boolean default false
+) returns uuid
+language plpgsql
+set search_path = pg_temp, public
+as $$
+declare
+  r public.correction_rounds%rowtype;
+  v_version_id uuid;
+  v_submission_id uuid := gen_random_uuid();
+  v_reserved_at timestamptz;
+begin
+  select x.* into strict r from public.correction_rounds x where x.id = p_round_id;
+  v_reserved_at := case when p_expires_soon
+    then now() - interval '24 hours' + interval '100 milliseconds'
+    else now() end;
+  v_version_id := pg_temp.create_review_upload_version(
+    r.workspace_id, r.document_id, p_member_id, 'correction_submission'
+  );
+  insert into public.correction_submissions(
+    id, workspace_id, round_id, document_id, base_version_id, version_id,
+    submitter_id, state, idempotency_key, request_fingerprint,
+    reserved_at, expires_at
+  ) values (
+    v_submission_id, r.workspace_id, r.id, r.document_id, r.base_version_id, v_version_id,
+    p_member_id, 'reserved', gen_random_uuid()::text, repeat('d', 64),
+    v_reserved_at, v_reserved_at + interval '24 hours'
+  );
+  insert into public.correction_submission_items(
+    submission_id, round_item_id, workspace_id, round_id, document_id,
+    assignee_at_submit_id, expected_revision
+  )
+  select v_submission_id, i.id, i.workspace_id, i.round_id, i.document_id,
+    i.assignee_id, i.revision
+  from public.correction_round_items i
+  where i.id = any(p_round_item_ids) and i.round_id = r.id;
+  return v_submission_id;
+end;
+$$;
+
+create function pg_temp.expire_review_reservation(p_submission_id uuid) returns void
+language plpgsql
+set search_path = pg_temp, public
+as $$
+begin
+  update public.correction_submissions
+  set state = 'expired'
+  where id = p_submission_id and state = 'reserved' and expires_at <= now();
+  if not found then
+    raise exception 'Review reservation has not reached its expiry time';
+  end if;
+end;
+$$;
+
+create function pg_temp.create_review_submission(
+  p_round_id uuid,
+  p_member_id uuid,
+  p_item_ids uuid[]
+) returns uuid
+language plpgsql
+set search_path = pg_temp, public
+as $$
+declare
+  r public.correction_rounds%rowtype;
+  v_version_id uuid;
+  v_submission_id uuid := gen_random_uuid();
+  v_reserved_at timestamptz := now();
+  v_confirmed_at timestamptz;
+begin
+  select x.* into strict r from public.correction_rounds x where x.id = p_round_id;
+  v_version_id := pg_temp.create_review_upload_version(
+    r.workspace_id, r.document_id, p_member_id, 'correction_submission'
+  );
+  insert into public.correction_submissions(
+    id, workspace_id, round_id, document_id, base_version_id, version_id,
+    submitter_id, state, idempotency_key, request_fingerprint,
+    reserved_at, expires_at
+  ) values (
+    v_submission_id, r.workspace_id, r.id, r.document_id, r.base_version_id, v_version_id,
+    p_member_id, 'reserved', gen_random_uuid()::text, repeat('c', 64),
+    v_reserved_at, v_reserved_at + interval '24 hours'
+  );
+  insert into public.correction_submission_items(
+    submission_id, round_item_id, workspace_id, round_id, document_id,
+    assignee_at_submit_id, expected_revision
+  )
+  select v_submission_id, i.id, i.workspace_id, i.round_id, i.document_id,
+    i.assignee_id, i.revision
+  from public.correction_round_items i
+  where i.id = any(p_item_ids) and i.round_id = r.id;
+  perform pg_temp.confirm_review_upload(v_version_id);
+  select v.upload_confirmed_at into strict v_confirmed_at
+  from public.document_versions v where v.id = v_version_id;
+  update public.correction_submissions
+  set state = 'confirmed', confirmed_at = v_confirmed_at
+  where id = v_submission_id;
+  update public.correction_round_items
+  set current_submission_id = v_submission_id
+  where id = any(p_item_ids) and round_id = r.id;
+  return v_submission_id;
+end;
+$$;
+
+create function pg_temp.create_consolidated_candidate(
+  p_round_id uuid,
+  p_admin_id uuid,
+  p_confirm_upload boolean default true
+)
+returns uuid
+language plpgsql
+set search_path = pg_temp, public
+as $$
+declare
+  r public.correction_rounds%rowtype;
+  v_version_id uuid;
+  v_candidate_id uuid := gen_random_uuid();
+begin
+  select x.* into strict r from public.correction_rounds x where x.id = p_round_id;
+  v_version_id := pg_temp.create_review_upload_version(
+    r.workspace_id, r.document_id, p_admin_id, 'correction_candidate'
+  );
+  insert into public.correction_candidates(
+    id, workspace_id, round_id, document_id, base_version_id, version_id,
+    source_submission_id, selected_by, selection_kind, status,
+    coverage_revision, revision, idempotency_key
+  ) values (
+    v_candidate_id, r.workspace_id, r.id, r.document_id, r.base_version_id, v_version_id,
+    null, p_admin_id, 'consolidated', 'reserved', r.revision, 1, gen_random_uuid()::text
+  );
+  if p_confirm_upload then
+    perform pg_temp.confirm_review_upload(v_version_id);
+  end if;
+  return v_candidate_id;
+end;
+$$;
+
+create function pg_temp.select_review_candidate(p_candidate_id uuid) returns void
+language plpgsql
+set search_path = pg_temp, public
+as $$
+declare
+  c public.correction_candidates%rowtype;
+begin
+  select x.* into strict c from public.correction_candidates x where x.id = p_candidate_id;
+  update public.correction_candidates
+  set status = 'selected', revision = revision + 1
+  where id = c.id;
+  if c.selection_kind = 'consolidated' then
+    insert into public.correction_candidate_items(
+      candidate_id, round_item_id, submission_id, workspace_id, round_id,
+      document_id, item_revision
+    )
+    select c.id, i.id, i.current_submission_id, i.workspace_id, i.round_id,
+      i.document_id, i.revision
+    from public.correction_round_items i where i.round_id = c.round_id;
+  else
+    insert into public.correction_candidate_items(
+      candidate_id, round_item_id, submission_id, workspace_id, round_id,
+      document_id, item_revision
+    )
+    select c.id, i.id, i.current_submission_id, i.workspace_id, i.round_id,
+      i.document_id, i.revision
+    from public.correction_round_items i where i.round_id = c.round_id;
+  end if;
+  update public.correction_rounds
+  set status = 'candidate_processing', active_candidate_id = c.id, revision = revision + 1
+  where id = c.round_id;
+end;
+$$;
+
+create function pg_temp.start_review_candidate(p_candidate_id uuid) returns void
+language plpgsql
+set search_path = pg_temp, public
+as $$
+declare
+  c public.correction_candidates%rowtype;
+  v_operation_id uuid := gen_random_uuid();
+  v_started_at timestamptz := clock_timestamp();
+begin
+  select x.* into strict c from public.correction_candidates x where x.id = p_candidate_id;
+  update public.correction_candidates
+  set status = 'processing', revision = revision + 1 where id = c.id;
+  insert into private.ingestion_jobs(
+    version_id, workspace_id, status, attempt_count, operation_id, started_at, lease_expires_at
+  ) values (
+    c.version_id, c.workspace_id, 'running', 1, v_operation_id,
+    v_started_at, v_started_at + interval '180 seconds'
+  );
+  update public.document_versions set processing_status = 'processing',
+    processing_queued = false, processing_operation_id = v_operation_id,
+    processing_started_at = v_started_at,
+    processing_lease_expires_at = v_started_at + interval '180 seconds'
+  where id = c.version_id and workspace_id = c.workspace_id;
+end;
+$$;
+
+create function pg_temp.fail_review_candidate(p_candidate_id uuid) returns void
+language plpgsql
+set search_path = pg_temp, public
+as $$
+declare
+  c public.correction_candidates%rowtype;
+  v_operation_id uuid := gen_random_uuid();
+  v_started_at timestamptz := clock_timestamp();
+begin
+  select x.* into strict c from public.correction_candidates x where x.id = p_candidate_id;
+  update public.correction_candidates set status = 'processing', revision = revision + 1 where id = c.id;
+  insert into private.ingestion_jobs(
+    version_id, workspace_id, status, attempt_count, operation_id, started_at, lease_expires_at
+  ) values (
+    c.version_id, c.workspace_id, 'running', 1, v_operation_id,
+    v_started_at, v_started_at + interval '180 seconds'
+  );
+  update public.document_versions set processing_status = 'processing',
+    processing_queued = false, processing_operation_id = v_operation_id,
+    processing_started_at = v_started_at,
+    processing_lease_expires_at = v_started_at + interval '180 seconds'
+  where id = c.version_id and workspace_id = c.workspace_id;
+  update private.ingestion_jobs set status = 'failed', operation_id = null,
+    started_at = null, lease_expires_at = null, updated_at = clock_timestamp()
+  where version_id = c.version_id and workspace_id = c.workspace_id;
+  update public.document_versions set processing_status = 'processing_failed',
+    processing_operation_id = null, processing_started_at = null,
+    processing_lease_expires_at = null
+  where id = c.version_id and workspace_id = c.workspace_id;
+  update public.correction_candidates set status = 'failed', revision = revision + 1 where id = c.id;
+  update public.correction_rounds set status = 'candidate_failed', revision = revision + 1
+  where id = c.round_id;
+end;
+$$;
+
+create function pg_temp.complete_review_candidate(p_candidate_id uuid) returns void
+language plpgsql
+set search_path = pg_temp, public
+as $$
+declare
+  c public.correction_candidates%rowtype;
+  v_operation_id uuid := gen_random_uuid();
+  v_started_at timestamptz := clock_timestamp();
+begin
+  select x.* into strict c from public.correction_candidates x where x.id = p_candidate_id;
+  update public.correction_candidates
+  set status = 'processing', revision = revision + 1 where id = c.id;
+  insert into private.ingestion_jobs(
+    version_id, workspace_id, status, attempt_count, operation_id, started_at, lease_expires_at
+  ) values (
+    c.version_id, c.workspace_id, 'running', 1, v_operation_id,
+    v_started_at, v_started_at + interval '180 seconds'
+  );
+  update public.document_versions set processing_status = 'processing',
+    processing_queued = false, processing_operation_id = v_operation_id,
+    processing_started_at = v_started_at,
+    processing_lease_expires_at = v_started_at + interval '180 seconds'
+  where id = c.version_id and workspace_id = c.workspace_id;
+  update public.document_versions set processing_status = 'ready',
+    version_status = 'pending_approval', processing_operation_id = null,
+    processing_started_at = null, processing_lease_expires_at = null
+  where id = c.version_id and workspace_id = c.workspace_id;
+  update private.ingestion_jobs set status = 'completed', started_at = null,
+    lease_expires_at = null, updated_at = clock_timestamp()
+  where version_id = c.version_id and workspace_id = c.workspace_id;
+  update public.correction_candidates
+  set status = 'pending_approval', revision = revision + 1 where id = c.id;
+  update public.correction_rounds
+  set status = 'pending_approval', revision = revision + 1 where id = c.round_id;
+end;
+$$;
+
+create function pg_temp.return_failed_review_item(
+  p_candidate_id uuid,
+  p_round_item_id uuid,
+  p_reason text
+) returns uuid
+language plpgsql
+set search_path = pg_temp, public
+as $$
+declare
+  c public.correction_candidates%rowtype;
+  i public.correction_round_items%rowtype;
+  v_return_id uuid := gen_random_uuid();
+  v_decision_id uuid := gen_random_uuid();
+begin
+  select x.* into strict c from public.correction_candidates x where x.id = p_candidate_id;
+  select x.* into strict i from public.correction_round_items x where x.id = p_round_item_id;
+  insert into public.correction_returns(
+    id, workspace_id, round_id, document_id, candidate_id, actor_id, idempotency_key
+  ) values (
+    v_return_id, c.workspace_id, c.round_id, c.document_id, c.id,
+    c.selected_by, gen_random_uuid()::text
+  );
+  insert into public.correction_return_items(
+    return_id, round_item_id, previous_submission_id, workspace_id,
+    round_id, document_id, recipient_id, reason
+  ) values (
+    v_return_id, i.id, i.current_submission_id, i.workspace_id,
+    i.round_id, i.document_id, i.assignee_id, p_reason
+  );
+  insert into public.correction_candidate_decisions(
+    id, workspace_id, round_id, document_id, candidate_id, actor_id,
+    outcome, private_reason
+  ) values (
+    v_decision_id, c.workspace_id, c.round_id, c.document_id, c.id,
+    c.selected_by, 'invalidated', 'Candidate processing failed before review.'
+  );
+  update public.correction_candidates
+  set status = 'invalidated', revision = revision + 1 where id = c.id;
+  update public.correction_round_items
+  set current_submission_id = null, revision = revision + 1 where id = i.id;
+  update public.correction_rounds
+  set status = 'collecting', active_candidate_id = null, revision = revision + 1
+  where id = c.round_id;
+  return v_return_id;
+end;
+$$;
+
+create function pg_temp.select_direct_review_candidate(
+  p_round_id uuid,
+  p_admin_id uuid,
+  p_submission_id uuid
+) returns uuid
+language plpgsql
+set search_path = pg_temp, public
+as $$
+declare
+  r public.correction_rounds%rowtype;
+  s public.correction_submissions%rowtype;
+  v_candidate_id uuid := gen_random_uuid();
+begin
+  select x.* into strict r from public.correction_rounds x where x.id = p_round_id;
+  select x.* into strict s from public.correction_submissions x where x.id = p_submission_id;
+  update public.correction_rounds
+  set status = 'consolidating', revision = revision + 1 where id = r.id;
+  insert into public.correction_candidates(
+    id, workspace_id, round_id, document_id, base_version_id, version_id,
+    source_submission_id, selected_by, selection_kind, status,
+    coverage_revision, revision, idempotency_key
+  ) values (
+    v_candidate_id, r.workspace_id, r.id, r.document_id, r.base_version_id, s.version_id,
+    s.id, p_admin_id, 'direct', 'selected', r.revision + 1, 1, gen_random_uuid()::text
+  );
+  insert into public.correction_candidate_items(
+    candidate_id, round_item_id, submission_id, workspace_id,
+    round_id, document_id, item_revision
+  )
+  select v_candidate_id, i.id, i.current_submission_id, i.workspace_id,
+    i.round_id, i.document_id, i.revision
+  from public.correction_round_items i where i.round_id = r.id;
+  update public.correction_rounds
+  set status = 'candidate_processing', active_candidate_id = v_candidate_id, revision = revision + 1
+  where id = r.id;
+  return v_candidate_id;
+end;
+$$;
+
+create function pg_temp.try_select_direct_review_candidate(
+  p_round_id uuid,
+  p_admin_id uuid,
+  p_submission_id uuid
+) returns uuid
+language plpgsql
+set search_path = pg_temp, public
+as $$
+declare
+  v_candidate_id uuid;
+begin
+  v_candidate_id := pg_temp.select_direct_review_candidate(p_round_id, p_admin_id, p_submission_id);
+  set constraints correction_candidates_integrity_check immediate;
+  set constraints correction_candidates_integrity_check deferred;
+  return v_candidate_id;
+end;
+$$;
+
+create function pg_temp.try_select_candidate_without_items(p_candidate_id uuid) returns void
+language plpgsql
+set search_path = pg_temp, public
+as $$
+declare
+  c public.correction_candidates%rowtype;
+begin
+  select x.* into strict c from public.correction_candidates x where x.id = p_candidate_id;
+  update public.correction_candidates set status = 'selected', revision = revision + 1 where id = c.id;
+  update public.correction_rounds
+  set status = 'candidate_processing', active_candidate_id = c.id, revision = revision + 1
+  where id = c.round_id;
+  set constraints correction_candidates_integrity_check immediate;
+end;
+$$;
+
+create function pg_temp.create_review_http_fixture(
+  p_workspace_id uuid,
+  p_admin_id uuid,
+  p_member_a_id uuid,
+  p_member_b_id uuid,
+  p_unassigned_owner_id uuid,
+  p_analysis_id uuid,
+  p_document_ids uuid[],
+  p_version_ids uuid[],
+  p_chunk_ids uuid[],
+  p_base_finding_id uuid
+) returns jsonb
+language plpgsql
+set search_path = pg_temp, public
+as $$
+declare
+  f1 uuid := p_base_finding_id;
+  f2 uuid;
+  f3 uuid;
+  f4 uuid;
+  f5 uuid;
+  f4_after_round uuid;
+  d2f1 uuid;
+  d2f2 uuid;
+  d2f3 uuid;
+  d3f1 uuid;
+  d3f2 uuid;
+  d3f3 uuid;
+  main_round uuid;
+  main_submission_a uuid;
+  main_submission_b uuid;
+  reserved_submission uuid;
+  expired_submission uuid;
+  approval_round uuid;
+  approval_submission uuid;
+  approved_candidate uuid;
+  approved_decision uuid;
+  direct_round uuid;
+  direct_submission uuid;
+  rejected_candidate uuid;
+  rejected_decision uuid;
+  return_round uuid;
+  return_submission uuid;
+  invalidated_candidate uuid;
+  return_id uuid;
+  returned_item uuid;
+  return_state jsonb;
+  admin_round uuid;
+  item_ids_a uuid[];
+  item_ids_b uuid[];
+  d2_item_ids uuid[];
+  d3_item_ids uuid[];
+begin
+  if cardinality(p_document_ids) <> 3 or cardinality(p_version_ids) <> 3 or cardinality(p_chunk_ids) <> 3 then
+    raise exception 'Review HTTP fixture requires three related documents and versions';
+  end if;
+
+  update public.documents set owner_id = p_unassigned_owner_id
+  where workspace_id = p_workspace_id and id = any(p_document_ids);
+  update public.findings set status = 'confirmed', assignee_id = p_member_a_id
+  where id = f1 and workspace_id = p_workspace_id;
+  f2 := pg_temp.insert_finding_row(p_analysis_id, p_workspace_id, 0.88, 'Synthetic second review finding');
+  f3 := pg_temp.insert_finding_row(p_analysis_id, p_workspace_id, 0.77, 'Synthetic third review finding');
+  f4 := pg_temp.insert_finding_row(p_analysis_id, p_workspace_id, 0.66, 'Synthetic peer review finding');
+  f5 := pg_temp.insert_finding_row(p_analysis_id, p_workspace_id, 0.55, 'Synthetic unassigned review finding');
+  d2f1 := pg_temp.insert_finding_row(p_analysis_id, p_workspace_id, 0.91, 'Synthetic document two finding one');
+  d2f2 := pg_temp.insert_finding_row(p_analysis_id, p_workspace_id, 0.81, 'Synthetic document two finding two');
+  d2f3 := pg_temp.insert_finding_row(p_analysis_id, p_workspace_id, 0.71, 'Synthetic document two finding three');
+  d3f1 := pg_temp.insert_finding_row(p_analysis_id, p_workspace_id, 0.92, 'Synthetic document three finding one');
+  d3f2 := pg_temp.insert_finding_row(p_analysis_id, p_workspace_id, 0.82, 'Synthetic document three finding two');
+  d3f3 := pg_temp.insert_finding_row(p_analysis_id, p_workspace_id, 0.72, 'Synthetic document three finding three');
+  update public.findings set assignee_id = case
+    when id in (f2, f3, d2f1, d2f2, d2f3, d3f1, d3f2, d3f3) then p_member_a_id
+    when id = f4 then p_member_b_id
+  end
+  where id in (f2, f3, f4, d2f1, d2f2, d2f3, d3f1, d3f2, d3f3);
+  perform pg_temp.insert_evidence_row(p_workspace_id, p_analysis_id, f2, p_document_ids[1], p_version_ids[1], p_chunk_ids[1], 'Synthetic evidence for second finding');
+  perform pg_temp.insert_evidence_row(p_workspace_id, p_analysis_id, f3, p_document_ids[1], p_version_ids[1], p_chunk_ids[1], 'Synthetic evidence for third finding');
+  perform pg_temp.insert_evidence_row(p_workspace_id, p_analysis_id, f4, p_document_ids[1], p_version_ids[1], p_chunk_ids[1], 'Synthetic evidence for peer finding');
+  perform pg_temp.insert_evidence_row(p_workspace_id, p_analysis_id, f5, p_document_ids[1], p_version_ids[1], p_chunk_ids[1], 'Synthetic evidence for unassigned finding');
+
+  perform pg_temp.insert_evidence_row(p_workspace_id, p_analysis_id, d2f1, p_document_ids[2], p_version_ids[2], p_chunk_ids[2], 'Synthetic evidence for document two finding one');
+  perform pg_temp.insert_evidence_row(p_workspace_id, p_analysis_id, d2f2, p_document_ids[2], p_version_ids[2], p_chunk_ids[2], 'Synthetic evidence for document two finding two');
+  perform pg_temp.insert_evidence_row(p_workspace_id, p_analysis_id, d2f3, p_document_ids[2], p_version_ids[2], p_chunk_ids[2], 'Synthetic evidence for document two finding three');
+  perform pg_temp.insert_evidence_row(p_workspace_id, p_analysis_id, d3f1, p_document_ids[3], p_version_ids[3], p_chunk_ids[3], 'Synthetic evidence for document three finding one');
+  perform pg_temp.insert_evidence_row(p_workspace_id, p_analysis_id, d3f2, p_document_ids[3], p_version_ids[3], p_chunk_ids[3], 'Synthetic evidence for document three finding two');
+  perform pg_temp.insert_evidence_row(p_workspace_id, p_analysis_id, d3f3, p_document_ids[3], p_version_ids[3], p_chunk_ids[3], 'Synthetic evidence for document three finding three');
+
+  insert into pg_temp.review_fixture_case values (
+    p_workspace_id, p_admin_id, p_member_a_id, p_member_b_id, p_document_ids[1],
+    p_version_ids[1], p_analysis_id, f1, f2, f3
+  );
+  main_round := pg_temp.create_review_round_for_document(
+    p_workspace_id, p_document_ids[1], p_admin_id, 'assigned_findings', array[f1, f2, f3, f4]
+  );
+  select array_agg(i.id order by i.finding_id) into strict item_ids_a
+  from public.correction_round_items i
+  where i.round_id = main_round and i.assignee_id = p_member_a_id;
+  select array_agg(i.id order by i.finding_id) into strict item_ids_b
+  from public.correction_round_items i
+  where i.round_id = main_round and i.assignee_id = p_member_b_id;
+  main_submission_a := pg_temp.create_review_submission(main_round, p_member_a_id, item_ids_a);
+  main_submission_b := pg_temp.create_review_submission(main_round, p_member_b_id, item_ids_b);
+  reserved_submission := pg_temp.create_review_reservation(main_round, p_member_a_id, item_ids_a[1:1]);
+  expired_submission := pg_temp.create_review_reservation(main_round, p_member_a_id, item_ids_a[2:2], true);
+  f4_after_round := pg_temp.insert_finding_row(p_analysis_id, p_workspace_id, 0.44, 'Finding created after the round opened');
+  update public.findings set assignee_id = p_member_b_id where id = f4_after_round;
+  perform pg_temp.insert_evidence_row(p_workspace_id, p_analysis_id, f4_after_round, p_document_ids[1], p_version_ids[1], p_chunk_ids[1], 'Evidence for a finding outside the open round');
+
+  approval_round := pg_temp.create_review_round_for_document(
+    p_workspace_id, p_document_ids[2], p_admin_id, 'assigned_findings', array[d2f1, d2f2, d2f3]
+  );
+  select array_agg(i.id order by i.finding_id) into strict d2_item_ids
+  from public.correction_round_items i where i.round_id = approval_round;
+  approval_submission := pg_temp.create_review_submission(approval_round, p_member_a_id, d2_item_ids);
+  update public.correction_rounds set status = 'consolidating', revision = revision + 1 where id = approval_round;
+  approved_candidate := pg_temp.create_consolidated_candidate(approval_round, p_admin_id);
+  perform pg_temp.select_review_candidate(approved_candidate);
+  perform pg_temp.complete_review_candidate(approved_candidate);
+  insert into public.correction_candidate_decisions(
+    workspace_id, round_id, document_id, candidate_id, actor_id, outcome, retention
+  ) select c.workspace_id, c.round_id, c.document_id, c.id, c.selected_by, 'approved', 'retain'
+    from public.correction_candidates c where c.id = approved_candidate
+  returning id into strict approved_decision;
+  insert into public.correction_approval_contributions(
+    approval_id, document_id, workspace_id, contributor_id, own_item_count
+  ) select approved_decision, c.document_id, c.workspace_id, si.assignee_at_submit_id, count(*)::integer
+    from public.correction_candidates c
+    join public.correction_candidate_items ci on ci.candidate_id = c.id
+    join public.correction_submission_items si on si.submission_id = ci.submission_id and si.round_item_id = ci.round_item_id
+    where c.id = approved_candidate
+    group by c.document_id, c.workspace_id, si.assignee_at_submit_id;
+  update public.document_versions set version_status = 'historical' where id = p_version_ids[2];
+  update public.document_versions set version_status = 'active'
+  where id = (select c.version_id from public.correction_candidates c where c.id = approved_candidate);
+  update public.documents set active_version_id = (
+    select c.version_id from public.correction_candidates c where c.id = approved_candidate
+  ) where id = p_document_ids[2] and workspace_id = p_workspace_id;
+  update public.correction_candidates set status = 'approved', revision = revision + 1 where id = approved_candidate;
+  update public.correction_rounds set status = 'approved', revision = revision + 1 where id = approval_round;
+
+  direct_round := pg_temp.create_review_round_for_document(
+    p_workspace_id, p_document_ids[2], p_admin_id, 'assigned_findings', array[d2f1, d2f2, d2f3]
+  );
+  select array_agg(i.id order by i.finding_id) into strict d2_item_ids
+  from public.correction_round_items i where i.round_id = direct_round;
+  direct_submission := pg_temp.create_review_submission(direct_round, p_member_a_id, d2_item_ids);
+  rejected_candidate := pg_temp.select_direct_review_candidate(direct_round, p_admin_id, direct_submission);
+  perform pg_temp.complete_review_candidate(rejected_candidate);
+  insert into public.correction_candidate_decisions(
+    workspace_id, round_id, document_id, candidate_id, actor_id, outcome, private_reason
+  ) select c.workspace_id, c.round_id, c.document_id, c.id, c.selected_by, 'rejected', 'Synthetic reviewer rejection'
+    from public.correction_candidates c where c.id = rejected_candidate
+  returning id into strict rejected_decision;
+  update public.document_versions set version_status = 'rejected'
+  where id = (select c.version_id from public.correction_candidates c where c.id = rejected_candidate);
+  update public.correction_candidates set status = 'rejected', revision = revision + 1 where id = rejected_candidate;
+  update public.correction_rounds set status = 'consolidating', active_candidate_id = null, revision = revision + 1
+  where id = direct_round;
+
+  return_round := pg_temp.create_review_round_for_document(
+    p_workspace_id, p_document_ids[3], p_admin_id, 'assigned_findings', array[d3f1, d3f2, d3f3]
+  );
+  select array_agg(i.id order by i.finding_id) into strict d3_item_ids
+  from public.correction_round_items i where i.round_id = return_round;
+  return_submission := pg_temp.create_review_submission(return_round, p_member_a_id, d3_item_ids);
+  update public.correction_rounds set status = 'consolidating', revision = revision + 1 where id = return_round;
+  invalidated_candidate := pg_temp.create_consolidated_candidate(return_round, p_admin_id);
+  perform pg_temp.select_review_candidate(invalidated_candidate);
+  perform pg_temp.fail_review_candidate(invalidated_candidate);
+  select i.id into strict returned_item from public.correction_round_items i
+  where i.round_id = return_round and i.finding_id = d3f2;
+  return_id := pg_temp.return_failed_review_item(invalidated_candidate, returned_item,
+    'Please update the assigned synthetic procedure.');
+  select jsonb_build_object(
+    'roundId', return_round,
+    'preservedSubmissions', jsonb_agg(i.current_submission_id order by i.finding_id) filter (where i.finding_id in (d3f1, d3f3)),
+    'returnedSubmission', max(i.current_submission_id::text) filter (where i.finding_id = d3f2),
+    'returnedRevision', max(i.revision) filter (where i.finding_id = d3f2)
+  ) into return_state from public.correction_round_items i where i.round_id = return_round;
+  update public.correction_rounds set status = 'cancelled', revision = revision + 1 where id = return_round;
+  admin_round := pg_temp.create_review_round_for_document(
+    p_workspace_id, p_document_ids[3], p_admin_id, 'administrative', '{}'::uuid[]
+  );
+
+  return jsonb_build_object(
+    'workspaceId', p_workspace_id,
+    'documentIds', to_jsonb(p_document_ids),
+    'versionIds', to_jsonb(p_version_ids),
+    'findingsA', jsonb_build_object(
+      'memberA', jsonb_build_array(f1, f2, f3),
+      'memberB', jsonb_build_array(f4, f4_after_round),
+      'unassigned', jsonb_build_array(f5),
+      'doc2', jsonb_build_array(d2f1, d2f2, d2f3),
+      'doc3', jsonb_build_array(d3f1, d3f2, d3f3)
+    ),
+    'mainRound', jsonb_build_object(
+      'id', main_round,
+      'items', (select jsonb_agg(i.id order by i.id) from public.correction_round_items i where i.round_id = main_round),
+      'memberAItems', (select jsonb_agg(i.id order by i.id) from public.correction_round_items i where i.round_id = main_round and i.assignee_id = p_member_a_id),
+      'submissions', jsonb_build_array(main_submission_a, main_submission_b),
+      'memberASubmission', main_submission_a,
+      'memberBSubmission', main_submission_b,
+      'reservedSubmission', reserved_submission,
+      'expiredSubmission', expired_submission
+    ),
+    'secondary', jsonb_build_object(
+      'approvedRound', approval_round,
+      'approvedSubmission', approval_submission,
+      'approvedCandidate', approved_candidate,
+      'approvedDecision', approved_decision,
+      'directRound', direct_round,
+      'directSubmission', direct_submission,
+      'rejectedCandidate', rejected_candidate,
+      'rejectedDecision', rejected_decision,
+      'returnedRound', return_round,
+      'returnedSubmission', return_submission,
+      'invalidatedCandidate', invalidated_candidate,
+      'returnId', return_id,
+      'returnState', return_state,
+      'administrativeRound', admin_round
+    )
+  );
+end;
+$$;
