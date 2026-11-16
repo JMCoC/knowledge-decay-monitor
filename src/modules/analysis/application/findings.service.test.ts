@@ -29,12 +29,20 @@ function createListQuery(rows: Record<string, unknown>[]) {
   let filteredCount = filteredRows.length;
   let selectedColumns = "";
   const isFilters: Array<[string, null]> = [];
+  const eqFilters: Array<[string, unknown]> = [];
   const builder: Record<string, unknown> = {};
   builder.select = (columns: string) => {
     selectedColumns = columns;
     return builder;
   };
-  builder.eq = () => builder;
+  builder.eq = (column: string, value: unknown) => {
+    eqFilters.push([column, value]);
+    if (column === "assignee_id") {
+      filteredRows = filteredRows.filter((row) => row[column] === value);
+      filteredCount = filteredRows.length;
+    }
+    return builder;
+  };
   builder.is = (column: string, value: null) => {
     isFilters.push([column, value]);
     filteredRows = filteredRows.filter((row) => row[column] === value);
@@ -52,6 +60,7 @@ function createListQuery(rows: Record<string, unknown>[]) {
   return {
     client: { from: () => builder } as never,
     isFilters,
+    eqFilters,
     selectedColumns: () => selectedColumns,
   };
 }
@@ -115,6 +124,24 @@ describe("findings service logic", () => {
     expect(query.selectedColumns()).toContain("assignee_full_name");
     expect(result.data.map((row) => row.id)).toEqual(["unassigned"]);
     expect(result.total).toBe(1);
+  });
+
+  it("filters findings by a selected workspace assignee UUID", async () => {
+    const query = createListQuery([
+      { id: "assigned-a", assignee_id: "member-a", assignee_full_name: "Ana Pérez" },
+      { id: "assigned-b", assignee_id: "member-b", assignee_full_name: "Luis Díaz" },
+    ]);
+
+    const result = await findFindingsByAnalysis(query.client, {
+      workspaceId: "w-1",
+      analysisId: "a-1",
+      assignee: "member-b",
+      offset: 0,
+      limit: 10,
+    });
+
+    expect(query.eqFilters).toContainEqual(["assignee_id", "member-b"]);
+    expect(result.data.map((row) => row.id)).toEqual(["assigned-b"]);
   });
 
   it("preserves the mixed-assignment total when all findings are paginated", async () => {

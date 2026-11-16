@@ -95,7 +95,7 @@ export const findingsQuerySchema = z.object({
   type: z.enum(findingTypes).optional(),
   severity: z.enum(findingSeverities).optional(),
   status: z.enum(findingStatuses).optional(),
-  assignee: z.enum(["all", "unassigned"]).optional(),
+  assignee: z.union([z.enum(["all", "unassigned"]), z.string().uuid()]).optional(),
   page: z.coerce.number().int().min(1, "Page must be at least 1.").default(1),
   pageSize: z.coerce.number().int().min(1).max(50, "Page size cannot exceed 50.").default(10),
 });

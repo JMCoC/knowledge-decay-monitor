@@ -73,16 +73,19 @@ export async function assertLocalSupabaseReady() {
   if (url !== target.apiUrl || !key) {
     throw new Error("Local Supabase test environment is missing or has the wrong API URL.");
   }
-  let response: Response;
-  try {
-    response = await fetch(`${target.apiUrl}/auth/v1/settings`, {
-      headers: { apikey: key },
-      signal: AbortSignal.timeout(5000),
-    });
-  } catch {
-    throw new Error("Local Supabase Auth did not respond at the expected loopback URL.");
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      const response = await fetch(`${target.apiUrl}/auth/v1/settings`, {
+        headers: { apikey: key },
+        signal: AbortSignal.timeout(3000),
+      });
+      if (response.ok) return;
+    } catch {
+      // Give the isolated local Auth service a bounded startup window.
+    }
+    if (attempt < 4) await new Promise((resolve) => setTimeout(resolve, 1000));
   }
-  if (!response.ok) throw new Error("Local Supabase Auth readiness check failed.");
+  throw new Error("Local Supabase Auth did not become ready at the expected loopback URL.");
 }
 
 export async function newLocalUser(): Promise<{

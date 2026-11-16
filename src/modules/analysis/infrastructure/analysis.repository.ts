@@ -121,6 +121,8 @@ export async function findFindingsByAnalysis(
   }
   if (params.assignee === "unassigned") {
     query = query.is("assignee_id", null);
+  } else if (params.assignee && params.assignee !== "all") {
+    query = query.eq("assignee_id", params.assignee);
   }
 
   query = query

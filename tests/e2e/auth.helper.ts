@@ -9,10 +9,21 @@ export function localSupabaseTestConfig(
   const url = env.KDM_LOCAL_SUPABASE_URL;
   const publicUrl = env.NEXT_PUBLIC_SUPABASE_URL;
   const publishableKey = env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
-  if (url !== LOCAL_SUPABASE_URL || publicUrl !== LOCAL_SUPABASE_URL || !publishableKey) {
+  const disposableReview = env.KDM_LOCAL_SUPABASE_DISPOSABLE === "review";
+  const isLocalAddress = (value: string | undefined) => {
+    if (!value) return false;
+    try {
+      const parsed = new URL(value);
+      return parsed.protocol === "http:" && parsed.hostname === "127.0.0.1"
+        && (disposableReview ? /^\d{4,5}$/.test(parsed.port) : value === LOCAL_SUPABASE_URL);
+    } catch {
+      return false;
+    }
+  };
+  if (!isLocalAddress(url) || !isLocalAddress(publicUrl) || publicUrl !== url || !publishableKey) {
     throw new Error("Local Supabase test environment is missing or has the wrong API URL.");
   }
-  return { url, publishableKey };
+  return { url: url!, publishableKey: publishableKey! };
 }
 
 export async function loginAs(

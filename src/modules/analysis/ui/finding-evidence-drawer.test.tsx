@@ -5,10 +5,22 @@ vi.mock("server-only", () => ({}));
 vi.mock("@/modules/repository", () => ({
   getDocumentOriginalUrlAction: vi.fn(),
 }));
+vi.mock("@/modules/review", () => ({
+  assignFinding: vi.fn(),
+  changeFinding: vi.fn(),
+  getFindingReview: vi.fn(),
+  listAssignees: vi.fn(),
+  openRound: vi.fn(),
+  prepareRound: vi.fn(),
+}));
+vi.mock("@/modules/analysis", () => ({
+  listFindingsForDocumentAction: vi.fn(),
+}));
 
 import { renderToStaticMarkup } from "react-dom/server";
 import { FindingEvidenceDrawer } from "./finding-evidence-drawer";
 import type { FindingDetail } from "@/types/contracts";
+import type { FindingReviewSnapshot } from "@/types/review-contracts";
 
 const mockFinding: FindingDetail = {
   id: "f-1",
@@ -48,6 +60,15 @@ const mockFinding: FindingDetail = {
   ],
 };
 
+const mockReview: FindingReviewSnapshot = {
+  ...mockFinding,
+  revision: 1,
+  canChangeStatus: true,
+  canChangeSeverity: true,
+  canAssign: false,
+  canPrepareRound: false,
+};
+
 describe("FindingEvidenceDrawer", () => {
   it("renderiza comparación side-by-side de 2 evidencias con nombres de documentos y versiones", () => {
     const html = renderToStaticMarkup(<FindingEvidenceDrawer finding={mockFinding} onClose={vi.fn()} />);
@@ -62,6 +83,19 @@ describe("FindingEvidenceDrawer", () => {
     expect(html).toContain("Records must be retained for 3 years");
     expect(html).not.toContain("<script>alert('xss')</script>");
     expect(html).toContain("&lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt;");
+  });
+
+  it("integra controles de revisión autorizados y conserva la severidad original", () => {
+    const html = renderToStaticMarkup(
+      <FindingEvidenceDrawer finding={mockFinding} initialReview={mockReview} onClose={vi.fn()} />,
+    );
+    expect(html).toContain("AI Proposed: High");
+    expect(html).toContain("Current:");
+    expect(html).toContain("Confirm");
+    expect(html).toContain("Mark as False Positive");
+    expect(html).not.toContain("Resolve Manually");
+    expect(html).toContain("Assignee:");
+    expect(html.toLowerCase()).not.toContain("confidence");
   });
 });
 

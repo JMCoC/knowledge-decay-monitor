@@ -322,7 +322,8 @@ export interface FindingsQuery {
   type?: FindingType;
   severity?: FindingSeverity;
   status?: FindingStatus;
-  assignee?: "all" | "unassigned";
+  /** "all", "unassigned", or a workspace Member UUID. */
+  assignee?: string;
   page?: number;
   pageSize?: number;
 }

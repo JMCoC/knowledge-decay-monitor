@@ -15,7 +15,7 @@ import {
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const supabaseCli = resolve(projectRoot, "node_modules/supabase/dist/supabase.js");
-const portOffsets = Array.from({ length: 10 }, (_, index) => index);
+const portOffsets = Array.from({ length: 11 }, (_, index) => index);
 
 function runCaptured(command, args, stage, cwd = projectRoot) {
   try {
@@ -97,7 +97,7 @@ async function choosePortBase() {
   const first = 56000 + Math.floor(Math.random() * 3000);
   for (let offset = 0; offset < 200; offset += 1) {
     const base = first + offset * 10;
-    if (base + 9 > 65535) break;
+    if (base + 10 > 65535) break;
     let available = true;
     for (const portOffset of portOffsets) {
       if (!(await availablePort(base + portOffset))) {
@@ -245,11 +245,38 @@ function runVitest(testArgs, env) {
   return result.status ?? 1;
 }
 
+function runReviewE2E(testArgs, env) {
+  const nextCli = resolve(projectRoot, "node_modules/next/dist/bin/next");
+  const build = spawnSync(process.execPath, [nextCli, "build"], {
+    cwd: projectRoot,
+    env,
+    stdio: "inherit",
+    windowsHide: true,
+  });
+  if (build.error || build.status !== 0) throw new Error("Could not build the application for review E2E.");
+  const playwright = resolve(projectRoot, "node_modules/@playwright/test/cli.js");
+  const result = spawnSync(process.execPath, [playwright, "test", "--config", "playwright.config.ts", ...testArgs], {
+    cwd: projectRoot,
+    env,
+    stdio: "inherit",
+    windowsHide: true,
+  });
+  if (result.error) throw new Error("Could not start the review E2E suite.");
+  return result.status ?? 1;
+}
+
 async function main(args) {
-  const reviewFiles = validateReviewIntegrationBatch(args);
-  if (!reviewFiles) {
-    throw new Error("The disposable review runner accepts only an exact nonempty batch of reviewed integration files.");
+  const isE2E = args[0] === "--e2e";
+  const selectedArgs = isE2E ? args.slice(1) : args;
+  const e2eFile = "tests/e2e/human-review.spec.ts";
+  const reviewFiles = isE2E
+    ? selectedArgs.some((argument) => argument.replaceAll("\\", "/") === e2eFile) ? [e2eFile] : null
+    : validateReviewIntegrationBatch(selectedArgs);
+  const firstE2EFile = isE2E && selectedArgs.find((argument) => !argument.startsWith("-"));
+  if (!reviewFiles || (isE2E && firstE2EFile?.replaceAll("\\", "/") !== e2eFile)) {
+    throw new Error("The disposable review runner accepts reviewed integration suites or the S3-03 E2E spec.");
   }
+  const testArgs = isE2E ? selectedArgs : reviewFiles;
 
   const temporaryRoot = mkdtempSync(join(tmpdir(), "kdm-s3-02-review-"));
   const projectId = `kdm-review-${randomUUID().replaceAll("-", "").slice(0, 16)}`;
@@ -259,7 +286,7 @@ async function main(args) {
     assertNoStack(projectId);
     const portBase = await choosePortBase();
     copyTemporaryProject(temporaryRoot, projectId, portBase);
-    console.log(`Starting isolated local Supabase for ${reviewFiles.length} review integration test(s).`);
+    console.log(`Starting isolated local Supabase for ${isE2E ? "S3-03 E2E" : `${reviewFiles.length} review integration test(s)`}.`);
     const excludedServices = [
       "studio", "edge-runtime", "logflare", "vector", "supavisor",
       "realtime", "analytics", "postgres-meta", "mailpit", "imgproxy",
@@ -280,6 +307,7 @@ async function main(args) {
       KDM_LOCAL_SUPABASE_PROJECT_ID: projectId,
       KDM_LOCAL_SUPABASE_WORKDIR: temporaryRoot,
       KDM_LOCAL_SUPABASE_DISPOSABLE: "review",
+      PLAYWRIGHT_TEST_BASE_URL: `http://127.0.0.1:${portBase + 10}`,
       KDM_MAILPIT_URL: runtime.MAILPIT_URL ?? runtime.INBUCKET_URL ?? "",
       SUPABASE_URL: "",
       SUPABASE_PUBLISHABLE_KEY: "",
@@ -298,7 +326,7 @@ async function main(args) {
     };
     delete env.INGESTION_INTERNAL_TOKEN;
     delete env.SUPABASE_SECRET_KEY;
-    code = runVitest(reviewFiles, env);
+    code = isE2E ? runReviewE2E(testArgs, env) : runVitest(reviewFiles, env);
   } catch (error) {
     console.error(error instanceof Error ? error.message : "Disposable review integration failed.");
     code = 1;

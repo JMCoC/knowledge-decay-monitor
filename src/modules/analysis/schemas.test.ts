@@ -46,4 +46,10 @@ describe("findings schemas", () => {
       status,
     }).success).toBe(true);
   });
+
+  it("acepta un UUID de asignatario y rechaza valores arbitrarios", () => {
+    const analysisId = "123e4567-e89b-12d3-a456-426614174000";
+    expect(findingsQuerySchema.safeParse({ analysisId, assignee: "223e4567-e89b-12d3-a456-426614174000" }).success).toBe(true);
+    expect(findingsQuerySchema.safeParse({ analysisId, assignee: "not-a-member" }).success).toBe(false);
+  });
 });

@@ -37,6 +37,26 @@ export function runWithLocalSupabase({
     return 2;
   }
 
+  const isolatedReviewE2E = selected === "e2e"
+    && forwardedArgs.some((argument) => argument.replaceAll("\\", "/") === "tests/e2e/human-review.spec.ts");
+  if (isolatedReviewE2E) {
+    const result = spawnCommand(process.execPath, [
+      resolve(PROJECT_ROOT, "scripts/run-review-isolated-integration.mjs"),
+      "--e2e",
+      ...forwardedArgs,
+    ], {
+      cwd: PROJECT_ROOT,
+      env,
+      stdio: "inherit",
+      windowsHide: true,
+    });
+    if (result.error) {
+      logError("Could not start the disposable review E2E runner.");
+      return 1;
+    }
+    return result.status ?? 1;
+  }
+
   const reviewFiles = forwardedArgs.flatMap((argument) => {
     const file = normalizeReviewIntegrationFile(argument);
     return file ? [file] : [];
@@ -48,6 +68,7 @@ export function runWithLocalSupabase({
     isTestFileFilter(argument) && normalizeReviewIntegrationFile(argument) === null);
   const runReviewSeparately = selected === "integration"
     && (!hasExplicitTestFileFilter || reviewFiles.length > 0);
+  const runReviewE2ESeparately = selected === "e2e" && forwardedArgs.length === 0;
   const regularArgs = reviewFiles.length
     ? forwardedArgs.filter((argument) => normalizeReviewIntegrationFile(argument) === null)
     : forwardedArgs;
@@ -128,9 +149,29 @@ export function runWithLocalSupabase({
     childEnv.SUPABASE_SERVICE_ROLE_KEY = runtime.serviceRoleKey;
   }
 
+  if (selected === "e2e") {
+    const [buildScript, ...buildArgs] = commands.build;
+    const buildEnv = { ...childEnv };
+    delete buildEnv.SUPABASE_SERVICE_ROLE_KEY;
+    const buildResult = spawnCommand(process.execPath, [buildScript, ...buildArgs], {
+      cwd: PROJECT_ROOT,
+      env: /** @type {NodeJS.ProcessEnv} */ (buildEnv),
+      stdio: "inherit",
+      windowsHide: true,
+    });
+    if (buildResult.error) {
+      logError("Could not start the local E2E production build.");
+      return 1;
+    }
+    const buildStatus = buildResult.status ?? 1;
+    if (buildStatus !== 0) return buildStatus;
+  }
+
   const commandArgs = [...args, ...regularArgs];
   if (selected === "integration") {
     commandArgs.push(...REVIEW_INTEGRATION_FILES.flatMap((file) => ["--exclude", file]));
+  } else if (runReviewE2ESeparately) {
+    commandArgs.push("--grep-invert", "S3-03 human review");
   }
 
   const result = spawnCommand(process.execPath, [script, ...commandArgs], {
@@ -145,11 +186,13 @@ export function runWithLocalSupabase({
     return 1;
   }
   const status = result.status ?? 1;
-  if (status !== 0 || !runReviewSeparately) return status;
+  if (!runReviewSeparately && !runReviewE2ESeparately) return status;
 
   const reviewResult = spawnCommand(process.execPath, [
     resolve(PROJECT_ROOT, "scripts/run-review-isolated-integration.mjs"),
-    ...(reviewFiles.length ? reviewFiles : REVIEW_INTEGRATION_FILES),
+    ...(runReviewE2ESeparately
+      ? ["--e2e", "tests/e2e/human-review.spec.ts"]
+      : reviewFiles.length ? reviewFiles : REVIEW_INTEGRATION_FILES),
   ], {
     cwd: PROJECT_ROOT,
     env: /** @type {NodeJS.ProcessEnv} */ (childEnv),
@@ -160,7 +203,8 @@ export function runWithLocalSupabase({
     logError("Could not start the disposable review integration runner.");
     return 1;
   }
-  return reviewResult.status ?? 1;
+  const reviewStatus = reviewResult.status ?? 1;
+  return status !== 0 ? status : reviewStatus;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

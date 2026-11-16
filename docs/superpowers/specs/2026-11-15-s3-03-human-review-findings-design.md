@@ -159,7 +159,7 @@ Se adopta una arquitectura modular que desacopla los componentes de mutación y 
   - Búsqueda en el árbol DOM y en atributos de texto buscando cadenas como `confidence` o scores numéricos de IA; la prueba falla si se encuentra cualquier coincidencia.
 
 ### 6.2. Pruebas de Integración y E2E (Playwright)
-- `tests/e2e/s3-03-human-review.spec.ts`:
+- `tests/e2e/human-review.spec.ts`:
   1. **Flujo Feliz QA Lead:** Iniciar sesión como QA Lead → Abrir hallazgo en `pending_review` → Confirmar → Cambiar severidad de High a Medium → Asignar Member → Verificar que la lista general se actualiza con severidad Medium y el nuevo asignatario.
   2. **Resolución de Falso Positivo:** Marcar `false_positive` → Resolver manualmente → Verificar estado terminal `resolved` sin acciones adicionales.
   3. **Control de Acceso:** Iniciar sesión como `Member` → Intentar acceder a `/analysis/[id]/findings` o invocar acciones → Verificar denegación de permisos en servidor.

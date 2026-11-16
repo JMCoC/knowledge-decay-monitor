@@ -1,18 +1,104 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { FindingDetail, ActionError } from "@/types/contracts";
 import { getDocumentOriginalUrlAction } from "@/modules/repository";
+import { getFindingReview } from "@/modules/review";
+import { listFindingsForDocumentAction } from "@/modules/analysis";
+import type { FindingReviewSnapshot } from "@/types/review-contracts";
+import { SeverityControl } from "@/modules/review/ui/severity-control";
+import { FindingReviewActions } from "@/modules/review/ui/finding-review-actions";
+import { AssigneeSelector } from "@/modules/review/ui/assignee-selector";
+import { RoundPreparationModal } from "@/modules/review/ui/round-preparation-modal";
+import type { ReviewRound } from "@/types/review-contracts";
 import { captureClientTransportFailure } from "@/lib/observability/client-failure";
 
 interface FindingEvidenceDrawerProps {
   finding: FindingDetail | null;
+  initialReview?: FindingReviewSnapshot | null;
+  initialReviewError?: string | null;
   onClose: () => void;
+  onReviewUpdated?: (updated: FindingReviewSnapshot) => void;
 }
 
-export function FindingEvidenceDrawer({ finding, onClose }: FindingEvidenceDrawerProps) {
+export function FindingEvidenceDrawer({ finding, initialReview = null, initialReviewError = null, onClose, onReviewUpdated }: FindingEvidenceDrawerProps) {
   const [openingVersionId, setOpeningVersionId] = useState<string | null>(null);
   const [openError, setOpenError] = useState<{ versionId: string; error: ActionError } | null>(null);
+  const [review, setReview] = useState<FindingReviewSnapshot | null>(initialReview);
+  const [reviewError, setReviewError] = useState<string | null>(initialReviewError);
+  const [roundDocumentId, setRoundDocumentId] = useState("");
+  const [isRoundModalOpen, setIsRoundModalOpen] = useState(false);
+  const [roundNotice, setRoundNotice] = useState<string | null>(null);
+  const [roundFindings, setRoundFindings] = useState<FindingReviewSnapshot[]>([]);
+  const [roundLoading, setRoundLoading] = useState(false);
+
+  const refreshReview = useCallback(async () => {
+    if (!finding) return;
+    try {
+      const result = await getFindingReview({ findingId: finding.id });
+      if (result.ok) setReview(result.data);
+      else setReviewError(result.error.message);
+    } catch {
+      setReviewError("The latest review state could not be loaded.");
+    }
+  }, [finding]);
+
+  function handleReviewError(error: { code: string; message: string }) {
+    if (error.code === "CONFLICT") {
+      setReviewError("This finding was modified by another reviewer. Current state has been refreshed.");
+      void refreshReview();
+      return;
+    }
+    setReviewError(error.message);
+  }
+
+  function handleReviewUpdated(updated: FindingReviewSnapshot) {
+    setReview(updated);
+    setReviewError(null);
+    onReviewUpdated?.(updated);
+  }
+
+  function handleRoundOpened(round: ReviewRound) {
+    setRoundDocumentId(round.documentId);
+    setRoundNotice("Correction round opened. Its finding set is now fixed.");
+  }
+
+  async function handlePrepareRound() {
+    if (!finding) return;
+    const target = finding.evidence.find((item) => item.documentId === roundDocumentId) ?? finding.evidence[0];
+    if (!target) return;
+    setRoundLoading(true);
+    setReviewError(null);
+    try {
+      const candidates = await listFindingsForDocumentAction({
+        analysisId: finding.analysisId,
+        documentId: target.documentId,
+      });
+      if (!candidates.ok) {
+        setReviewError(candidates.error.message);
+        return;
+      }
+      const snapshots: FindingReviewSnapshot[] = [];
+      for (const candidate of candidates.data) {
+        const snapshot = await getFindingReview({ findingId: candidate.id });
+        if (!snapshot.ok) {
+          setReviewError(snapshot.error.message);
+          return;
+        }
+        if (snapshot.data.canPrepareRound) snapshots.push(snapshot.data);
+      }
+      if (!snapshots.length) {
+        setReviewError("This document has no confirmed findings available for a correction round.");
+        return;
+      }
+      setRoundFindings(snapshots);
+      setIsRoundModalOpen(true);
+    } catch {
+      setReviewError("Findings for this document could not be loaded. Please try again.");
+    } finally {
+      setRoundLoading(false);
+    }
+  }
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -87,7 +173,7 @@ export function FindingEvidenceDrawer({ finding, onClose }: FindingEvidenceDrawe
               <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-200 text-slate-700 capitalize">
                 {finding.type}
               </span>
-              <span className="text-xs text-slate-500">Status: pending review</span>
+                <span className="text-xs text-slate-500">Status: {(review?.status ?? finding.status).replaceAll("_", " ")}</span>
             </div>
             <h2 id="evidence-drawer-title" className="text-lg font-semibold text-slate-900">
               Evidence & Document Comparison
@@ -108,6 +194,74 @@ export function FindingEvidenceDrawer({ finding, onClose }: FindingEvidenceDrawe
 
         {/* Content Body */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          <section aria-label="Human review" className="space-y-3 rounded-lg border border-slate-200 p-4">
+            <h3 className="text-sm font-semibold text-slate-900">Review decision</h3>
+            {reviewError && <p role="alert" className="text-sm text-amber-800">{reviewError}</p>}
+            {!review && !reviewError && <p role="status" className="text-sm text-slate-500">Review controls are not available.</p>}
+            {review && (
+              <>
+                <SeverityControl
+                  findingId={review.id}
+                  severityOriginal={review.severityOriginal}
+                  severityCurrent={review.severityCurrent}
+                  revision={review.revision}
+                  canChangeSeverity={review.canChangeSeverity}
+                  onUpdated={handleReviewUpdated}
+                  onError={handleReviewError}
+                />
+                <FindingReviewActions
+                  findingId={review.id}
+                  status={review.status}
+                  revision={review.revision}
+                  canChangeStatus={review.canChangeStatus}
+                  onUpdated={handleReviewUpdated}
+                  onError={handleReviewError}
+                />
+                <AssigneeSelector
+                  findingId={review.id}
+                  currentAssignee={review.assignee}
+                  revision={review.revision}
+                  canAssign={review.canAssign}
+                  affectedDocuments={finding.evidence.map(({ documentId, documentName }) => ({ documentId, name: documentName }))}
+                  onUpdated={handleReviewUpdated}
+                  onError={handleReviewError}
+                />
+                {review.canPrepareRound && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    {finding.evidence.length > 1 && (
+                      <label className="text-xs text-slate-700">
+                        Document to correct
+                        <select
+                          aria-label="Document to correct"
+                          value={roundDocumentId}
+                          onChange={(event) => setRoundDocumentId(event.target.value)}
+                          className="ml-2 rounded border border-slate-300 px-2 py-1"
+                        >
+                          <option value="">Choose a document</option>
+                          {finding.evidence.map((item) => (
+                            <option key={item.documentId} value={item.documentId}>{item.documentName}</option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+                    <button
+                      type="button"
+                      disabled={roundLoading || (finding.evidence.length > 1 && !roundDocumentId)}
+                      onClick={() => {
+                        setRoundNotice(null);
+                        void handlePrepareRound();
+                      }}
+                      className="rounded border border-cyan-700 px-3 py-1.5 text-xs font-medium text-cyan-800 disabled:opacity-50"
+                    >
+                      {roundLoading ? "Loading findings…" : "Prepare Correction Round"}
+                    </button>
+                  </div>
+                )}
+                {roundNotice && <p role="status" className="text-sm text-emerald-800">{roundNotice}</p>}
+              </>
+            )}
+          </section>
+
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-500">
               Corroborating Evidence ({finding.evidence.length})
@@ -186,6 +340,21 @@ export function FindingEvidenceDrawer({ finding, onClose }: FindingEvidenceDrawe
           </button>
         </div>
       </div>
+      {review && isRoundModalOpen && (() => {
+        const selectedEvidence = finding.evidence.find((item) => item.documentId === roundDocumentId) ?? finding.evidence[0];
+        if (!selectedEvidence) return null;
+        return (
+          <RoundPreparationModal
+            isOpen
+            documentId={selectedEvidence.documentId}
+            documentName={selectedEvidence.documentName}
+            findings={roundFindings}
+            onClose={() => setIsRoundModalOpen(false)}
+            onRoundOpened={handleRoundOpened}
+            onFindingUpdated={handleReviewUpdated}
+          />
+        );
+      })()}
     </div>
   );
 }

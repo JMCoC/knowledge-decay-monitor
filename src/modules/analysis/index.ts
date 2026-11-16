@@ -1,5 +1,3 @@
-import "server-only";
-
 export { estimateAnalysis } from "./actions";
 export {
   listEligibleDocumentsAction,
@@ -10,5 +8,6 @@ export {
   getActiveAnalysisAction,
   listFindingsAction,
   getFindingDetailAction,
+  listFindingsForDocumentAction,
 } from "./application/analysis.actions";
 export { runAnalysis, retryAnalysis } from "./application/run-actions";

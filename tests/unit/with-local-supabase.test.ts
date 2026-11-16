@@ -139,13 +139,19 @@ describe("local Supabase test runner isolation", () => {
     expect(reviewArgs.slice(1)).toEqual(requested);
   });
 
-  it("does not launch the isolated review runner when the shared integration suite fails", () => {
+  it("still runs isolated review suites after the shared integration suite fails", () => {
     mocks.spawnSync.mockReturnValueOnce({ status: 1, error: undefined });
 
     expect(
       runWithLocalSupabase({ selected: "integration", forwardedArgs: [], env: hostileParentEnv() }),
     ).toBe(1);
-    expect(mocks.spawnSync).toHaveBeenCalledTimes(1);
+    expect(mocks.spawnSync).toHaveBeenCalledTimes(2);
+    const [, reviewArgs] = mocks.spawnSync.mock.calls[1] as [string, string[]];
+    expect(reviewArgs.slice(1)).toEqual([
+      "tests/integration/review-foundation-isolation.test.ts",
+      "tests/integration/review-commands-isolation.test.ts",
+      "tests/integration/review-command-concurrency.test.ts",
+    ]);
   });
 
   it("never passes the service key to a build child", () => {
@@ -166,6 +172,31 @@ describe("local Supabase test runner isolation", () => {
 
     const [, , options] = mocks.spawnSync.mock.calls[0] as [string, string[], { env: Record<string, string> }];
     expect(options.env.INGESTION_INTERNAL_TOKEN).toBeUndefined();
+  });
+
+  it("runs the complete E2E suite and then S3-03 on a disposable project", () => {
+    expect(runWithLocalSupabase({ selected: "e2e", forwardedArgs: [], env: hostileParentEnv() })).toBe(0);
+
+    expect(mocks.spawnSync).toHaveBeenCalledTimes(3);
+    const [buildCommand, buildArgs, buildOptions] = mocks.spawnSync.mock.calls[0] as [
+      string, string[], { env: Record<string, string | undefined> },
+    ];
+    expect(buildCommand).toBe(process.execPath);
+    expect(buildArgs[1]).toBe("build");
+    expect(buildOptions.env.NEXT_PUBLIC_SUPABASE_URL).toBe("http://127.0.0.1:54321");
+    expect(buildOptions.env.SUPABASE_SERVICE_ROLE_KEY).toBeUndefined();
+
+    const [, e2eArgs] = mocks.spawnSync.mock.calls[1] as [string, string[]];
+    expect(e2eArgs.slice(-2)).toEqual(["--grep-invert", "S3-03 human review"]);
+
+    const [, isolatedArgs] = mocks.spawnSync.mock.calls[2] as [string, string[]];
+    expect(isolatedArgs.slice(1)).toEqual(["--e2e", "tests/e2e/human-review.spec.ts"]);
+  });
+
+  it("does not start Playwright when the local E2E production build fails", () => {
+    mocks.spawnSync.mockReturnValueOnce({ status: 1, error: undefined });
+    expect(runWithLocalSupabase({ selected: "e2e", forwardedArgs: [], env: hostileParentEnv() })).toBe(1);
+    expect(mocks.spawnSync).toHaveBeenCalledTimes(1);
   });
 
   it("gives the standalone worker an explicit local API URL and server key", () => {

@@ -421,6 +421,15 @@ insert into public.notification_events(id, workspace_id, analysis_id, type, reci
 select '30000000-0000-4000-8000-000000000010', workspace_id, analysis_id,
        'analysis_completed', admin_id
 from pg_temp.audit_outbox_fixtures order by workspace_id limit 1;
+-- Keep this fixture ahead of any pending events left in the disposable local
+-- database so the bounded five-row dispatcher page remains deterministic.
+update public.notification_events
+set created_at = coalesce((
+  select min(existing.created_at)
+  from public.notification_events existing
+  where existing.id <> '30000000-0000-4000-8000-000000000010'
+), now()) - interval '1 second'
+where id = '30000000-0000-4000-8000-000000000010';
 select ok(exists(select 1 from public.list_notification_candidates(5)
   where event_id = '30000000-0000-4000-8000-000000000010'),
   'The terminal S2 candidate remains visible to its dispatcher');

@@ -55,6 +55,25 @@ describe("review failure mapping", () => {
     });
   });
 
+  it("never forwards confidence from an unexpected review failure to telemetry", () => {
+    const result = toReviewFailure({
+      code: "23505",
+      message: "PRIVATE_REVIEW_FAILURE",
+      confidence: 0.97,
+      finding: { confidence: 0.97 },
+    }, "change");
+
+    expect(JSON.stringify(result).toLowerCase()).not.toContain("confidence");
+    const telemetryPayload = vi.mocked(captureOperationFailure).mock.calls[0]?.[0];
+    expect(telemetryPayload).toMatchObject({
+      module: "review",
+      operation: "change",
+      code: "INTERNAL_ERROR",
+    });
+    expect(JSON.stringify(telemetryPayload).toLowerCase()).not.toContain("confidence");
+    expect(JSON.stringify(telemetryPayload)).not.toContain("0.97");
+  });
+
   it("keeps the controlled failure if telemetry itself throws", () => {
     vi.mocked(captureOperationFailure).mockImplementation(() => {
       throw new Error("PRIVATE_TELEMETRY_FAILURE");

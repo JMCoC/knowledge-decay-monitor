@@ -2,11 +2,13 @@ import { defineConfig, devices, type Project } from "@playwright/test";
 import { resolve } from "node:path";
 
 const PROJECT_ROOT = process.cwd();
-const LOCAL_API_URL = "http://127.0.0.1:54321";
+const LOCAL_API_URL = process.env.KDM_LOCAL_SUPABASE_URL || "http://127.0.0.1:54321";
 const LOCAL_APP_ORIGIN = "http://127.0.0.1:3000";
 
 const node = process.execPath;
 const nextCli = resolve(PROJECT_ROOT, "node_modules/next/dist/bin/next");
+const appOrigin = process.env.PLAYWRIGHT_TEST_BASE_URL || LOCAL_APP_ORIGIN;
+const appPort = new URL(appOrigin).port || "80";
 const projects: Project[] = [
   {
     name: "chromium",
@@ -36,7 +38,7 @@ export default defineConfig({
   },
 
   use: {
-    baseURL: process.env.PLAYWRIGHT_TEST_BASE_URL || LOCAL_APP_ORIGIN,
+    baseURL: appOrigin,
     trace: "off",
     video: "off",
     screenshot: "off",
@@ -45,17 +47,24 @@ export default defineConfig({
   projects,
 
   webServer: {
-    command: `"${node}" "${nextCli}" start --hostname 127.0.0.1 --port 3000`,
+    command: `"${node}" "${nextCli}" start --hostname 127.0.0.1 --port ${appPort}`,
     cwd: PROJECT_ROOT,
-    url: `${LOCAL_APP_ORIGIN}/login`,
-    reuseExistingServer: !process.env.CI,
+    url: `${appOrigin}/login`,
+    // Local suites must boot Next with the same disposable/local Supabase
+    // credentials as the test process. Never reuse a developer's stale server.
+    reuseExistingServer: process.env.KDM_LOCAL_SUPABASE_URL ? false : !process.env.CI,
     timeout: 120_000,
     stdout: "ignore",
     stderr: "ignore",
 
     env: {
       NEXT_PUBLIC_SUPABASE_URL: LOCAL_API_URL,
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || "",
+      SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY || "",
       KDM_LOCAL_SUPABASE_URL: LOCAL_API_URL,
+      KDM_LOCAL_SUPABASE_PROJECT_ID: process.env.KDM_LOCAL_SUPABASE_PROJECT_ID || "knowledge-decay-monitor-s1-02",
+      KDM_LOCAL_SUPABASE_WORKDIR: process.env.KDM_LOCAL_SUPABASE_WORKDIR || PROJECT_ROOT,
+      KDM_LOCAL_SUPABASE_DISPOSABLE: process.env.KDM_LOCAL_SUPABASE_DISPOSABLE || "",
       KDM_DISABLE_SENTRY: "1",
       NEXT_PUBLIC_KDM_DISABLE_SENTRY: "1",
       KDM_SENTRY_DIAGNOSTICS_ENABLED: "0",

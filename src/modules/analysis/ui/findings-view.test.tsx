@@ -5,6 +5,7 @@ vi.mock("server-only", () => ({}));
 vi.mock("@/modules/repository", () => ({
   getDocumentOriginalUrlAction: vi.fn(),
 }));
+vi.mock("@/modules/review", () => ({ listAssignees: vi.fn() }));
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
@@ -37,5 +38,18 @@ describe("FindingsView", () => {
     );
     expect(html).toContain("No findings match your selected filters");
     expect(html).toContain("Clear filters");
+  });
+
+  it("ofrece todos los estados de revisión como filtro", () => {
+    const html = renderToStaticMarkup(
+      <FindingsView
+        analysisId="a-1"
+        initialPage={{ items: [], total: 0, page: 1, pageSize: 10 }}
+        totalAnalysisFindings={3}
+      />,
+    );
+    for (const status of ["pending_review", "confirmed", "false_positive", "update_planned", "resolved"]) {
+      expect(html).toContain(`value="${status}"`);
+    }
   });
 });

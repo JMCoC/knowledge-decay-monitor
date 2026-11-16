@@ -1,8 +1,10 @@
 import { redirect, notFound } from "next/navigation";
 import Link from "next/link";
-import { requireDocumentActor } from "@/modules/identity";
+import { IdentityError, requireDocumentActor } from "@/modules/identity";
 import { listFindingsAction, getFindingDetailAction, getAnalysisAction } from "@/modules/analysis";
 import { FindingsView } from "@/modules/analysis/ui/findings-view";
+import { getFindingReview } from "@/modules/review";
+import type { FindingReviewSnapshot } from "@/types/review-contracts";
 import type { FindingSeverity, FindingStatus, FindingType } from "@/types/contracts";
 
 interface FindingsPageProps {
@@ -18,7 +20,12 @@ interface FindingsPageProps {
 }
 
 export default async function FindingsPage({ params, searchParams }: FindingsPageProps) {
-  await requireDocumentActor();
+  try {
+    await requireDocumentActor();
+  } catch (error) {
+    if (error instanceof IdentityError && error.code === "FORBIDDEN") notFound();
+    throw error;
+  }
 
   const { analysisId } = await params;
   const { type, severity, status, assignee, page, findingId } = await searchParams;
@@ -43,13 +50,17 @@ export default async function FindingsPage({ params, searchParams }: FindingsPag
     type: type ? (type as FindingType) : undefined,
     severity: severity ? (severity as FindingSeverity) : undefined,
     status: status ? (status as FindingStatus) : undefined,
-    assignee: assignee ? (assignee as "all" | "unassigned") : undefined,
+    assignee: assignee || undefined,
     page: currentPage,
     pageSize: 10,
   });
 
   if (!findingsResult.ok) {
-    notFound();
+    return (
+      <div role="alert" className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
+        {findingsResult.error.message}
+      </div>
+    );
   }
 
   // Count total findings for this analysis (without filters) to distinguish empty states
@@ -63,10 +74,15 @@ export default async function FindingsPage({ params, searchParams }: FindingsPag
 
   // If a findingId is selected in searchParams, fetch its detail & corroborating evidence
   let activeFindingDetail = null;
+  let activeFindingReview: FindingReviewSnapshot | null = null;
+  let activeFindingReviewError: string | null = null;
   if (findingId) {
     const detailResult = await getFindingDetailAction(findingId);
     if (detailResult.ok && detailResult.data.analysisId === analysisId) {
       activeFindingDetail = detailResult.data;
+      const reviewResult = await getFindingReview({ findingId });
+      if (reviewResult.ok) activeFindingReview = reviewResult.data;
+      else activeFindingReviewError = reviewResult.error.message;
     }
   }
 
@@ -108,6 +124,8 @@ export default async function FindingsPage({ params, searchParams }: FindingsPag
         initialPage={findingsResult.data}
         totalAnalysisFindings={totalAnalysisFindings}
         activeFindingDetail={activeFindingDetail}
+        activeFindingReview={activeFindingReview}
+        activeFindingReviewError={activeFindingReviewError}
       />
     </div>
   );

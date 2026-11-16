@@ -265,3 +265,61 @@ export async function getFindingDetailAction(
     return reportInternalFailure("findings_read", "An unexpected error occurred loading finding detail.");
   }
 }
+
+const documentRoundFindingsSchema = z.strictObject({
+  analysisId: z.string().uuid(),
+  documentId: z.string().uuid(),
+});
+
+/** Returns the confirmed/planned findings linked to a document for an explicit round draft. */
+export async function listFindingsForDocumentAction(input: {
+  analysisId: string;
+  documentId: string;
+}): Promise<ActionResult<FindingDetail[]>> {
+  const parsed = documentRoundFindingsSchema.safeParse(input);
+  if (!parsed.success) {
+    return { ok: false, error: { code: "INVALID_INPUT", message: "The analysis or document is invalid." } };
+  }
+
+  try {
+    const actor = await requireDocumentActor();
+    const supabase = await createReadOnlyClient();
+    const { data: analysis, error: analysisError } = await supabase
+      .from("analyses")
+      .select("id,status")
+      .eq("id", parsed.data.analysisId)
+      .eq("workspace_id", actor.workspaceId)
+      .maybeSingle();
+    if (analysisError || !analysis || analysis.status !== "completed") {
+      return { ok: false, error: { code: "NOT_FOUND", message: "This analysis is unavailable." } };
+    }
+
+    const { data: evidence, error: evidenceError } = await supabase
+      .from("analysis_finding_evidence")
+      .select("finding_id")
+      .eq("analysis_id", parsed.data.analysisId)
+      .eq("document_id", parsed.data.documentId)
+      .limit(101);
+    if (evidenceError) return reportInternalFailure("findings_read", "We couldn't load findings for this document.");
+    const findingIds = [...new Set((evidence ?? []).flatMap((row) => row.finding_id ? [row.finding_id] : []))];
+    if (findingIds.length > 100) {
+      return { ok: false, error: { code: "INVALID_INPUT", message: "This document has more than 100 review findings. Prepare separate correction rounds." } };
+    }
+
+    const details = await Promise.all(findingIds.map((findingId) =>
+      getFindingDetailService(supabase, actor.workspaceId, findingId),
+    ));
+    return {
+      ok: true,
+      data: details.flatMap((detail) => detail &&
+        (detail.status === "confirmed" || detail.status === "update_planned") &&
+        detail.evidence.some((item) => item.documentId === parsed.data.documentId)
+        ? [detail]
+        : []),
+    };
+  } catch (error) {
+    const mapped = mapIdentityError(error, "findings_read");
+    if (mapped) return mapped;
+    return reportInternalFailure("findings_read", "We couldn't load findings for this document.");
+  }
+}

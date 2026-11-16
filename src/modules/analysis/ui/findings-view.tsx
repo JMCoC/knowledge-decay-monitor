@@ -1,15 +1,20 @@
 "use client";
 
-import { useTransition } from "react";
+import { useEffect, useState, useTransition } from "react";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import type { FindingSummary, FindingDetail, AnalysisPage } from "@/types/contracts";
 import { FindingEvidenceDrawer } from "./finding-evidence-drawer";
+import type { FindingReviewSnapshot } from "@/types/review-contracts";
+import type { EligibleOwner } from "@/types/contracts";
+import { listAssignees } from "@/modules/review";
 
 interface FindingsViewProps {
   analysisId: string;
   initialPage: AnalysisPage<FindingSummary>;
   totalAnalysisFindings: number;
   activeFindingDetail?: FindingDetail | null;
+  activeFindingReview?: FindingReviewSnapshot | null;
+  activeFindingReviewError?: string | null;
 }
 
 export function FindingsView({
@@ -18,11 +23,41 @@ export function FindingsView({
   initialPage,
   totalAnalysisFindings,
   activeFindingDetail = null,
+  activeFindingReview = null,
+  activeFindingReviewError = null,
 }: FindingsViewProps) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [isPending, startTransition] = useTransition();
+  const [eligibleAssignees, setEligibleAssignees] = useState<EligibleOwner[]>([]);
+  const [assigneeLoadError, setAssigneeLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    async function loadAssignees() {
+      try {
+        const all: EligibleOwner[] = [];
+        let page = 1;
+        let total = 0;
+        do {
+          const result = await listAssignees({ page, pageSize: 100 });
+          if (!result.ok) {
+            if (active) setAssigneeLoadError(result.error.message);
+            return;
+          }
+          all.push(...result.data.items);
+          total = result.data.total;
+          page += 1;
+        } while (all.length < total);
+        if (active) setEligibleAssignees(all);
+      } catch {
+        if (active) setAssigneeLoadError("Eligible Members could not be loaded.");
+      }
+    }
+    void loadAssignees();
+    return () => { active = false; };
+  }, []);
 
   const currentType = searchParams?.get("type") || "";
   const currentSeverity = searchParams?.get("severity") || "";
@@ -113,6 +148,10 @@ export function FindingsView({
               >
                 <option value="">All Statuses</option>
                 <option value="pending_review">Pending Review</option>
+                <option value="confirmed">Confirmed</option>
+                <option value="false_positive">False Positive</option>
+                <option value="update_planned">Update Planned</option>
+                <option value="resolved">Resolved</option>
               </select>
             </div>
 
@@ -126,8 +165,13 @@ export function FindingsView({
               >
                 <option value="all">All Assignees</option>
                 <option value="unassigned">Unassigned</option>
+                {eligibleAssignees.map((member) => (
+                  <option key={member.id} value={member.id}>{member.fullName}</option>
+                ))}
               </select>
             </div>
+
+            {assigneeLoadError && <p role="status" className="text-xs text-amber-800">{assigneeLoadError}</p>}
 
             {hasActiveFilters && (
               <button
@@ -223,6 +267,9 @@ export function FindingsView({
                       <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border ${severityBadgeClass}`}>
                         {finding.severityCurrent}
                       </span>
+                      {finding.severityCurrent !== finding.severityOriginal && (
+                        <span className="ml-1 text-[11px] text-slate-500">AI: {finding.severityOriginal}</span>
+                      )}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-slate-100 text-slate-700 capitalize">
@@ -237,8 +284,8 @@ export function FindingsView({
                     <td className="px-6 py-4 whitespace-nowrap text-xs text-slate-500">
                       {finding.status.replaceAll("_", " ")}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-xs text-slate-400 italic">
-                      Unassigned
+                    <td className="px-6 py-4 whitespace-nowrap text-xs text-slate-600">
+                      {finding.assignee?.fullName ?? <span className="italic text-slate-400">Unassigned</span>}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right text-xs font-medium">
                       <button
@@ -285,8 +332,12 @@ export function FindingsView({
       {/* Drawer */}
       {activeFindingDetail && (
         <FindingEvidenceDrawer
+          key={activeFindingDetail.id}
           finding={activeFindingDetail}
+          initialReview={activeFindingReview}
+          initialReviewError={activeFindingReviewError}
           onClose={handleCloseEvidence}
+          onReviewUpdated={() => router.refresh()}
         />
       )}
     </div>

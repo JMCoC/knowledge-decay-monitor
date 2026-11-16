@@ -9,6 +9,7 @@ import {
   newLocalUser,
   ownWorkspaceId,
 } from "./local-supabase";
+import { localSupabaseTarget } from "./local-supabase-target";
 import { LocalSqlError, openLocalSqlSession, type LocalSqlSession } from "./local-sql-session";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -194,6 +195,18 @@ async function createAnalysisFixtureInternal(
 
   const dispose = async () => {
     if (disposed) return;
+
+    // Review audit history is intentionally append-only. The isolated review
+    // runner removes its entire verified stack after E2E, so do not try to
+    // delete immutable audit rows or their actor Profiles inside that stack.
+    if (localSupabaseTarget().disposableReview) {
+      if (sql) {
+        await sql.close();
+        sql = undefined;
+      }
+      disposed = true;
+      return;
+    }
 
     if (workspaceId && admin && workspaceName && !persistedRowsCleaned) {
       const session = sql ?? await openLocalSqlSession(localSqlName("kdm_analysis_cleanup"));
