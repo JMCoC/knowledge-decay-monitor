@@ -414,7 +414,11 @@ begin
   ) values (
     c.version_id, c.workspace_id, 'running', 1, v_operation_id,
     v_started_at, v_started_at + interval '180 seconds'
-  );
+  )
+  on conflict (version_id) do update
+  set status = 'running', attempt_count = 1,
+      operation_id = excluded.operation_id, started_at = excluded.started_at,
+      lease_expires_at = excluded.lease_expires_at, updated_at = clock_timestamp();
   update public.document_versions set processing_status = 'processing',
     processing_queued = false, processing_operation_id = v_operation_id,
     processing_started_at = v_started_at,
@@ -453,7 +457,11 @@ begin
   ) values (
     c.version_id, c.workspace_id, 'running', 1, v_operation_id,
     v_started_at, v_started_at + interval '180 seconds'
-  );
+  )
+  on conflict (version_id) do update
+  set status = 'running', attempt_count = 1,
+      operation_id = excluded.operation_id, started_at = excluded.started_at,
+      lease_expires_at = excluded.lease_expires_at, updated_at = clock_timestamp();
   update public.document_versions set processing_status = 'processing',
     processing_queued = false, processing_operation_id = v_operation_id,
     processing_started_at = v_started_at,
@@ -480,7 +488,11 @@ begin
     ) values (
       c.version_id, c.workspace_id, 'running', 1, v_operation_id,
       v_started_at, v_started_at + interval '180 seconds'
-    );
+    )
+    on conflict (version_id) do update
+    set status = 'running', attempt_count = 1,
+        operation_id = excluded.operation_id, started_at = excluded.started_at,
+        lease_expires_at = excluded.lease_expires_at, updated_at = clock_timestamp();
     update public.document_versions set processing_status = 'processing',
       processing_queued = false, processing_operation_id = v_operation_id,
       processing_started_at = v_started_at,

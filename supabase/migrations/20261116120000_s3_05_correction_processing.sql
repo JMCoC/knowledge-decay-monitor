@@ -393,3 +393,7 @@ revoke all on function public.enqueue_ingestion_job(uuid,uuid,boolean),public.cl
   from public,anon,authenticated,service_role;
 grant execute on function public.enqueue_ingestion_job(uuid,uuid,boolean),public.claim_ingestion_job(),
   public.fail_ingestion_job(uuid,uuid,boolean),public.finish_processing(uuid,uuid,jsonb) to service_role;
+
+-- T1 correction: restore lock budget lost in CREATE OR REPLACE (originally set by 20261009134833)
+alter function public.enqueue_ingestion_job(uuid, uuid, boolean) set lock_timeout='3s';
+alter function public.enqueue_ingestion_job(uuid, uuid, boolean) set statement_timeout='5s';
