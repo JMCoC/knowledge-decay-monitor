@@ -4,11 +4,13 @@ import { z, type ZodTypeAny } from "zod";
 import type {
   CorrectionRoundSnapshot,
   FindingReviewSnapshot,
+  MemberAssignment,
+  OwnApprovalItem,
   ReviewPage,
   ReviewRound,
   RoundDraftSnapshot,
 } from "@/types/review-contracts";
-import type { EligibleOwner } from "@/types/contracts";
+import type { EligibleOwner, FindingEvidenceItem } from "@/types/contracts";
 
 const uuid = z.string().uuid();
 const timestamp = z.string().min(1);
@@ -105,6 +107,50 @@ const reviewRoundSchema = roundSnapshotSchema.extend({
   candidate: candidateSchema.nullable(),
 });
 
+const evidenceSchema: z.ZodType<FindingEvidenceItem> = z.object({
+  id: uuid,
+  documentId: uuid,
+  documentName: z.string().min(1),
+  versionId: uuid,
+  versionNumber: z.number().int().positive(),
+  chunkId: uuid,
+  pageNumber: z.number().int().positive().nullable(),
+  section: z.string().nullable(),
+  sectionHeading: z.string().nullable(),
+  snapshot: z.string().min(1),
+});
+
+const memberAssignmentSchema: z.ZodType<MemberAssignment> = z.object({
+  finding: findingReviewSchema,
+  evidence: z.array(evidenceSchema),
+  documents: z.array(z.object({
+    documentId: uuid,
+    name: z.string().min(1),
+    activeVersionId: uuid.nullable(),
+    activeVersionNumber: z.number().int().positive().nullable(),
+    canSubmit: z.boolean(),
+  })),
+  rounds: z.array(z.object({
+    roundId: uuid,
+    documentId: uuid,
+    phase: z.enum(["waiting", "consolidating", "processing", "processing_failed", "review", "approved"]),
+    ownCoverage: z.object({
+      complete: z.boolean(),
+      coveredItemCount: z.number().int().nonnegative(),
+      requiredItemCount: z.number().int().nonnegative(),
+    }),
+  })),
+  ownSubmissions: z.array(submissionSchema),
+  returns: z.array(z.object({ itemId: uuid, reason: z.string(), createdAt: timestamp })),
+});
+
+const ownApprovalSchema: z.ZodType<OwnApprovalItem> = z.object({
+  approvalId: uuid,
+  documentId: uuid,
+  approvedAt: timestamp,
+  ownItemCount: z.number().int().positive(),
+});
+
 const assigneesPageSchema = z.object({
   items: z.array(ownerSchema),
   total: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
@@ -146,4 +192,26 @@ export function parseReviewRound(value: unknown): ReviewRound {
 
 export function parseAssigneesPage(value: unknown): ReviewPage<EligibleOwner> {
   return parseProjection(assigneesPageSchema, value);
+}
+
+export function parseMemberAssignmentsPage(value: unknown): ReviewPage<MemberAssignment> {
+  return parseProjection(z.object({
+    items: z.array(memberAssignmentSchema),
+    total: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    page: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    pageSize: z.number().int().positive().max(100),
+  }), value);
+}
+
+export function parseMemberAssignment(value: unknown): MemberAssignment {
+  return parseProjection(memberAssignmentSchema, value);
+}
+
+export function parseOwnApprovalsPage(value: unknown): ReviewPage<OwnApprovalItem> {
+  return parseProjection(z.object({
+    items: z.array(ownApprovalSchema),
+    total: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    page: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    pageSize: z.number().int().positive().max(100),
+  }), value);
 }

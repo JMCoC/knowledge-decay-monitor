@@ -6,11 +6,12 @@ import {
 } from "../../scripts/review-integration-policy.mjs";
 
 describe("disposable review integration allowlist", () => {
-  it("contains only the three reviewed S3-01/S3-02 integration suites", () => {
+  it("contains only the reviewed S3 review integration suites", () => {
     expect(REVIEW_INTEGRATION_FILES).toEqual([
       "tests/integration/review-foundation-isolation.test.ts",
       "tests/integration/review-commands-isolation.test.ts",
       "tests/integration/review-command-concurrency.test.ts",
+      "tests/integration/review-assignment-reads-isolation.test.ts",
     ]);
   });
 

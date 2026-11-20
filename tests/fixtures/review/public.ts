@@ -232,23 +232,25 @@ export const returnedMemberAssignmentFixture: MemberAssignment = {
     sectionHeading: "Review period",
     snapshot: "The review period is stated as twelve months.",
   }],
-  document: {
+  documents: [{
     documentId: "00000000-0000-4000-8000-000000000801",
     name: "Retention policy",
     activeVersionId: "00000000-0000-4000-8000-000000000901",
     activeVersionNumber: 1,
-  },
-  round: {
+    canSubmit: true,
+  }],
+  rounds: [{
     roundId: "00000000-0000-4000-8000-000000000701",
+    documentId: "00000000-0000-4000-8000-000000000801",
     phase: "waiting",
-  },
+    ownCoverage: { complete: false, coveredItemCount: 0, requiredItemCount: 1 },
+  }],
   ownSubmissions: [groupedSubmission],
   returns: [{
     itemId: itemTwo.itemId,
     reason: "Please update the approval owner to match the current process.",
     createdAt: "2026-11-10T11:00:00.000Z",
   }],
-  canSubmit: true,
 };
 
 /** Minimal own contribution history remains available after assignment access ends. */

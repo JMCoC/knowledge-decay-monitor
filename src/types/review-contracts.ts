@@ -49,6 +49,7 @@ export type MemberAssignmentPhase =
   | "waiting"
   | "consolidating"
   | "processing"
+  | "processing_failed"
   | "review"
   | "approved";
 
@@ -288,22 +289,37 @@ export interface CorrectionReturnForMember {
   createdAt: string;
 }
 
+/** A document related through this finding's evidence, never through workspace membership alone. */
+export interface MemberAssignmentDocument {
+  documentId: string;
+  name: string;
+  activeVersionId: string | null;
+  activeVersionNumber: number | null;
+  /** Whether this finding can currently be submitted for this document. */
+  canSubmit: boolean;
+}
+
+/** Operational round data is scoped to this finding and related document. */
+export interface MemberAssignmentRound {
+  roundId: string;
+  documentId: string;
+  phase: MemberAssignmentPhase;
+  /** Coverage counts include only this Member's current items in this round. */
+  ownCoverage: {
+    complete: boolean;
+    coveredItemCount: number;
+    requiredItemCount: number;
+  };
+}
+
 export interface MemberAssignment {
   finding: FindingReviewSnapshot;
   evidence: FindingEvidenceItem[];
-  document: {
-    documentId: string;
-    name: string;
-    activeVersionId: string;
-    activeVersionNumber: number;
-  };
-  round: {
-    roundId: string;
-    phase: MemberAssignmentPhase;
-  };
+  /** One finding may cite multiple documents and participate in document-scoped rounds. */
+  documents: MemberAssignmentDocument[];
+  rounds: MemberAssignmentRound[];
   ownSubmissions: CorrectionSubmissionSnapshot[];
   returns: CorrectionReturnForMember[];
-  canSubmit: boolean;
 }
 
 export interface OwnApprovalItem {
@@ -333,7 +349,8 @@ export interface ConsolidatedFileReservation {
 }
 
 export interface ListAssignmentsInput extends ReviewPageQuery {
-  status?: ReviewFindingStatus;
+  /** Closed/false-positive work is excluded from operational assignments. */
+  status?: Exclude<ReviewFindingStatus, "false_positive" | "resolved">;
 }
 
 export interface ListCorrectionRoundsInput extends ReviewPageQuery {

@@ -2215,6 +2215,10 @@ export type Database = {
         Args: { p_event_id: string; p_operation_id: string }
         Returns: Json
       }
+      get_review_workflow_document_path: {
+        Args: { p_user_id: string; p_version_id: string }
+        Returns: string
+      }
       get_upload_resume_target: {
         Args: { p_user_id: string; p_version_id: string }
         Returns: {
@@ -2457,6 +2461,10 @@ export type Database = {
         }
         Returns: Json
       }
+      review_get_assignment: {
+        Args: { p_actor_id: string; p_finding_id: string }
+        Returns: Json
+      }
       review_get_finding: {
         Args: { p_actor_id: string; p_finding_id: string }
         Returns: Json
@@ -2466,6 +2474,19 @@ export type Database = {
         Returns: Json
       }
       review_list_assignees: {
+        Args: { p_actor_id: string; p_page?: number; p_page_size?: number }
+        Returns: Json
+      }
+      review_list_assignments: {
+        Args: {
+          p_actor_id: string
+          p_page?: number
+          p_page_size?: number
+          p_status?: Database["public"]["Enums"]["finding_status"]
+        }
+        Returns: Json
+      }
+      review_list_own_approvals: {
         Args: { p_actor_id: string; p_page?: number; p_page_size?: number }
         Returns: Json
       }

@@ -85,6 +85,11 @@ void corrections.reserveCorrection({ ...draft, workspaceId: "foreign" });
 
 // @ts-expect-error another contributor's files are private
 void memberView.otherSubmissions;
+void memberView.documents[0]?.canSubmit;
+void memberView.rounds[0]?.documentId;
+
+// @ts-expect-error multidocument findings need a document choice, not one assumed document
+void memberView.document;
 
 // @ts-expect-error a return DTO omits the prior submission/file reference
 void memberView.returns[0].previousSubmissionId;

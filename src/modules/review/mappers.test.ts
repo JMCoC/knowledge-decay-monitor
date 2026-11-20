@@ -6,6 +6,9 @@ import {
   parseAssigneesPage,
   parseCorrectionRoundSnapshot,
   parseFindingReviewSnapshot,
+  parseMemberAssignment,
+  parseMemberAssignmentsPage,
+  parseOwnApprovalsPage,
   parseReviewRound,
   parseRoundDraftSnapshot,
 } from "./mappers";
@@ -15,6 +18,49 @@ const roundId = "20000000-0000-4000-8000-000000000001";
 const documentId = "30000000-0000-4000-8000-000000000001";
 const versionId = "40000000-0000-4000-8000-000000000001";
 const ownerId = "50000000-0000-4000-8000-000000000001";
+const assignmentSnapshot = {
+  finding: {
+    id: findingId,
+    analysisId: "60000000-0000-4000-8000-000000000001",
+    type: "contradiction",
+    explanation: "The synthetic clauses disagree.",
+    severityOriginal: "High",
+    severityCurrent: "Medium",
+    status: "confirmed",
+    assignee: { id: ownerId, fullName: "Synthetic Member" },
+    createdAt: "2026-11-18T00:00:00Z",
+    revision: 2,
+    canChangeStatus: false,
+    canChangeSeverity: false,
+    canAssign: false,
+    canPrepareRound: false,
+  },
+  evidence: [],
+  documents: [
+    {
+      documentId,
+      name: "Primary policy",
+      activeVersionId: versionId,
+      activeVersionNumber: 2,
+      canSubmit: true,
+    },
+    {
+      documentId: "30000000-0000-4000-8000-000000000002",
+      name: "Secondary policy",
+      activeVersionId: null,
+      activeVersionNumber: null,
+      canSubmit: false,
+    },
+  ],
+  rounds: [{
+    roundId,
+    documentId,
+    phase: "processing_failed",
+    ownCoverage: { complete: false, coveredItemCount: 1, requiredItemCount: 2 },
+  }],
+  ownSubmissions: [],
+  returns: [],
+};
 
 const roundSnapshot = {
   roundId,
@@ -72,6 +118,60 @@ describe("review projection mappers", () => {
       page: 2,
       pageSize: 25,
     });
+  });
+
+  it("maps multidocument Member assignments with only own coverage and strips private fields", () => {
+    const result = parseMemberAssignment({
+      ...assignmentSnapshot,
+      confidence: 0.99,
+      storagePath: "PRIVATE_STORAGE_PATH",
+      otherSubmissions: [{ id: "PRIVATE_SUBMISSION" }],
+      rounds: [{
+        ...assignmentSnapshot.rounds[0],
+        otherMemberCount: 4,
+      }],
+    });
+
+    expect(result.documents).toHaveLength(2);
+    expect(result.documents[1]?.activeVersionId).toBeNull();
+    expect(result.rounds[0]?.phase).toBe("processing_failed");
+    expect(result.rounds[0]?.ownCoverage).toEqual({
+      complete: false,
+      coveredItemCount: 1,
+      requiredItemCount: 2,
+    });
+    expect(result).not.toHaveProperty("confidence");
+    expect(result).not.toHaveProperty("storagePath");
+    expect(result).not.toHaveProperty("otherSubmissions");
+    expect(result.rounds[0]).not.toHaveProperty("otherMemberCount");
+  });
+
+  it("validates pages and the minimal own approval history projection", () => {
+    const result = parseMemberAssignmentsPage({
+      items: [assignmentSnapshot],
+      total: 1,
+      page: 1,
+      pageSize: 25,
+      workspaceId: "PRIVATE_WORKSPACE",
+    });
+    expect(result.items).toHaveLength(1);
+    expect(result).not.toHaveProperty("workspaceId");
+
+    const approvals = parseOwnApprovalsPage({
+      items: [{
+        approvalId: roundId,
+        documentId,
+        approvedAt: "2026-11-18T00:00:00Z",
+        ownItemCount: 2,
+        versionId: "PRIVATE_VERSION",
+        findingId: "PRIVATE_FINDING",
+      }],
+      total: 1,
+      page: 1,
+      pageSize: 25,
+    });
+    expect(approvals.items[0]).not.toHaveProperty("versionId");
+    expect(approvals.items[0]).not.toHaveProperty("findingId");
   });
 
   it("maps round and draft projections without copying unrecognized fields", () => {

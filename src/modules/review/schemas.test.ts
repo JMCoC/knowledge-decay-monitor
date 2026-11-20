@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   cancelRoundSchema,
+  getAssignmentSchema,
+  listAssignmentsSchema,
+  listOwnApprovalsSchema,
   prepareRoundSchema,
   reviewPageSchema,
   updateRoundDraftSchema,
@@ -59,5 +62,22 @@ describe("review command schemas", () => {
     expect(reviewPageSchema.parse({})).toEqual({ page: 1, pageSize: 25 });
     expect(reviewPageSchema.safeParse({ pageSize: 100 }).success).toBe(true);
     expect(reviewPageSchema.safeParse({ pageSize: 101 }).success).toBe(false);
+  });
+
+  it("validates Member assignment reads without accepting closed work or client authorization", () => {
+    expect(listAssignmentsSchema.parse({})).toEqual({ page: 1, pageSize: 25 });
+    expect(listAssignmentsSchema.safeParse({ status: "confirmed" }).success).toBe(true);
+    expect(listAssignmentsSchema.safeParse({ status: "resolved" }).success).toBe(false);
+    expect(listAssignmentsSchema.safeParse({ status: "false_positive" }).success).toBe(false);
+    expect(listAssignmentsSchema.safeParse({ workspaceId: id("8") }).success).toBe(false);
+    expect(getAssignmentSchema.safeParse(id("7")).success).toBe(true);
+    expect(getAssignmentSchema.safeParse("not-a-finding").success).toBe(false);
+  });
+
+  it("applies bounded paging to own approval history", () => {
+    expect(listOwnApprovalsSchema.parse({})).toEqual({ page: 1, pageSize: 25 });
+    expect(listOwnApprovalsSchema.safeParse({ page: 2, pageSize: 100 }).success).toBe(true);
+    expect(listOwnApprovalsSchema.safeParse({ pageSize: 101 }).success).toBe(false);
+    expect(listOwnApprovalsSchema.safeParse({ contributorId: id("9") }).success).toBe(false);
   });
 });

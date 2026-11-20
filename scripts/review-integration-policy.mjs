@@ -2,6 +2,7 @@ export const REVIEW_INTEGRATION_FILES = Object.freeze([
   "tests/integration/review-foundation-isolation.test.ts",
   "tests/integration/review-commands-isolation.test.ts",
   "tests/integration/review-command-concurrency.test.ts",
+  "tests/integration/review-assignment-reads-isolation.test.ts",
 ]);
 
 const reviewIntegrationFileSet = new Set(REVIEW_INTEGRATION_FILES);

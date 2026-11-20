@@ -115,6 +115,7 @@ export interface ReviewFixture {
     expectedRevision: number;
   }>;
   readSubmissionState(submissionId: string): Promise<string>;
+  readSubmissionVersion(submissionId: string): Promise<string>;
   readRoundItems(roundId: string): Promise<string[]>;
   countOpenRounds(documentId: string): Promise<number>;
   readCandidateState(candidateId: string): Promise<{
@@ -373,6 +374,12 @@ export async function createReviewFixture(): Promise<ReviewFixture> {
       }
       return state;
     };
+    const readSubmissionVersion = async (submissionId: string) => {
+      if (!sql || !UUID_PATTERN.test(submissionId)) throw new Error("A synthetic submission is required for this local read.");
+      const versionId = (await sql.query(`select version_id::text from public.correction_submissions where id=${requireUuid(submissionId)};`)).trim();
+      if (!UUID_PATTERN.test(versionId)) throw new Error("The local synthetic submission returned an invalid version marker.");
+      return versionId;
+    };
     const readRoundItems = async (roundId: string) => {
       if (!sql || !UUID_PATTERN.test(roundId)) throw new Error("A synthetic round is required for this local read.");
       const output = (await sql.query(`select coalesce(string_agg(finding_id::text, '|' order by finding_id), '') from public.correction_round_items where round_id=${requireUuid(roundId)};`)).trim();
@@ -514,6 +521,7 @@ export async function createReviewFixture(): Promise<ReviewFixture> {
       addCrossDocumentEvidenceForFinding,
       readReservationAssignment,
       readSubmissionState,
+      readSubmissionVersion,
       readRoundItems,
       countOpenRounds,
       readCandidateState,

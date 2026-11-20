@@ -79,10 +79,11 @@ describe("local Supabase test runner isolation", () => {
 
     expect(mocks.spawnSync).toHaveBeenCalledTimes(2);
     const [, suiteArgs] = mocks.spawnSync.mock.calls[0] as [string, string[]];
-    expect(suiteArgs.slice(-6)).toEqual([
+    expect(suiteArgs.slice(-8)).toEqual([
       "--exclude", "tests/integration/review-foundation-isolation.test.ts",
       "--exclude", "tests/integration/review-commands-isolation.test.ts",
       "--exclude", "tests/integration/review-command-concurrency.test.ts",
+      "--exclude", "tests/integration/review-assignment-reads-isolation.test.ts",
     ]);
 
     const [reviewCommand, reviewArgs, reviewOptions] = mocks.spawnSync.mock.calls[1] as [
@@ -98,6 +99,7 @@ describe("local Supabase test runner isolation", () => {
       "tests/integration/review-foundation-isolation.test.ts",
       "tests/integration/review-commands-isolation.test.ts",
       "tests/integration/review-command-concurrency.test.ts",
+      "tests/integration/review-assignment-reads-isolation.test.ts",
     ]);
     expect(reviewOptions.cwd).toBe(process.cwd());
     expect(reviewOptions.env).toMatchObject({
@@ -117,16 +119,18 @@ describe("local Supabase test runner isolation", () => {
     expect(mocks.spawnSync).toHaveBeenCalledTimes(2);
     const [, suiteArgs] = mocks.spawnSync.mock.calls[0] as [string, string[]];
     expect(suiteArgs).toContain("--reporter=dot");
-    expect(suiteArgs.slice(-6)).toEqual([
+    expect(suiteArgs.slice(-8)).toEqual([
       "--exclude", "tests/integration/review-foundation-isolation.test.ts",
       "--exclude", "tests/integration/review-commands-isolation.test.ts",
       "--exclude", "tests/integration/review-command-concurrency.test.ts",
+      "--exclude", "tests/integration/review-assignment-reads-isolation.test.ts",
     ]);
   });
 
   it("runs an explicitly requested review batch only through the disposable project", () => {
     const requested = [
       "tests/integration/review-command-concurrency.test.ts",
+      "tests/integration/review-assignment-reads-isolation.test.ts",
       "tests/integration/review-commands-isolation.test.ts",
     ];
 
@@ -151,6 +155,7 @@ describe("local Supabase test runner isolation", () => {
       "tests/integration/review-foundation-isolation.test.ts",
       "tests/integration/review-commands-isolation.test.ts",
       "tests/integration/review-command-concurrency.test.ts",
+      "tests/integration/review-assignment-reads-isolation.test.ts",
     ]);
   });
 

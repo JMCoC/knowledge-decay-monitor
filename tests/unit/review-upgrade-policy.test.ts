@@ -22,6 +22,13 @@ const s302Migrations = [
   "20261114150500_s3_02_round_commands.sql",
   "20261114150600_s3_02_findings_projection.sql",
 ];
+const s307Migrations = [
+  "20261118150000_s3_07_member_assignment_reads.sql",
+  "20261118150100_s3_07_assignment_coverage_projection.sql",
+  "20261118150200_s3_07_privileged_path_lookup.sql",
+  "20261118150300_s3_07_member_originals_denied.sql",
+  "20261118150400_s3_07_scoped_member_original_access.sql",
+];
 
 describe("review migration stages", () => {
   it("pins the S3-02 allowlist to the migration files in the repository", () => {
@@ -40,8 +47,21 @@ describe("review migration stages", () => {
     for (const name of s302Migrations) {
       expect(reviewMigrationStage(`supabase/migrations/${name}`)).toBe("s3_02");
     }
+    for (const name of s307Migrations) {
+      expect(reviewMigrationStage(`supabase/migrations/${name}`)).toBe("s3_07");
+    }
     expect(() => reviewMigrationStage("supabase/migrations/20261108150600_s3_01_unreviewed.sql"))
       .toThrow("Unreviewed migration in upgrade inventory.");
+  });
+
+  it("keeps S3-07 migrations out of earlier review upgrade stages", () => {
+    for (const name of s307Migrations) {
+      const migration = `supabase/migrations/${name}`;
+      expect(includeReviewMigration(migration, "s2")).toBe(false);
+      expect(includeReviewMigration(migration, "s3_01")).toBe(false);
+      expect(includeReviewMigration(migration, "s3_02")).toBe(false);
+      expect(includeReviewMigration(migration, "s3_07")).toBe(true);
+    }
   });
 
   it("keeps S3-02 out of the S3-01 baseline and includes it only in the S3-02 stage", () => {

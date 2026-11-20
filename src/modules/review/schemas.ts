@@ -72,5 +72,14 @@ export const reviewPageSchema = z.strictObject({
   pageSize: z.number().int().positive().max(100).default(25),
 });
 
+export const listAssignmentsSchema = reviewPageSchema.extend({
+  status: z.enum([
+    "pending_review", "confirmed", "update_planned",
+  ]).optional(),
+});
+
+export const getAssignmentSchema = uuid;
+export const listOwnApprovalsSchema = reviewPageSchema;
+
 export const getFindingReviewSchema = z.strictObject({ findingId: uuid });
 export const getRoundDraftSchema = z.strictObject({ roundId: uuid });
