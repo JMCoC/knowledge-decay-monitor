@@ -5,6 +5,20 @@ export const REVIEW_INTEGRATION_FILES = Object.freeze([
 ]);
 
 const reviewIntegrationFileSet = new Set(REVIEW_INTEGRATION_FILES);
+export const REVIEW_PORT_COUNT = 10;
+
+/**
+ * @param {string} message
+ * @param {number} portBase
+ */
+export function isReviewStartupPortConflict(message, portBase) {
+  const reportedPort = message.match(
+    /failed to bind host port (?:0\.0\.0\.0|127\.0\.0\.1|\[::\]):(\d{1,5})\/tcp: address already in use\b/i,
+  )?.[1];
+  if (reportedPort === undefined) return false;
+  const port = Number(reportedPort);
+  return port >= portBase && port < portBase + REVIEW_PORT_COUNT;
+}
 
 /** @param {unknown} argument */
 export function normalizeReviewIntegrationFile(argument) {

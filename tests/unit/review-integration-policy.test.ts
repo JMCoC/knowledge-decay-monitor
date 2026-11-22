@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   REVIEW_INTEGRATION_FILES,
+  isReviewStartupPortConflict,
   normalizeReviewIntegrationFile,
   validateReviewIntegrationBatch,
 } from "../../scripts/review-integration-policy.mjs";
@@ -39,5 +40,30 @@ describe("disposable review integration allowlist", () => {
       "tests/integration/review-foundation-isolation.test.ts",
       "tests\\integration\\review-foundation-isolation.test.ts",
     ])).toBeNull();
+  });
+});
+
+describe("disposable review startup port conflicts", () => {
+  it("recognizes Docker's bind failure for the current API or database port", () => {
+    expect(isReviewStartupPortConflict(
+      "failed to bind host port 0.0.0.0:56576/tcp: address already in use",
+      56575,
+    )).toBe(true);
+    expect(isReviewStartupPortConflict(
+      "failed to bind host port [::]:24002/tcp: address already in use",
+      24000,
+    )).toBe(true);
+  });
+
+  it("rejects collisions outside the selected range and unrelated startup failures", () => {
+    expect(isReviewStartupPortConflict(
+      "failed to bind host port 0.0.0.0:24010/tcp: address already in use",
+      24000,
+    )).toBe(false);
+    expect(isReviewStartupPortConflict(
+      "failed to bind host port 0.0.0.0:24001/tcp: permission denied",
+      24000,
+    )).toBe(false);
+    expect(isReviewStartupPortConflict("migration failed: duplicate key value", 24000)).toBe(false);
   });
 });
