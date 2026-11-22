@@ -10,12 +10,15 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { redactCliOutput } from "./cli-output-redaction.mjs";
 import {
+  isReviewStartupPortConflict,
+  REVIEW_PORT_COUNT,
   validateReviewIntegrationBatch,
 } from "./review-integration-policy.mjs";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const supabaseCli = resolve(projectRoot, "node_modules/supabase/dist/supabase.js");
-const portOffsets = Array.from({ length: 10 }, (_, index) => index);
+const portOffsets = Array.from({ length: REVIEW_PORT_COUNT }, (_, index) => index);
+const maxStartAttempts = 3;
 
 function runCaptured(command, args, stage, cwd = projectRoot) {
   try {
@@ -93,11 +96,13 @@ function availablePort(port) {
   });
 }
 
-async function choosePortBase() {
-  const first = 56000 + Math.floor(Math.random() * 3000);
+async function choosePortBase(attemptedPortBases) {
+  // Stay below the default ephemeral ranges on hosted Linux and Windows.
+  const rangeCount = 1_000;
+  const first = Math.floor(Math.random() * rangeCount);
   for (let offset = 0; offset < 200; offset += 1) {
-    const base = first + offset * 10;
-    if (base + 9 > 65535) break;
+    const base = 20_000 + ((first + offset) % rangeCount) * REVIEW_PORT_COUNT;
+    if (attemptedPortBases.has(base)) continue;
     let available = true;
     for (const portOffset of portOffsets) {
       if (!(await availablePort(base + portOffset))) {
@@ -245,26 +250,30 @@ function runVitest(testArgs, env) {
   return result.status ?? 1;
 }
 
-async function main(args) {
-  const reviewFiles = validateReviewIntegrationBatch(args);
-  if (!reviewFiles) {
-    throw new Error("The disposable review runner accepts only an exact nonempty batch of reviewed integration files.");
-  }
-
+async function runReviewAttempt(reviewFiles, attempt, attemptedPortBases) {
   const temporaryRoot = mkdtempSync(join(tmpdir(), "kdm-s3-02-review-"));
   const projectId = `kdm-review-${randomUUID().replaceAll("-", "").slice(0, 16)}`;
   const failures = [];
   let code = 1;
+  let retry = false;
   try {
     assertNoStack(projectId);
-    const portBase = await choosePortBase();
+    const portBase = await choosePortBase(attemptedPortBases);
+    attemptedPortBases.add(portBase);
     copyTemporaryProject(temporaryRoot, projectId, portBase);
-    console.log(`Starting isolated local Supabase for ${reviewFiles.length} review integration test(s).`);
+    console.log(`Starting isolated local Supabase for ${reviewFiles.length} review integration test(s) (attempt ${attempt}/${maxStartAttempts}).`);
     const excludedServices = [
       "studio", "edge-runtime", "logflare", "vector", "supavisor",
       "realtime", "analytics", "postgres-meta", "mailpit", "imgproxy",
     ];
-    runCli(["start", "--exclude", excludedServices.join(","), "--workdir", temporaryRoot], "Disposable review project start");
+    try {
+      runCli(["start", "--exclude", excludedServices.join(","), "--workdir", temporaryRoot], "Disposable review project start");
+    } catch (error) {
+      retry = attempt < maxStartAttempts
+        && error instanceof Error
+        && isReviewStartupPortConflict(error.message, portBase);
+      throw error;
+    }
     const database = assertOwnedDatabase(projectId, temporaryRoot);
     if (database !== `supabase_db_${projectId}`) throw new Error("Unexpected disposable review database container.");
     runCli(["db", "reset", "--local", "--workdir", temporaryRoot], "Disposable review migration setup");
@@ -300,7 +309,11 @@ async function main(args) {
     delete env.SUPABASE_SECRET_KEY;
     code = runVitest(reviewFiles, env);
   } catch (error) {
-    console.error(error instanceof Error ? error.message : "Disposable review integration failed.");
+    if (retry) {
+      console.warn("Docker reported a port collision during startup. Cleaning up before choosing a new review port range.");
+    } else {
+      console.error(error instanceof Error ? error.message : "Disposable review integration failed.");
+    }
     code = 1;
   } finally {
     if (!stopAndRemove(projectId, temporaryRoot, failures)) {
@@ -310,9 +323,24 @@ async function main(args) {
   if (failures.length) {
     for (const failure of failures) console.error(failure);
     code = 1;
+    retry = false;
   }
   if (code === 0) console.log("PASS: review isolation integration used and removed its own local Supabase project.");
-  return code;
+  return { code, retry };
+}
+
+async function main(args) {
+  const reviewFiles = validateReviewIntegrationBatch(args);
+  if (!reviewFiles) {
+    throw new Error("The disposable review runner accepts only an exact nonempty batch of reviewed integration files.");
+  }
+
+  const attemptedPortBases = new Set();
+  for (let attempt = 1; attempt <= maxStartAttempts; attempt += 1) {
+    const { code, retry } = await runReviewAttempt(reviewFiles, attempt, attemptedPortBases);
+    if (!retry) return code;
+  }
+  return 1;
 }
 
 main(process.argv.slice(2)).then((code) => {
