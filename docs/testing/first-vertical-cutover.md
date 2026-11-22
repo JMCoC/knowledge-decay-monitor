@@ -35,14 +35,14 @@ Para el arranque local, diagnóstico de puertos Windows y pasos concretos con un
 
 ## PRs y automatización de la web
 
-Publicar primero un draft PR `fix/adjustment_vertical_slice` → `develop`. El [texto del PR](first-vertical-pr.md) describe el cambio y enlaza evidencia. Mantenerlo draft hasta preparar un DB/worker compatible: retirar draft habilita el job Preview si pasa Quality gates. Si Preview comparte Supabase, coordinar también los deployments web anteriores que leen ese proyecto.
+Publicar primero un draft PR `fix/adjustment_vertical_slice` → `develop`. El [texto del PR](first-vertical-pr.md) describe el cambio y enlaza evidencia. Usar CI y las pruebas locales para la revisión del PR. El despliegue de Preview por PR está suspendido.
 
 ```powershell
 git push -u origin fix/adjustment_vertical_slice
 gh pr create --repo JMCoC/knowledge-decay-monitor --draft --base develop --head fix/adjustment_vertical_slice --title "feat(ingestion): complete first vertical with durable processing" --body-file docs/testing/first-vertical-pr.md
 ```
 
-Los comandos quedan preparados para una ejecución posterior. Tras aceptación Preview y revisión, integrar en develop y preparar el PR develop → main con SHA probado, digest y evidencia del entorno. Preparar Production antes de ese merge: el workflow de push a main puede desplegar/promover automáticamente la web. No abrir el PR de promoción reutilizando evidencia histórica como aceptación actual.
+Tras la aceptación local y la revisión, integrar en `develop` y preparar el PR hacia `main` con el SHA probado, el digest y la evidencia del entorno. Completar la ficha de release para que un revisor independiente apruebe el job de `Production` después del merge. El job solo promueve el candidato después de verificar su página de acceso. [Configuración del corte web](s1-08-cutover.md)
 
 ## Ventana de corte
 

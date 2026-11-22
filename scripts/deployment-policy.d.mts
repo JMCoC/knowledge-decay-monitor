@@ -1,7 +1,6 @@
 export type DeploymentTarget = {
-  target: "preview" | "production";
+  target: "production";
   sha: string;
-  prNumber?: number;
 };
 
 export type DeploymentPolicyInput = {
@@ -10,11 +9,7 @@ export type DeploymentPolicyInput = {
   qualityResult: string;
   testedSha: string;
   headSha: string;
-  headRepository?: string;
   repository: string;
-  prState?: "open" | "closed";
-  draft?: boolean;
-  prNumber?: number;
   authorizedActor: boolean;
 };
 
