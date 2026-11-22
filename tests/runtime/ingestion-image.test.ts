@@ -9,7 +9,9 @@ beforeAll(assertLocalSupabaseReady);
 
 it("the final image runs as node, loads offline and processes a local original", async () => {
   const image = process.env.KDM_WORKER_IMAGE;
-  if (!image || !/^[a-z0-9][a-z0-9._:/-]+$/i.test(image)) throw new Error("KDM_WORKER_IMAGE is required.");
+  if (!image || !/^[a-z0-9][a-z0-9._:/-]+(?:@sha256:[a-f0-9]{64})?$/i.test(image)) {
+    throw new Error("KDM_WORKER_IMAGE must be a local image tag or a digest reference.");
+  }
   const configured = JSON.parse(execFileSync("docker", ["image", "inspect", "--format", "{{json .Config}}", image],
     { encoding:"utf8", windowsHide:true, stdio:["ignore","pipe","pipe"] }));
   expect(configured.User).toBe("node");
@@ -23,7 +25,7 @@ it("the final image runs as node, loads offline and processes a local original",
   const name = `kdm-ingestion-smoke-${randomUUID()}`;
   // Forward the key by environment name; it never appears in command arguments or logs.
   // Share only the local gateway network namespace; HTTP remains strictly loopback.
-  const child = spawn("docker", ["run","--rm","--name",name,"--network",`container:${gateway}`,
+  const child = spawn("docker", ["run","--rm","--pull=never","--name",name,"--network",`container:${gateway}`,
     "-e","SUPABASE_URL=http://127.0.0.1:8000",
     "-e","SUPABASE_SERVICE_ROLE_KEY","-e","KDM_DISABLE_SENTRY=1",image],
     { env:process.env, stdio:"ignore", windowsHide:true });
