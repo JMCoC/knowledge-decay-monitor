@@ -7,7 +7,7 @@ import { ParseError } from "@/modules/ingestion/chunking";
 import { processJob, type IngestionJob } from "@/modules/ingestion/worker/process-job";
 const job:IngestionJob={version_id:'v',workspace_id:'w',operation_id:'op',started_at:new Date().toISOString()};
 function serviceFixture(){
- const queryResults:unknown[]=[{data:{id:'v',workspace_id:'w',document_id:'d',storage_path:'w/d/v/original.md',upload_state:'confirmed',processing_status:'processing',processing_operation_id:'op'},error:null}];
+ const queryResults:unknown[]=[{data:{id:'v',workspace_id:'w',document_id:'d',storage_path:'w/d/v/original.md',upload_state:'confirmed',processing_status:'processing',processing_operation_id:'op',workflow_kind:'initial'},error:null}];
  const builder:Record<string,unknown>={};
  for(const method of ['select','eq','abortSignal']) builder[method]=()=>builder;
  builder.single=builder.maybeSingle=()=>Promise.resolve(queryResults.shift());

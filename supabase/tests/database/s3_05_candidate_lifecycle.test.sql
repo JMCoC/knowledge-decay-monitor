@@ -135,7 +135,7 @@ end;
 $$;
 
 create temporary table lc_a on commit drop as
-select c.seq, c.workspace_id, c.admin_id, c.member_a_id, c.finding_a_id,
+select c.seq, c.workspace_id, c.admin_id, c.member_a_id, c.member_b_id, c.finding_a_id,
   x.round_id, x.candidate_id, x.version_id, x.submission_id
 from lifecycle_cases c
 cross join lateral pg_temp.make_lifecycle_candidate(
@@ -144,7 +144,7 @@ cross join lateral pg_temp.make_lifecycle_candidate(
 where c.seq = 1;
 
 create temporary table lc_b on commit drop as
-select c.seq, c.workspace_id, c.admin_id, c.member_a_id, c.finding_a_id,
+select c.seq, c.workspace_id, c.admin_id, c.member_a_id, c.member_b_id, c.finding_a_id,
   x.round_id, x.candidate_id, x.version_id, x.submission_id
 from lifecycle_cases c
 cross join lateral pg_temp.make_lifecycle_candidate(
@@ -399,11 +399,33 @@ select is((
     (select admin_id from lc_a), (select round_id from lc_e)
   )
 ), 0, 'A reviewer from another workspace cannot read the round');
+-- 10. A Member who submitted in the round can read the same projection.
+select is((
+  select count(*)::integer from public.review_get_round_processing_status(
+    (select member_a_id from lc_e), (select round_id from lc_e)
+  )
+), 1, 'A Member with a submission in the round reads its processing status');
+select is((
+  select p.candidate_status::text from public.review_get_round_processing_status(
+    (select member_a_id from lc_e), (select round_id from lc_e)
+  ) p
+), 'pending_approval', 'The Member projection matches the reviewer projection');
+
+-- 11. A Member without a submission in the round reads no status.
+select is((
+  select count(*)::integer from public.review_get_round_processing_status(
+    (select member_b_id from lc_a), (select round_id from lc_a)
+  )
+), 0, 'A Member without a submission in the round reads no status');
+
+-- 12. The Member read branch does not grant write access.
 select throws_ok(format(
-  'select * from public.review_get_round_processing_status(%L, %L)',
+  'select public.invalidate_review_candidate(%L, %L, %L, %L)',
+  (select workspace_id from lc_e),
+  (select round_id from lc_e),
   (select member_a_id from lc_e),
-  (select round_id from lc_e)
-), '42501', null, 'A Member cannot read round processing status');
+  'synthetic member attempt'
+), '42501', null, 'A Member cannot invalidate a candidate');
 
 select * from finish();
 rollback;
