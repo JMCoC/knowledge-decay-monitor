@@ -510,14 +510,16 @@ describe("local pg_cron analysis recovery", () => {
   it("reclaims an interrupted worker only after its real lease expires", async () => {
     if (!sql || !workerToken) throw new Error("Local recovery fixture is not initialized.");
     const service = serviceClient();
-    await configureRecoverySchedule(true);
-    if (edge) {
-      await edge.stop();
-      edge = undefined;
-    }
-    edge = await startEdgeConFake({ token: workerToken, latencyMs: 30_000 });
+    // Prepare the HTTP fixture before serving Edge again, which reloads Kong.
+    // Keep cron paused until the initial attempt has its lease and the worker is killed.
+    await configureRecoverySchedule(false);
     const job = await createQueuedJob(service);
     try {
+      if (edge) {
+        await edge.stop();
+        edge = undefined;
+      }
+      edge = await startEdgeConFake({ token: workerToken, latencyMs: 30_000 });
       const requestBaseline = Number(await sql.query(
         "select coalesce(max(id), 0)::text from net._http_response;",
       ));
@@ -533,13 +535,14 @@ describe("local pg_cron analysis recovery", () => {
         throw new Error("Local worker did not persist its lease expiry.");
       }
       const leaseExpiresAt = processing.lease_expires_at;
-      const jobId = Number(await sql.query(
-        "select jobid::text from cron.job where jobname = 'kdm-analysis-recovery';",
-      ));
 
       await killEdgeWorkerContainer();
       await edge.stop();
       edge = await startEdgeConFake({ token: workerToken, latencyMs: 10 });
+      await configureRecoverySchedule(true);
+      const jobId = Number(await sql.query(
+        "select jobid::text from cron.job where jobname = 'kdm-analysis-recovery';",
+      ));
 
       await expect.poll(async () => {
         const row = await readJob(service, job.analysisId);
