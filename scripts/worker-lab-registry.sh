@@ -12,6 +12,17 @@ fail() {
   exit 1
 }
 
+is_registry_access_denied() {
+  case "${1,,}" in
+    *'error from registry: denied'*|*'denied: denied'*|*'denied: permission_denied'*|\
+    *unauthorized*|*'authentication required'*|*'requested access to the resource is denied'*|\
+    *'pull access denied for ghcr.io/jmcoc/kdm-ingestion-lab'*|\
+    *'get "https://ghcr.io/v2/jmcoc/kdm-ingestion-lab/manifests/'*'": denied'*)
+      return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 [[ ${GITHUB_ACTIONS:-} == true && ${GITHUB_EVENT_NAME:-} == push &&
   ${GITHUB_REF:-} == refs/heads/develop && ${GITHUB_REPOSITORY:-} == JMCoC/knowledge-decay-monitor &&
   ${TESTED_SHA:-} =~ $sha_pattern && $TESTED_SHA == "${GITHUB_SHA:-}" ]] ||
@@ -58,13 +69,19 @@ if [[ $mode == publish ]]; then
     [[ $(docker image inspect --format '{{.Id}}' "$tag") == "$image_id" ]] ||
       fail "The existing SHA tag identifies a different image."
   else
+    pull_exit=$?
     case "${pull_result,,}" in
-      *'manifest unknown'*) ;;
-      *'denied: denied'*|*unauthorized*|*'requested access to the resource is denied'*)
+      *'manifest unknown'*|*"$tag: not found"*)
+        printf 'GHCR SHA tag is absent.\n'
+        ;;
+      *)
+        if ! is_registry_access_denied "$pull_result"; then
+          fail "GHCR SHA tag lookup failed (reason=unclassified_response; docker_exit=$pull_exit)."
+        fi
         # A package that has never been created can deny an authenticated pull.
         [[ $package_missing == true ]] || fail "GHCR denied access to the existing package."
+        printf 'GHCR denied the pull and GitHub Packages returned 404. Attempting first publication.\n'
         ;;
-      *) fail "Could not check whether the SHA tag exists in GHCR." ;;
     esac
     docker tag "$local_image" "$tag"
     docker push "$tag"
@@ -91,10 +108,8 @@ if [[ $mode == publish ]]; then
   if anonymous_result=$(docker manifest inspect "$image_ref" 2>&1); then
     fail "The published GHCR digest is available without authentication."
   fi
-  case "${anonymous_result,,}" in
-    *'denied: denied'*|*unauthorized*|*'authentication required'*|*'requested access to the resource is denied'*) ;;
-    *) fail "Could not verify that GHCR blocks anonymous access to the published digest." ;;
-  esac
+  is_registry_access_denied "$anonymous_result" ||
+    fail "Could not verify that GHCR blocks anonymous access to the published digest."
 
   printf 'image_ref=%s\nimage_id=%s\n' "$image_ref" "$image_id" >> "$GITHUB_OUTPUT"
 fi

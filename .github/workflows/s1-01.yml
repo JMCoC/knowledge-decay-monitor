@@ -55,6 +55,9 @@ jobs:
       - name: Unit tests
         run: pnpm test:unit
 
+      - name: Worker Lab registry regression tests
+        run: bash tests/runtime/worker-lab-registry.test.sh
+
       - name: Edge notification Sentry test (runtime network disabled)
         run: pnpm dlx deno@2.9.6 test --config supabase/functions/dispatch-notifications/deno.json --node-modules-dir=none --allow-env tests/edge/notifications-sentry.test.ts
 
