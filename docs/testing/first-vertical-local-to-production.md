@@ -257,7 +257,9 @@ Node da prioridad a variables heredadas del proceso sobre el archivo: usa una te
 
 ### Ensayo de distribución del worker con GHCR
 
-Cada push con CI verde a `develop` deja **Publish Worker Lab image** en espera de aprobación en GitHub Actions. Un mantenedor distinto del iniciador revisa el SHA y aprueba el Environment `Worker Lab`. El job construye el candidato final, pasa el smoke local y publica esa imagen con una etiqueta `sha-<SHA completo>` en el paquete privado `ghcr.io/jmcoc/kdm-ingestion-lab`.
+Cada push con CI verde a `develop` deja **Publish Worker Lab image** en espera de aprobación en GitHub Actions. Un mantenedor distinto del iniciador revisa el SHA y aprueba el Environment `Worker Lab`. El job construye el candidato final, pasa el smoke local y publica esa imagen con una etiqueta `sha-<SHA completo>` en el paquete privado `ghcr.io/jmcoc/kdm-ingestion-lab-private`.
+
+El paquete se aprovisiona con una imagen `bootstrap` inocua publicada desde la cuenta propietaria. Antes de la primera publicación del worker, comprobar que el paquete sea privado y que **Manage Actions access** conceda `Write` a `JMCoC/knowledge-decay-monitor`. El publicador exige poder leer el paquete y confirmar su visibilidad antes de subir la imagen.
 
 **Deploy Worker Lab image** descarga el digest devuelto por GHCR desde otro runner y comprueba que su ID coincide con el de la imagen probada. Arranca el worker con un Supabase descartable, confirma `/health` y procesa un original sintético hasta `ready` con versión `active`. Al terminar se limpian el contenedor, el fixture y el stack.
 

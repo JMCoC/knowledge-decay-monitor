@@ -200,7 +200,7 @@ jobs:
             printf -- '- Pre-publication smoke: %s\n' "${SMOKE_RESULT:-not run}"
             printf -- '- Private GHCR publication: %s\n' "${PUBLISH_RESULT:-not run}"
             if [[ -n $IMAGE_REF ]]; then
-              printf -- '- Published tag: `ghcr.io/jmcoc/kdm-ingestion-lab:sha-%s`\n' "$TESTED_SHA"
+              printf -- '- Published tag: `%s:sha-%s`\n' "${IMAGE_REF%@*}" "$TESTED_SHA"
               printf -- '- Published digest: `%s`\n' "$IMAGE_REF"
               printf -- '- Tested image ID: `%s`\n' "$TESTED_IMAGE_ID"
             fi

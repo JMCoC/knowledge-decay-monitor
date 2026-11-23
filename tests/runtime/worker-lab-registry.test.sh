@@ -10,13 +10,15 @@ export TESTED_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 export GITHUB_SHA=$TESTED_SHA
 export TESTED_IMAGE_ID=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 export REGISTRY_DIGEST=sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-export IMAGE_REF=ghcr.io/jmcoc/kdm-ingestion-lab@$REGISTRY_DIGEST
+export IMAGE_REF=ghcr.io/jmcoc/kdm-ingestion-lab-private@$REGISTRY_DIGEST
 export GITHUB_OUTPUT="$temporary_dir/out"
 
 cat > "$temporary_dir/gh" <<'EOF'
 #!/usr/bin/env bash
+[[ $* == "api users/JMCoC/packages/container/kdm-ingestion-lab-private --jq .visibility" ]] || exit 3
 case "$SCENARIO" in
-  new|legacy_new) printf 'gh: Not Found (HTTP 404)\n' >&2; exit 1 ;;
+  missing_package) printf 'gh: Not Found (HTTP 404)\n' >&2; exit 1 ;;
+  package_forbidden) printf 'gh: Forbidden (HTTP 403)\n' >&2; exit 1 ;;
   public) printf 'public\n' ;;
   *) printf 'private\n' ;;
 esac
@@ -38,12 +40,6 @@ case "$1" in
     ;;
   pull)
     case "$SCENARIO" in
-      new)
-        if [[ ! -f "$CASE_ROOT/pushed" ]]; then
-          printf 'Error response from daemon: error from registry: denied\ndenied\n'; exit 1
-        fi ;;
-      legacy_new)
-        if [[ ! -f "$CASE_ROOT/pushed" ]]; then printf 'denied: denied\n'; exit 1; fi ;;
       denied)
         printf 'Error response from daemon: error from registry: denied\ndenied\n'; exit 1 ;;
       missing_reference)
@@ -64,7 +60,7 @@ case "$1" in
   manifest)
     [[ ! -f "$DOCKER_CONFIG/config.json" ]] || exit 2
     if [[ $SCENARIO == anonymously_readable ]]; then exit 0; fi
-    printf 'Get "https://ghcr.io/v2/jmcoc/kdm-ingestion-lab/manifests/%s": denied\n' "${3#*@}"
+    printf 'Get "https://ghcr.io/v2/jmcoc/kdm-ingestion-lab-private/manifests/%s": denied\n' "${3#*@}"
     exit 1
     ;;
   *) exit 3 ;;
@@ -97,13 +93,14 @@ run() {
   printf 'PASS %s %s\n' "$1" "$2"
 }
 
-run new publish 0 yes "Attempting first publication"
-grep -qx "image_ref=$IMAGE_REF" "$temporary_dir/out"
-run legacy_new publish 0 yes
+run missing_package publish 1 no "Provision the private Worker Lab package"
+test ! -s "$temporary_dir/out"
+run package_forbidden publish 1 no "Could not verify the existing GHCR package visibility"
 run missing publish 0 yes "SHA tag is absent"
+grep -qx "image_ref=$IMAGE_REF" "$temporary_dir/out"
 run missing_reference publish 0 yes "SHA tag is absent"
 run missing_layer publish 1 no "reason=unclassified_response"
-run denied publish 1 no "GHCR denied access to the existing package."
+run denied publish 1 no "GHCR denied access to the private package."
 run existing publish 0 no
 run conflict publish 1 no
 run outage publish 1 no "reason=unclassified_response"
@@ -112,4 +109,5 @@ run anonymously_readable publish 1 no
 run existing pull 0 no
 grep -Fxq "pull $IMAGE_REF" "$temporary_dir/trace"
 run conflict pull 1 no
+IMAGE_REF=ghcr.io/jmcoc/kdm-ingestion-lab@$REGISTRY_DIGEST run old_package pull 1 no "Invalid Worker Lab image reference"
 GITHUB_EVENT_NAME=pull_request run pull_request publish 1 no "requires a tested push to develop"
