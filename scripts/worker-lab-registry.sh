@@ -2,8 +2,10 @@
 set -euo pipefail
 
 registry=ghcr.io
-repository=ghcr.io/jmcoc/kdm-ingestion-lab
-package_endpoint=users/JMCoC/packages/container/kdm-ingestion-lab
+package_name=kdm-ingestion-lab-private
+package_path="jmcoc/$package_name"
+repository="$registry/$package_path"
+package_endpoint="users/JMCoC/packages/container/$package_name"
 sha_pattern='^[0-9a-f]{40}$'
 digest_pattern='^sha256:[0-9a-f]{64}$'
 
@@ -16,8 +18,8 @@ is_registry_access_denied() {
   case "${1,,}" in
     *'error from registry: denied'*|*'denied: denied'*|*'denied: permission_denied'*|\
     *unauthorized*|*'authentication required'*|*'requested access to the resource is denied'*|\
-    *'pull access denied for ghcr.io/jmcoc/kdm-ingestion-lab'*|\
-    *'get "https://ghcr.io/v2/jmcoc/kdm-ingestion-lab/manifests/'*'": denied'*)
+    *"pull access denied for $repository"*|\
+    *"get \"https://$registry/v2/$package_path/manifests/"*'": denied'*)
       return 0 ;;
     *) return 1 ;;
   esac
@@ -37,11 +39,10 @@ case "$mode" in
     [[ $image_id =~ $digest_pattern && $image_id == "${TESTED_IMAGE_ID:-}" ]] ||
       fail "The local image does not match the image verified by the smoke test."
 
-    package_missing=false
     if visibility=$(gh api "$package_endpoint" --jq '.visibility' 2>&1); then
       [[ $visibility == private ]] || fail "The GHCR package must be private."
     elif [[ $visibility == *'(HTTP 404)'* ]]; then
-      package_missing=true
+      fail "Provision the private Worker Lab package and grant this repository Actions access before publishing."
     else
       fail "Could not verify the existing GHCR package visibility."
     fi
@@ -78,9 +79,7 @@ if [[ $mode == publish ]]; then
         if ! is_registry_access_denied "$pull_result"; then
           fail "GHCR SHA tag lookup failed (reason=unclassified_response; docker_exit=$pull_exit)."
         fi
-        # A package that has never been created can deny an authenticated pull.
-        [[ $package_missing == true ]] || fail "GHCR denied access to the existing package."
-        printf 'GHCR denied the pull and GitHub Packages returned 404. Attempting first publication.\n'
+        fail "GHCR denied access to the private package. Check its Manage Actions access settings."
         ;;
     esac
     docker tag "$local_image" "$tag"
