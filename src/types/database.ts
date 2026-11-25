@@ -1888,6 +1888,42 @@ export type Database = {
           },
         ]
       }
+      correction_candidate_queue: {
+        Row: {
+          candidate_id: string | null
+          candidate_revision: number | null
+          candidate_status:
+            | Database["public"]["Enums"]["correction_candidate_status"]
+            | null
+          document_id: string | null
+          last_activity_at: string | null
+          round_id: string | null
+          round_revision: number | null
+          round_status:
+            | Database["public"]["Enums"]["correction_round_status"]
+            | null
+          selection_kind:
+            | Database["public"]["Enums"]["correction_selection_kind"]
+            | null
+          version_id: string | null
+          version_processing_status:
+            | Database["public"]["Enums"]["processing_status"]
+            | null
+          version_version_status:
+            | Database["public"]["Enums"]["version_status"]
+            | null
+          workspace_id: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "correction_rounds_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       eligible_analysis_documents: {
         Row: {
           analysis_status: Database["public"]["Enums"]["analysis_status"] | null
@@ -2229,6 +2265,15 @@ export type Database = {
         Args: { p_operation_id: string; p_version_id: string }
         Returns: boolean
       }
+      invalidate_review_candidate: {
+        Args: {
+          p_actor_id: string
+          p_reason?: string
+          p_round_id: string
+          p_workspace_id: string
+        }
+        Returns: string
+      }
       list_credit_ledger: {
         Args: { p_page?: number; p_page_size?: number }
         Returns: Json
@@ -2464,6 +2509,24 @@ export type Database = {
       review_get_round_draft: {
         Args: { p_actor_id: string; p_round_id: string }
         Returns: Json
+      }
+      review_get_round_processing_status: {
+        Args: { p_actor_id: string; p_round_id: string }
+        Returns: {
+          candidate_id: string
+          candidate_revision: number
+          candidate_status: Database["public"]["Enums"]["correction_candidate_status"]
+          document_id: string
+          last_activity_at: string
+          round_id: string
+          round_revision: number
+          round_status: Database["public"]["Enums"]["correction_round_status"]
+          selection_kind: Database["public"]["Enums"]["correction_selection_kind"]
+          version_id: string
+          version_processing_status: Database["public"]["Enums"]["processing_status"]
+          version_version_status: Database["public"]["Enums"]["version_status"]
+          workspace_id: string
+        }[]
       }
       review_list_assignees: {
         Args: { p_actor_id: string; p_page?: number; p_page_size?: number }

@@ -19,7 +19,7 @@ export async function processJob(
   try {
     signal.throwIfAborted();
     const row = await service.from("document_versions")
-      .select("id,workspace_id,document_id,storage_path,upload_state,processing_status,processing_operation_id")
+      .select("id,workspace_id,document_id,storage_path,upload_state,processing_status,processing_operation_id,workflow_kind")
       .eq("id", job.version_id).eq("workspace_id", job.workspace_id).abortSignal(requestSignal()).single();
     if (row.error || !row.data) throw new Error("PERSISTENCE_FAILED");
     const version = row.data;
@@ -48,17 +48,35 @@ export async function processJob(
     } catch { completionFailed = true; }
     if (!completionFailed) return "completed";
     // A missing HTTP response is not proof the SQL transaction failed.
+    if (version.workflow_kind !== "initial" && version.workflow_kind !== "correction_candidate") {
+      throw new Error("UNSUPPORTED_WORKFLOW_KIND");
+    }
     const current = await service.from("document_versions").select("processing_status,version_status,processing_operation_id")
       .eq("id", job.version_id).eq("workspace_id", job.workspace_id).abortSignal(requestSignal()).maybeSingle();
     if (current.error || !current.data) return "uncertain";
-    if (current.data.processing_status === "ready" && current.data.version_status === "active") {
-      const document = await service.from("documents").select("active_version_id")
-        .eq("id", version.document_id).eq("workspace_id", job.workspace_id).abortSignal(requestSignal()).single();
-      return !document.error && document.data?.active_version_id === job.version_id ? "completed" : "uncertain";
+    if (version.workflow_kind === "initial") {
+      if (current.data.processing_status === "ready" && current.data.version_status === "active") {
+        const document = await service.from("documents").select("active_version_id")
+          .eq("id", version.document_id).eq("workspace_id", job.workspace_id).abortSignal(requestSignal()).single();
+        return !document.error && document.data?.active_version_id === job.version_id ? "completed" : "uncertain";
+      }
+      if (current.data.processing_operation_id !== job.operation_id) return "superseded";
+      throw new Error("PERSISTENCE_FAILED");
     }
-    if (current.data.processing_operation_id !== job.operation_id) return "superseded";
-    throw new Error("PERSISTENCE_FAILED");
+    if (current.data.processing_status !== "ready" || current.data.version_status !== "pending_approval") {
+      return "uncertain";
+    }
+    const candidate = await service.from("correction_candidates").select("id,round_id")
+      .eq("version_id", job.version_id).eq("workspace_id", job.workspace_id)
+      .abortSignal(requestSignal()).maybeSingle();
+    if (candidate.error || !candidate.data) return "uncertain";
+    const round = await service.from("correction_rounds").select("status,active_candidate_id")
+      .eq("id", candidate.data.round_id).eq("workspace_id", job.workspace_id)
+      .abortSignal(requestSignal()).maybeSingle();
+    return !round.error && round.data?.status === "pending_approval"
+      && round.data.active_candidate_id === candidate.data.id ? "completed" : "uncertain";
   } catch (error) {
+    if (error instanceof Error && error.message === "UNSUPPORTED_WORKFLOW_KIND") throw error;
     // Lost lease/shutdown: never mark a newer worker's version failed. DB will redeliver.
     if (signal.aborted) return "superseded";
     const result = await service.rpc("fail_ingestion_job", {

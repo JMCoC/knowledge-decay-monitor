@@ -78,6 +78,9 @@ describe("review upgrade runner guard", () => {
     expect(includeReviewDatabaseTestFile("s3_01_review.test.sql", "s3_01")).toBe(true);
     expect(includeReviewDatabaseTestFile("s3_01_review.test.sql", "s3_02")).toBe(true);
     expect(includeReviewDatabaseTestFile("s3_02_review.test.sql", "s3_02")).toBe(true);
+    expect(includeReviewDatabaseTestFile("s3_05_correction_processing.test.sql", "s2")).toBe(false);
+    expect(includeReviewDatabaseTestFile("s3_05_correction_processing.test.sql", "s3_01")).toBe(false);
+    expect(includeReviewDatabaseTestFile("s3_05_correction_processing.test.sql", "s3_02")).toBe(false);
   });
 
   it("opens a transaction before loading ON COMMIT DROP upgrade fixture helpers", () => {

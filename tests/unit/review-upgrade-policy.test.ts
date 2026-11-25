@@ -22,6 +22,13 @@ const s302Migrations = [
   "20261114150500_s3_02_round_commands.sql",
   "20261114150600_s3_02_findings_projection.sql",
 ];
+const s305Migrations = [
+  "20261116120000_s3_05_correction_processing.sql",
+  "20261117120000_s3_05_candidate_lifecycle.sql",
+  "20261117130000_s3_05_member_processing_read.sql",
+  "20261121120000_s3_05_enqueue_lock_budget_fix.sql",
+  "20261121130000_s3_05_correction_worker_reads.sql",
+];
 
 describe("review migration stages", () => {
   it("pins the S3-02 allowlist to the migration files in the repository", () => {
@@ -29,6 +36,13 @@ describe("review migration stages", () => {
       .filter((name) => name.includes("_s3_02_"))
       .sort();
     expect(files).toEqual([...s302Migrations].sort());
+  });
+
+  it("pins the S3-05 allowlist to the migration files in the repository", () => {
+    const files = readdirSync("supabase/migrations")
+      .filter((name) => name.includes("_s3_05_"))
+      .sort();
+    expect(files).toEqual([...s305Migrations].sort());
   });
 
   it("recognizes the S2 baseline and the exact S3-01 migration allowlist", () => {
@@ -41,6 +55,14 @@ describe("review migration stages", () => {
       expect(reviewMigrationStage(`supabase/migrations/${name}`)).toBe("s3_02");
     }
     expect(() => reviewMigrationStage("supabase/migrations/20261108150600_s3_01_unreviewed.sql"))
+      .toThrow("Unreviewed migration in upgrade inventory.");
+  });
+
+  it("classifies S3-05 as a later stage without weakening the unknown-migration guard", () => {
+    for (const name of s305Migrations) {
+      expect(reviewMigrationStage(`supabase/migrations/${name}`)).toBe("s3_05");
+    }
+    expect(() => reviewMigrationStage("supabase/migrations/20990101000000_s9_99_unknown.sql"))
       .toThrow("Unreviewed migration in upgrade inventory.");
   });
 
@@ -59,6 +81,13 @@ describe("review migration stages", () => {
       expect(includeReviewMigration(migration, "s2")).toBe(false);
       expect(includeReviewMigration(migration, "s3_01")).toBe(false);
       expect(includeReviewMigration(migration, "s3_02")).toBe(true);
+    }
+    for (const name of s305Migrations) {
+      const migration = `supabase/migrations/${name}`;
+      expect(includeReviewMigration(migration, "s2")).toBe(false);
+      expect(includeReviewMigration(migration, "s3_01")).toBe(false);
+      expect(includeReviewMigration(migration, "s3_02")).toBe(false);
+      expect(includeReviewMigration(migration, "s3_05")).toBe(true);
     }
     expect(() => includeReviewMigration(s2, "remote" as "s2")).toThrow("Unknown review upgrade stage.");
   });
