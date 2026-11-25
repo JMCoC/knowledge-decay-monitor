@@ -1,4 +1,6 @@
 import { spawnSync } from "node:child_process";
+import { appendFileSync } from "node:fs";
+import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { chooseDeployment } from "./deployment-policy.mjs";
@@ -7,8 +9,8 @@ const PROJECT_ROOT = fileURLToPath(new URL("../", import.meta.url));
 const REPOSITORY = "JMCoC/knowledge-decay-monitor";
 const VERCEL_SCOPE = "kdm17";
 const VERCEL_CLI = "vercel@62.2.0";
-const PREVIEW_DOMAIN = "kdm17.vercel.app";
 const CHILD_TIMEOUT_MS = 15 * 60 * 1000;
+const LOGIN_MARKER = "Sign in to continue to your workspace.";
 
 /**
  * @typedef {(command: string, args: string[], options: import("node:child_process").SpawnSyncOptionsWithStringEncoding) => {
@@ -59,7 +61,7 @@ function ghEnvironment(source) {
   };
 }
 
-function vercelEnvironment(source, { build = false, sha, sentryTarget, appOrigin } = {}) {
+function vercelEnvironment(source, { build = false, sha, appOrigin } = {}) {
   const result = {
     ...platformEnvironment(source),
     VERCEL_TOKEN: source.VERCEL_TOKEN,
@@ -74,7 +76,7 @@ function vercelEnvironment(source, { build = false, sha, sentryTarget, appOrigin
       NEXT_PUBLIC_KDM_DISABLE_SENTRY: "0",
       KDM_DISABLE_SENTRY: "0",
       NEXT_PUBLIC_KDM_SENTRY_LOCAL_ENABLED: "0",
-      NEXT_PUBLIC_KDM_SENTRY_TARGET: sentryTarget,
+      NEXT_PUBLIC_KDM_SENTRY_TARGET: "production",
       NEXT_PUBLIC_KDM_RELEASE: sha,
       SENTRY_RELEASE: sha,
       SENTRY_AUTH_TOKEN: source.SENTRY_AUTH_TOKEN,
@@ -173,61 +175,22 @@ function readCurrentEvent(env, spawnCommand, cwd) {
   const eventName = env.GITHUB_EVENT_NAME;
   const ref = env.GITHUB_REF;
   const repository = env.GITHUB_REPOSITORY;
-  if (repository !== REPOSITORY || !ref || !eventName) {
+  if (repository !== REPOSITORY || ref !== "refs/heads/main" || eventName !== "push") {
     throw new Error("GitHub deployment context is invalid.");
   }
 
-  if (eventName === "pull_request") {
-    const prNumber = Number(env.PR_NUMBER);
-    if (!Number.isSafeInteger(prNumber) || prNumber <= 0 || String(prNumber) !== env.PR_NUMBER) {
-      throw new Error("GitHub pull request number is invalid.");
-    }
-    const output = runProcess(
-      spawnCommand,
-      "gh",
-      [
-        "api",
-        `repos/${REPOSITORY}/pulls/${prNumber}`,
-        "--jq",
-        "{state, draft, headSha: .head.sha, headRepository: .head.repo.full_name}",
-      ],
-      { cwd, env: ghEnvironment(env), timeout: 30_000 },
-      "GitHub pull request check",
-    );
-    const pullRequest = parseJson(output, "GitHub pull request check");
-    return {
-      eventName,
-      ref,
-      repository,
-      prNumber,
-      prState: pullRequest?.state,
-      draft: pullRequest?.draft,
-      headSha: pullRequest?.headSha,
-      headRepository: pullRequest?.headRepository,
-    };
-  }
-
-  if (eventName === "push") {
-    const output = runProcess(
-      spawnCommand,
-      "gh",
-      ["api", `repos/${REPOSITORY}/branches/main`, "--jq", "{headSha: .commit.sha}"],
-      { cwd, env: ghEnvironment(env), timeout: 30_000 },
-      "GitHub main branch check",
-    );
-    const branch = parseJson(output, "GitHub main branch check");
-    return {
-      eventName,
-      ref,
-      repository,
-      headSha: branch?.headSha,
-    };
-  }
-
-  return { eventName, ref, repository };
+  const output = runProcess(
+    spawnCommand,
+    "gh",
+    ["api", `repos/${REPOSITORY}/branches/main`, "--jq", "{headSha: .commit.sha}"],
+    { cwd, env: ghEnvironment(env), timeout: 30_000 },
+    "GitHub main branch check",
+  );
+  const branch = parseJson(output, "GitHub main branch check");
+  return { eventName, ref, repository, headSha: branch?.headSha };
 }
 
-function currentDeploymentDecision(target, env, spawnCommand, cwd) {
+function currentDeploymentDecision(env, spawnCommand, cwd) {
   readAuthorizedActors(env, spawnCommand, cwd);
   const current = readCurrentEvent(env, spawnCommand, cwd);
   const decision = chooseDeployment({
@@ -236,7 +199,7 @@ function currentDeploymentDecision(target, env, spawnCommand, cwd) {
     testedSha: env.TESTED_SHA,
     authorizedActor: true,
   });
-  if (!decision || decision.target !== target) {
+  if (!decision) {
     throw new Error("Current GitHub revision is not eligible for this deployment.");
   }
   return decision;
@@ -267,16 +230,6 @@ function parseHttpsOrigin(value) {
   } catch {
     return null;
   }
-}
-
-function deploymentOrigin(decision, env) {
-  if (decision.target === "preview") {
-    const alias = `kdm-pr-${decision.prNumber}-${PREVIEW_DOMAIN}`;
-    return { appOrigin: `https://${alias}`, alias };
-  }
-  const appOrigin = parseHttpsOrigin(env.APP_ORIGIN);
-  if (!appOrigin) throw new Error("Production APP_ORIGIN is invalid.");
-  return { appOrigin };
 }
 
 function validVercelConfiguration(env) {
@@ -357,17 +310,89 @@ function vercelCommand(spawnCommand, operation, args, env, stage, buildOptions) 
   );
 }
 
+async function retryCheck(check, delay) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await delay(2_000);
+    try {
+      return await check();
+    } catch (error) {
+      if (attempt === 2) throw error;
+    }
+  }
+}
+
+async function checkLogin(origin, fetchPage, delay, bypassSecret) {
+  await retryCheck(async () => {
+    let response;
+    try {
+      response = await fetchPage(new URL("/login", origin), {
+        redirect: "manual",
+        signal: AbortSignal.timeout(10_000),
+        headers: {
+          "Cache-Control": "no-cache",
+          ...(bypassSecret && { "x-vercel-protection-bypass": bypassSecret }),
+        },
+      });
+    } catch {
+      throw new DeploymentDiagnosticError("reason=login_request_failed");
+    }
+    if (response.status !== 200 ||
+        !/^text\/html(?:\s*;|$)/i.test(response.headers.get("content-type") ?? "")) {
+      await response.body?.cancel();
+      throw new DeploymentDiagnosticError(`reason=unexpected_login_response; status=${response.status}`);
+    }
+    if (!(await response.text()).includes(LOGIN_MARKER)) {
+      throw new DeploymentDiagnosticError("reason=login_marker_missing");
+    }
+  }, delay);
+}
+
+function readProductionAlias(appOrigin, spawnCommand, env) {
+  const hostname = new URL(appOrigin).hostname;
+  const stage = "Vercel Production alias check";
+  const output = vercelCommand(
+    spawnCommand,
+    "api",
+    [`/v4/aliases/${hostname}`, "--method", "GET", "--raw", "--scope", VERCEL_SCOPE],
+    env,
+    stage,
+  );
+  const alias = parseJson(output, stage);
+  if (alias?.alias !== hostname || alias?.projectId !== env.VERCEL_PROJECT_ID ||
+      typeof alias?.deploymentId !== "string" || !/^dpl_[A-Za-z0-9]+$/.test(alias.deploymentId)) {
+    throw new DeploymentDiagnosticError("reason=production_alias_unverified");
+  }
+  return alias.deploymentId;
+}
+
+function writeRunSummary(report) {
+  if (!process.env.GITHUB_STEP_SUMMARY) return;
+  const rows = Object.entries(report).map(([label, value]) => `| ${label} | ${value} |`);
+  appendFileSync(process.env.GITHUB_STEP_SUMMARY, [
+    "### Production web deployment",
+    "",
+    "| Check | Result |",
+    "| --- | --- |",
+    ...rows,
+    "",
+    "",
+  ].join("\n"));
+}
+
 /**
- * @param {"preview" | "production"} target
+ * @param {"production"} target
  * @param {object} [options]
  * @param {Record<string, string | undefined>} [options.env]
  * @param {SpawnCommand} [options.spawnCommand]
  * @param {(message: string) => void} [options.log]
  * @param {boolean} [options.preflightOnly]
  * @param {string} [options.projectRoot]
- * @returns {number}
+ * @param {typeof fetch} [options.fetchPage]
+ * @param {(ms: number) => Promise<void>} [options.delay]
+ * @param {(report: Record<string, string>) => void} [options.summarize]
+ * @returns {Promise<number>}
  */
-export function runDeployment(
+export async function runDeployment(
   target,
   {
     env = process.env,
@@ -375,17 +400,31 @@ export function runDeployment(
     log = console.log,
     preflightOnly = false,
     projectRoot = PROJECT_ROOT,
+    fetchPage = fetch,
+    delay = sleep,
+    summarize = writeRunSummary,
   } = {},
 ) {
+  const report = {
+    "GitHub run": /^\d+$/.test(env.GITHUB_RUN_ID ?? "") ? env.GITHUB_RUN_ID : "Unavailable",
+    "Tested SHA": "Unverified",
+    "Candidate deployment": "Unavailable",
+    "Candidate login": "Not run",
+    "Previous deployment": "Unavailable",
+    "Promotion": "Not attempted",
+    "Public alias": "Not checked",
+    "Public login": "Not run",
+  };
   let stage = "GitHub preflight";
   try {
     if (
-      (target !== "preview" && target !== "production") ||
+      target !== "production" ||
       env.GITHUB_ACTIONS !== "true" ||
-      env.KDM_DEPLOY_ENVIRONMENT !== (target === "preview" ? "Preview" : "Production") ||
+      env.KDM_DEPLOY_ENVIRONMENT !== "Production" ||
       env.QUALITY_RESULT !== "success" ||
       typeof env.TESTED_SHA !== "string" ||
-      !/^[0-9a-f]{40}$/i.test(env.TESTED_SHA)
+      !/^[0-9a-f]{40}$/i.test(env.TESTED_SHA) ||
+      env.TESTED_SHA !== env.GITHUB_SHA
     ) {
       throw new Error("Deployment inputs are invalid.");
     }
@@ -401,8 +440,10 @@ export function runDeployment(
       throw new Error("The checkout does not match the tested SHA.");
     }
 
-    const decision = currentDeploymentDecision(target, env, spawnCommand, projectRoot);
-    const { appOrigin, alias } = deploymentOrigin(decision, env);
+    const decision = currentDeploymentDecision(env, spawnCommand, projectRoot);
+    report["Tested SHA"] = decision.sha;
+    const appOrigin = parseHttpsOrigin(env.APP_ORIGIN);
+    if (!appOrigin) throw new Error("Production APP_ORIGIN is invalid.");
     if (preflightOnly) {
       log(`Deployment preflight passed for ${target} at ${decision.sha}.`);
       return 0;
@@ -416,7 +457,7 @@ export function runDeployment(
       "pull",
       [
         "--yes",
-        `--environment=${target}`,
+        "--environment=production",
         "--scope",
         VERCEL_SCOPE,
         "--project",
@@ -430,7 +471,6 @@ export function runDeployment(
     const buildOptions = {
       build: true,
       sha: decision.sha,
-      sentryTarget: target,
       appOrigin,
     };
     vercelCommand(
@@ -442,7 +482,7 @@ export function runDeployment(
         VERCEL_SCOPE,
         "--project",
         env.VERCEL_PROJECT_ID,
-        ...(target === "production" ? ["--prod"] : ["--target=preview"]),
+        "--prod",
       ],
       env,
       stage,
@@ -450,10 +490,7 @@ export function runDeployment(
     );
 
     stage = "GitHub pre-deployment revision check";
-    const beforeDeploy = currentDeploymentDecision(target, env, spawnCommand, projectRoot);
-    if (beforeDeploy.sha !== decision.sha || beforeDeploy.prNumber !== decision.prNumber) {
-      throw new Error("The source revision changed during the build.");
-    }
+    currentDeploymentDecision(env, spawnCommand, projectRoot);
 
     stage = "Vercel deploy";
     const deployArgs = [
@@ -469,7 +506,8 @@ export function runDeployment(
       `APP_ORIGIN=${appOrigin}`,
       "--env",
       "KDM_DISABLE_SENTRY=0",
-      ...(target === "production" ? ["--prod", "--skip-domain"] : ["--target=preview"]),
+      "--prod",
+      "--skip-domain",
       "--meta",
       `githubCommitSha=${decision.sha}`,
       "--meta",
@@ -482,6 +520,7 @@ export function runDeployment(
     const created = parseCreatedDeployment(
       vercelCommand(spawnCommand, "deploy", deployArgs, env, stage),
     );
+    report["Candidate deployment"] = created.id;
 
     stage = "Vercel READY wait";
     vercelCommand(
@@ -503,41 +542,62 @@ export function runDeployment(
     );
     inspectReadyDeployment(metadata, created, decision, env);
 
-    stage = "GitHub pre-publication revision check";
-    const beforePublish = currentDeploymentDecision(target, env, spawnCommand, projectRoot);
-    if (beforePublish.sha !== decision.sha || beforePublish.prNumber !== decision.prNumber) {
-      throw new Error("The source revision changed before publication.");
+    stage = "Candidate login smoke";
+    report["Candidate login"] = "Failed";
+    if (created.url === appOrigin) {
+      throw new DeploymentDiagnosticError("reason=candidate_url_is_public_alias");
     }
+    await checkLogin(created.url, fetchPage, delay, env.VERCEL_AUTOMATION_BYPASS_SECRET);
+    report["Candidate login"] = "Passed";
 
-    if (target === "preview") {
-      stage = "Vercel Preview alias";
-      vercelCommand(
-        spawnCommand,
-        "alias",
-        ["set", created.url, alias, "--scope", VERCEL_SCOPE],
-        env,
-        stage,
-      );
-      log(`Preview ready: ${created.id} ${created.url} ${decision.sha}`);
-    } else {
-      stage = "Vercel Production promotion";
-      vercelCommand(
-        spawnCommand,
-        "promote",
-        [created.url, "--yes", "--scope", VERCEL_SCOPE],
-        env,
-        stage,
-      );
-      log(`Production promoted: ${created.id} ${created.url} ${decision.sha}`);
-    }
+    stage = "Previous Production alias check";
+    report["Previous deployment"] = await retryCheck(
+      () => readProductionAlias(appOrigin, spawnCommand, env),
+      delay,
+    );
+
+    stage = "GitHub pre-publication revision check";
+    currentDeploymentDecision(env, spawnCommand, projectRoot);
+
+    stage = "Vercel Production promotion";
+    report["Promotion"] = "Attempted, outcome uncertain";
+    vercelCommand(
+      spawnCommand,
+      "promote",
+      [created.id, "--yes", "--scope", VERCEL_SCOPE],
+      env,
+      stage,
+    );
+    report["Promotion"] = "Command succeeded";
+
+    stage = "Public alias verification";
+    report["Public alias"] = "Failed";
+    await retryCheck(() => {
+      const activeId = readProductionAlias(appOrigin, spawnCommand, env);
+      if (activeId !== created.id) {
+        throw new DeploymentDiagnosticError(`reason=production_alias_mismatch; active=${activeId}`);
+      }
+    }, delay);
+    report["Public alias"] = "Passed";
+
+    stage = "Public login smoke";
+    report["Public login"] = "Failed";
+    await checkLogin(appOrigin, fetchPage, delay);
+    report["Public login"] = "Passed";
+    log(`Production verified: ${created.id} ${decision.sha}`);
 
     return 0;
   } catch (error) {
-    log(preflightOnly ? "Deployment preflight denied." : `Deployment stopped safely during ${stage}.`);
+    log(preflightOnly ? "Deployment preflight denied." : `Deployment failed during ${stage}.`);
     if (!preflightOnly && error instanceof DeploymentDiagnosticError) {
       log(`Deployment diagnostic: ${error.message}`);
     }
+    if (report["Promotion"] !== "Not attempted") {
+      log(`Check the live Production alias before retry or rollback. Previous: ${report["Previous deployment"]}. Candidate: ${report["Candidate deployment"]}.`);
+    }
     return 1;
+  } finally {
+    if (!preflightOnly) summarize(report);
   }
 }
 
@@ -545,13 +605,13 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const [target, mode, ...extra] = process.argv.slice(2);
   const preflightOnly = mode === "--preflight" && extra.length === 0;
   if (
-    (target !== "preview" && target !== "production") ||
+    target !== "production" ||
     extra.length > 0 ||
     (mode && !preflightOnly)
   ) {
-    console.error("Usage: node scripts/deploy-vercel.mjs <preview|production> [--preflight]");
+    console.error("Usage: node scripts/deploy-vercel.mjs production [--preflight]");
     process.exitCode = 2;
   } else {
-    process.exitCode = runDeployment(target, { preflightOnly });
+    process.exitCode = await runDeployment(target, { preflightOnly });
   }
 }

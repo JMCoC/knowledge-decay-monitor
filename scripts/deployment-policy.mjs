@@ -19,7 +19,7 @@ function isExpectedRepository(value) {
 
 /**
  * @param {unknown} value
- * @returns {{target: "preview" | "production", sha: string, prNumber?: number} | null}
+ * @returns {{target: "production", sha: string} | null}
  */
 export function chooseDeployment(value) {
   if (!isRecord(value)) return null;
@@ -32,22 +32,6 @@ export function chooseDeployment(value) {
     !sameCommit(input.testedSha, input.headSha)
   ) {
     return null;
-  }
-
-  if (input.eventName === "pull_request") {
-    if (
-      input.prState !== "open" ||
-      input.draft !== false ||
-      !isExpectedRepository(input.headRepository) ||
-      typeof input.prNumber !== "number" ||
-      !Number.isSafeInteger(input.prNumber) ||
-      input.prNumber <= 0 ||
-      input.ref !== `refs/pull/${input.prNumber}/merge`
-    ) {
-      return null;
-    }
-
-    return { target: "preview", sha: input.testedSha, prNumber: input.prNumber };
   }
 
   if (input.eventName === "push" && input.ref === "refs/heads/main") {

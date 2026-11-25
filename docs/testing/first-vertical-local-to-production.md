@@ -255,6 +255,16 @@ Node da prioridad a variables heredadas del proceso sobre el archivo: usa una te
 6. Antes de cada demo verifica `http://127.0.0.1:<puerto>/health`, cola y Sentry desde el equipo; sube un documento sintético desde la web remota hasta Ready. No abras el puerto al público; el worker solo necesita HTTPS saliente hacia Supabase. Prueba pérdida de conexión y recuperación sin duplicados. Fuera del horario de pruebas, Queued por worker apagado es el comportamiento esperado. Durante la sesión verifica manualmente que siga ejecutándose.
 7. Si eliges Docker en lugar de Node directo, usa el CMD de la imagen probada, variables privadas por archivo y reinicio automático. En ese caso fija digest/ID probado. Ninguna modalidad requiere Edge Function `embed` ni un servicio de embeddings de pago.
 
+### Ensayo de distribución del worker con GHCR
+
+Cada push con CI verde a `develop` deja **Publish Worker Lab image** en espera de aprobación en GitHub Actions. Un mantenedor distinto del iniciador revisa el SHA y aprueba el Environment `Worker Lab`. El job construye el candidato final, pasa el smoke local y publica esa imagen con una etiqueta `sha-<SHA completo>` en el paquete privado `ghcr.io/jmcoc/kdm-ingestion-lab-private`.
+
+El paquete se aprovisiona con una imagen `bootstrap` inocua publicada desde la cuenta propietaria. Antes de la primera publicación del worker, comprobar que el paquete sea privado y que **Manage Actions access** conceda `Write` a `JMCoC/knowledge-decay-monitor`. El publicador exige poder leer el paquete y confirmar su visibilidad antes de subir la imagen.
+
+**Deploy Worker Lab image** descarga el digest devuelto por GHCR desde otro runner y comprueba que su ID coincide con el de la imagen probada. Arranca el worker con un Supabase descartable, confirma `/health` y procesa un original sintético hasta `ready` con versión `active`. Al terminar se limpian el contenedor, el fixture y el stack.
+
+El resumen de Actions vincula el SHA, la etiqueta, el digest, el ID y el resultado del procesamiento. Si GHCR rechaza la publicación o la lectura, comprobar en el paquete privado que `JMCoC/knowledge-decay-monitor` tiene acceso de Actions. Si la etiqueta ya existe, solo se reutiliza cuando corresponde al mismo ID de imagen. Para diagnosticar errores, usar el paso fallido y la evidencia del run.
+
 ## 12. Corte remoto: un Supabase para ambos ambientes
 
 Sigue el [runbook de corte](first-vertical-cutover.md) para SQL, inventario, rollback y recuperación de documentos. El MCP confirmó hoy 14 migraciones, upload activo y cuatro v1 confirmadas/uploaded sin puntero activo. Faltan estas siete:

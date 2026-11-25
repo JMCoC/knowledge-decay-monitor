@@ -15,6 +15,9 @@ jobs:
     name: Quality gates
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    concurrency:
+      group: quality-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     env:
       ONNXRUNTIME_NODE_INSTALL: skip
     outputs:
@@ -23,7 +26,7 @@ jobs:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Record tested source SHA
@@ -51,6 +54,9 @@ jobs:
 
       - name: Unit tests
         run: pnpm test:unit
+
+      - name: Worker Lab registry regression tests
+        run: bash tests/runtime/worker-lab-registry.test.sh
 
       - name: Edge notification Sentry test (runtime network disabled)
         run: pnpm dlx deno@2.9.6 test --config supabase/functions/dispatch-notifications/deno.json --node-modules-dir=none --allow-env tests/edge/notifications-sentry.test.ts
@@ -106,20 +112,27 @@ jobs:
         if: always()
         run: node scripts/local-supabase-lifecycle.mjs stop
 
-  preview:
+  publish_worker_lab:
+    name: Publish Worker Lab image
     needs: quality
     if: >-
-      ${{ needs.quality.result == 'success' && github.event_name == 'pull_request' &&
-          github.event.pull_request.head.repo.full_name == github.repository &&
-          !github.event.pull_request.draft }}
+      ${{ needs.quality.result == 'success' && github.event_name == 'push' &&
+          github.ref == 'refs/heads/develop' && github.repository == 'JMCoC/knowledge-decay-monitor' }}
     runs-on: ubuntu-latest
-    environment: Preview
+    timeout-minutes: 40
+    environment: Worker Lab
+    concurrency:
+      group: worker-lab-publish-${{ github.sha }}
+      cancel-in-progress: false
     permissions:
       contents: read
-      pull-requests: read
-    concurrency:
-      group: preview-${{ github.event.pull_request.number }}
-      cancel-in-progress: false
+      packages: write
+    env:
+      TESTED_SHA: ${{ needs.quality.outputs.tested_sha }}
+      ONNXRUNTIME_NODE_INSTALL: skip
+    outputs:
+      image_ref: ${{ steps.registry.outputs.image_ref }}
+      image_id: ${{ steps.registry.outputs.image_id }}
     steps:
       - name: Check out tested source SHA
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -133,42 +146,134 @@ jobs:
           node-version: 24.11.0
           package-manager-cache: false
 
-      - name: Install pnpm
-        run: npm install --global pnpm@12.5.1
+      - name: Install dependencies
+        run: |
+          npm install --global pnpm@12.5.1
+          pnpm install --frozen-lockfile
+
+      - name: Build final worker image
+        id: worker_image
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$TESTED_SHA"
+          docker build \
+            --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$TESTED_SHA" \
+            -f Dockerfile.ingestion -t "kdm-ingestion:$TESTED_SHA" .
+          printf 'image_id=%s\n' "$(docker image inspect --format '{{.Id}}' "kdm-ingestion:$TESTED_SHA")" >> "$GITHUB_OUTPUT"
+
+      - name: Start disposable local Supabase
+        id: lab_db
+        run: node scripts/local-supabase-lifecycle.mjs start
+
+      - name: Verify the exact image before publication
+        id: smoke
+        env:
+          KDM_WORKER_IMAGE: kdm-ingestion:${{ needs.quality.outputs.tested_sha }}
+        run: pnpm test:worker:image
+
+      - name: Stop disposable local Supabase
+        if: ${{ always() && steps.lab_db.outcome != '' && steps.lab_db.outcome != 'skipped' }}
+        run: node scripts/local-supabase-lifecycle.mjs stop
+
+      - name: Publish tested image to private GHCR
+        id: registry
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TESTED_IMAGE_ID: ${{ steps.worker_image.outputs.image_id }}
+        run: bash scripts/worker-lab-registry.sh publish
+
+      - name: Record Worker Lab publication
+        if: always()
+        env:
+          BUILD_RESULT: ${{ steps.worker_image.outcome }}
+          SMOKE_RESULT: ${{ steps.smoke.outcome }}
+          PUBLISH_RESULT: ${{ steps.registry.outcome }}
+          TESTED_IMAGE_ID: ${{ steps.worker_image.outputs.image_id }}
+          IMAGE_REF: ${{ steps.registry.outputs.image_ref }}
+        shell: bash
+        run: |
+          {
+            printf '### Worker Lab publication\n\n'
+            printf -- '- Tested SHA: `%s`\n' "$TESTED_SHA"
+            printf -- '- Image build: %s\n' "${BUILD_RESULT:-not run}"
+            printf -- '- Pre-publication smoke: %s\n' "${SMOKE_RESULT:-not run}"
+            printf -- '- Private GHCR publication: %s\n' "${PUBLISH_RESULT:-not run}"
+            if [[ -n $IMAGE_REF ]]; then
+              printf -- '- Published tag: `%s:sha-%s`\n' "${IMAGE_REF%@*}" "$TESTED_SHA"
+              printf -- '- Published digest: `%s`\n' "$IMAGE_REF"
+              printf -- '- Tested image ID: `%s`\n' "$TESTED_IMAGE_ID"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy_worker_lab:
+    name: Deploy Worker Lab image
+    needs: [quality, publish_worker_lab]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      packages: read
+    env:
+      TESTED_SHA: ${{ needs.quality.outputs.tested_sha }}
+      TESTED_IMAGE_ID: ${{ needs.publish_worker_lab.outputs.image_id }}
+      KDM_WORKER_IMAGE: ${{ needs.publish_worker_lab.outputs.image_ref }}
+      ONNXRUNTIME_NODE_INSTALL: skip
+    steps:
+      - name: Check out tested source SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.quality.outputs.tested_sha }}
+          persist-credentials: false
+
+      - name: Pull and verify the published digest
+        id: pull
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_REF: ${{ needs.publish_worker_lab.outputs.image_ref }}
+        run: bash scripts/worker-lab-registry.sh pull
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.11.0
+          package-manager-cache: false
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: |
+          npm install --global pnpm@12.5.1
+          pnpm install --frozen-lockfile
 
-      - name: Verify tested checkout
-        env:
-          TESTED_SHA: ${{ needs.quality.outputs.tested_sha }}
-        run: test "$(git rev-parse HEAD)" = "$TESTED_SHA"
+      - name: Start disposable local Supabase
+        id: lab_db
+        run: node scripts/local-supabase-lifecycle.mjs start
 
-      - name: Verify current PR and actor permissions
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GITHUB_ACTOR: ${{ github.actor }}
-          GITHUB_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-          QUALITY_RESULT: ${{ needs.quality.result }}
-          TESTED_SHA: ${{ needs.quality.outputs.tested_sha }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          KDM_DEPLOY_ENVIRONMENT: Preview
-        run: node scripts/deploy-vercel.mjs preview --preflight
+      - name: Deploy the pulled image and process a synthetic original
+        id: smoke
+        run: pnpm test:worker:image
 
-      - name: Deploy verified Preview
+      - name: Stop disposable local Supabase
+        id: cleanup
+        if: ${{ always() && steps.lab_db.outcome != '' && steps.lab_db.outcome != 'skipped' }}
+        run: node scripts/local-supabase-lifecycle.mjs stop
+
+      - name: Record Worker Lab deployment
+        if: always()
         env:
-          GH_TOKEN: ${{ github.token }}
-          GITHUB_ACTOR: ${{ github.actor }}
-          GITHUB_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
-          QUALITY_RESULT: ${{ needs.quality.result }}
-          TESTED_SHA: ${{ needs.quality.outputs.tested_sha }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          KDM_DEPLOY_ENVIRONMENT: Preview
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-        run: node scripts/deploy-vercel.mjs preview
+          PULL_RESULT: ${{ steps.pull.outcome }}
+          SMOKE_RESULT: ${{ steps.smoke.outcome }}
+          CLEANUP_RESULT: ${{ steps.cleanup.outcome }}
+        shell: bash
+        run: |
+          {
+            printf '### Worker Lab deployment\n\n'
+            printf -- '- Tested SHA: `%s`\n' "$TESTED_SHA"
+            printf -- '- Deployed digest: `%s`\n' "$KDM_WORKER_IMAGE"
+            printf -- '- Expected image ID: `%s`\n' "$TESTED_IMAGE_ID"
+            printf -- '- Download and identity check: %s\n' "${PULL_RESULT:-not run}"
+            printf -- '- Readiness and synthetic ingestion: %s\n' "${SMOKE_RESULT:-not run}"
+            printf -- '- Supabase cleanup: %s\n' "${CLEANUP_RESULT:-not run}"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   production:
     needs: quality
@@ -230,4 +335,5 @@ jobs:
           VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: node scripts/deploy-vercel.mjs production

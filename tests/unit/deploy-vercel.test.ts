@@ -5,32 +5,42 @@ const repository = "JMCoC/knowledge-decay-monitor";
 const sha = "a".repeat(40);
 const projectId = "prj_project123";
 const deploymentId = "dpl_deployment123";
-const deploymentUrl = "https://kdm-preview-123.vercel.app";
+const deploymentUrl = "https://kdm-candidate-123.vercel.app";
+const previousId = "dpl_previous123";
+const appOrigin = "https://www.example.com";
+const loginHtml = "<p>Sign in to continue to your workspace.</p>";
 
-function environment(target: "preview" | "production" = "preview") {
+function environment() {
   return {
     GITHUB_ACTIONS: "true",
-    GITHUB_EVENT_NAME: target === "preview" ? "pull_request" : "push",
-    GITHUB_REF: target === "preview" ? "refs/pull/8/merge" : "refs/heads/main",
+    GITHUB_EVENT_NAME: "push",
+    GITHUB_REF: "refs/heads/main",
     GITHUB_REPOSITORY: repository,
     GITHUB_ACTOR: "maintainer",
     GITHUB_TRIGGERING_ACTOR: "maintainer",
-    GITHUB_SHA: target === "preview" ? "b".repeat(40) : sha,
+    GITHUB_SHA: sha,
     QUALITY_RESULT: "success",
     TESTED_SHA: sha,
-    PR_NUMBER: target === "preview" ? "8" : "",
-    KDM_DEPLOY_ENVIRONMENT: target === "preview" ? "Preview" : "Production",
+    GITHUB_RUN_ID: "12345",
+    KDM_DEPLOY_ENVIRONMENT: "Production",
     GH_TOKEN: "GH_TOKEN_SENTINEL",
     VERCEL_TOKEN: "VERCEL_TOKEN_SENTINEL",
     VERCEL_ORG_ID: "team_abc123",
     VERCEL_PROJECT_ID: projectId,
     SENTRY_AUTH_TOKEN: "SENTRY_TOKEN_SENTINEL",
-    APP_ORIGIN: target === "preview" ? "" : "https://www.example.com",
+    APP_ORIGIN: appOrigin,
+    VERCEL_AUTOMATION_BYPASS_SECRET: "BYPASS_SENTINEL",
   };
 }
 
+function htmlResponse(body = loginHtml, status = 200) {
+  return new Response(body, { status, headers: { "Content-Type": "text/html; charset=utf-8" } });
+}
+
 function createHarness({
-  target = "preview",
+  aliasAfterPromotion = deploymentId,
+  candidateResponse = () => htmlResponse(),
+  publicResponse = () => htmlResponse(),
   currentHeads = [sha, sha, sha],
   inspectedProjectId = projectId,
   inspectedSha = sha,
@@ -42,7 +52,9 @@ function createHarness({
   failureStdout = "",
   preflight = false,
 }: {
-  target?: "preview" | "production";
+  aliasAfterPromotion?: string;
+  candidateResponse?: () => Response;
+  publicResponse?: () => Response;
   currentHeads?: string[];
   inspectedProjectId?: string;
   inspectedSha?: string;
@@ -56,7 +68,11 @@ function createHarness({
 } = {}) {
   const calls: Array<{ command: string; args: string[]; options: { env?: Record<string, string | undefined>; shell?: boolean | string } }> = [];
   const logs: string[] = [];
-  const env = environment(target);
+  const env = environment();
+  const summaries: Record<string, string>[] = [];
+  const sequence: string[] = [];
+  const requests: { url: string; options?: RequestInit }[] = [];
+  let promoted = false;
   let headIndex = 0;
 
   const spawnCommand = (
@@ -69,21 +85,10 @@ function createHarness({
     if (command === "git") return { status: 0, stdout: `${sha}\n`, stderr: "" };
     if (command === "gh") {
       const endpoint = args[1] ?? "";
-      if (endpoint.includes("/pulls/")) {
-        const headSha = currentHeads[Math.min(headIndex++, currentHeads.length - 1)];
-        return {
-          status: 0,
-          stdout: JSON.stringify({
-            state: "open",
-            draft: false,
-            headSha,
-            headRepository: repository,
-          }),
-          stderr: "",
-        };
-      }
       if (endpoint.includes("/branches/main")) {
-        return { status: 0, stdout: JSON.stringify({ headSha: sha }), stderr: "" };
+        const headSha = currentHeads[Math.min(headIndex++, currentHeads.length - 1)];
+        sequence.push("main");
+        return { status: 0, stdout: JSON.stringify({ headSha }), stderr: "" };
       }
       if (endpoint.includes("/collaborators/")) {
         const actorPermission = endpoint.includes("/readonly/") ? "read" : permission;
@@ -106,7 +111,19 @@ function createHarness({
         // CLI 62.2.0 deliberately omits projectId and meta from inspect JSON.
         return {
           status: 0,
-          stdout: JSON.stringify({ id: deploymentId, name: "knowledge-decay-monitor", url: deploymentUrl, target, readyState, createdAt: 1 }),
+          stdout: JSON.stringify({ id: deploymentId, name: "knowledge-decay-monitor", url: deploymentUrl, target: "production", readyState, createdAt: 1 }),
+          stderr: "",
+        };
+      }
+      if (operation === "promote") {
+        sequence.push("promote");
+        promoted = true;
+      }
+      if (operation === "api" && args[3].startsWith("/v4/aliases/")) {
+        sequence.push("alias");
+        return {
+          status: 0,
+          stdout: JSON.stringify({ alias: "www.example.com", projectId, deploymentId: promoted ? aliasAfterPromotion : previousId }),
           stderr: "",
         };
       }
@@ -122,7 +139,7 @@ function createHarness({
               githubCommitSha: inspectedSha,
               kdmTestedSha: inspectedSha,
               kdmRepository: repository,
-              kdmTarget: target,
+              kdmTarget: "production",
             },
           }),
           stderr: "",
@@ -136,11 +153,29 @@ function createHarness({
   return {
     calls,
     logs,
+    requests,
+    sequence,
+    summaries,
     environment: env,
     run(options: { preflightOnly?: boolean } = {}) {
-      return runDeployment(target, {
+      return runDeployment("production", {
         env,
         spawnCommand,
+        fetchPage: async (input, options) => {
+          const url = String(input);
+          requests.push({ url, options });
+          if (url === `${deploymentUrl}/login`) {
+            sequence.push("candidate login");
+            return candidateResponse();
+          }
+          if (url === `${appOrigin}/login`) {
+            sequence.push("public login");
+            return publicResponse();
+          }
+          throw new Error("Unexpected smoke URL");
+        },
+        delay: async () => {},
+        summarize: (report) => summaries.push(report),
         log: (message: string) => logs.push(message),
         preflightOnly: options.preflightOnly ?? preflight,
       });
@@ -156,11 +191,11 @@ function operation(call: ReturnType<typeof createHarness>["calls"][number]) {
   return call.args[2];
 }
 
-describe("Vercel deploy runner", () => {
-  it("preflights GitHub authorization without invoking Vercel or receiving Vercel credentials", () => {
+describe("Vercel deploy runner", async () => {
+  it("preflights GitHub authorization without invoking Vercel or receiving Vercel credentials", async () => {
     const harness = createHarness({ preflight: true });
 
-    expect(harness.run()).toBe(0);
+    expect(await harness.run()).toBe(0);
     expect(vercelCalls(harness.calls)).toHaveLength(0);
     expect(harness.calls.some((call) => call.command === "gh")).toBe(true);
     expect(harness.calls.filter((call) => call.command === "gh").every((call) =>
@@ -168,60 +203,28 @@ describe("Vercel deploy runner", () => {
     )).toBe(true);
   });
 
-  it("does not use Vercel credentials for an actor without write access", () => {
+  it("does not use Vercel credentials for an actor without write access", async () => {
     const harness = createHarness({ permission: "read" });
 
-    expect(harness.run()).toBe(1);
+    expect(await harness.run()).toBe(1);
     expect(vercelCalls(harness.calls)).toHaveLength(0);
     expect(harness.logs.join("\n")).not.toMatch(/VERCEL_TOKEN_SENTINEL|SENTRY_TOKEN_SENTINEL/);
   });
 
-  it("checks the triggering actor again on workflow reruns", () => {
+  it("checks the triggering actor again on workflow reruns", async () => {
     const harness = createHarness();
     harness.environment.GITHUB_TRIGGERING_ACTOR = "readonly";
 
-    expect(harness.run()).toBe(1);
+    expect(await harness.run()).toBe(1);
     expect(vercelCalls(harness.calls)).toHaveLength(0);
   });
 
-  it("builds and aliases only a ready Preview deployment for the exact tested SHA", () => {
+  it("promotes only a ready Production deployment built from the current main SHA", async () => {
     const harness = createHarness();
 
-    expect(harness.run()).toBe(0);
+    expect(await harness.run()).toBe(0);
     const calls = vercelCalls(harness.calls);
-    expect(calls.map(operation)).toEqual(["pull", "build", "deploy", "inspect", "api", "alias"]);
-    expect(calls[4].args).toContain(`/v13/deployments/${deploymentId}`);
-    expect(calls[4].args).toContain("GET");
-
-    const pull = calls[0];
-    expect(pull.args).toContain("--environment=preview");
-    expect(pull.args).toContain("--project");
-    const build = calls[1];
-    expect(build.args).toContain("--target=preview");
-    expect(build.options.env).toMatchObject({
-      NEXT_PUBLIC_KDM_SENTRY_TARGET: "preview",
-      NEXT_PUBLIC_KDM_RELEASE: sha,
-      SENTRY_RELEASE: sha,
-      APP_ORIGIN: "https://kdm-pr-8-kdm17.vercel.app",
-      SENTRY_AUTH_TOKEN: "SENTRY_TOKEN_SENTINEL",
-    });
-    const deploy = calls[2];
-    expect(deploy.args).toContain("--prebuilt");
-    // Vercel CLI 62.2.0 rejects --skip-domain for non-production targets.
-    expect(deploy.args).not.toContain("--skip-domain");
-    expect(deploy.args).not.toContain("--prod");
-    expect(deploy.options.env?.SENTRY_AUTH_TOKEN).toBeUndefined();
-    expect(deploy.options.env?.GH_TOKEN).toBeUndefined();
-    expect(calls.every((call) => call.options.shell === false)).toBe(true);
-    expect(harness.logs.join("\n")).not.toMatch(/VERCEL_TOKEN_SENTINEL|SENTRY_TOKEN_SENTINEL|GH_TOKEN_SENTINEL/);
-  });
-
-  it("promotes only a ready Production deployment built from the current main SHA", () => {
-    const harness = createHarness({ target: "production" });
-
-    expect(harness.run()).toBe(0);
-    const calls = vercelCalls(harness.calls);
-    expect(calls.map(operation)).toEqual(["pull", "build", "deploy", "inspect", "api", "promote"]);
+    expect(calls.map(operation)).toEqual(["pull", "build", "deploy", "inspect", "api", "api", "promote", "api"]);
     expect(calls[0].args).toContain("--environment=production");
     expect(calls[1].args).toContain("--prod");
     expect(calls[1].options.env?.NEXT_PUBLIC_KDM_SENTRY_TARGET).toBe("production");
@@ -229,23 +232,48 @@ describe("Vercel deploy runner", () => {
     expect(calls[2].args).toContain("--prod");
     expect(calls[2].args).toContain("--skip-domain");
     expect(calls[2].options.env?.SENTRY_AUTH_TOKEN).toBeUndefined();
-    expect(calls[5].args).toContain(deploymentUrl);
+    expect(calls[4].args).toContain(`/v13/deployments/${deploymentId}`);
+    expect(calls[5].args).toContain("/v4/aliases/www.example.com");
+    expect(calls[6].args).toContain(deploymentId);
+    expect(harness.sequence).toEqual([
+      "main", "main", "candidate login", "alias", "main", "promote", "alias", "public login",
+    ]);
+    expect(harness.requests).toEqual([
+      { url: `${deploymentUrl}/login`, options: expect.objectContaining({
+        redirect: "manual", headers: { "Cache-Control": "no-cache", "x-vercel-protection-bypass": "BYPASS_SENTINEL" },
+      }) },
+      { url: `${appOrigin}/login`, options: expect.objectContaining({
+        redirect: "manual", headers: { "Cache-Control": "no-cache" },
+      }) },
+    ]);
+    expect(harness.calls.every((call) => call.options.shell === false)).toBe(true);
+    expect(harness.calls.every((call) => !call.options.env?.VERCEL_AUTOMATION_BYPASS_SECRET)).toBe(true);
+    expect(harness.summaries).toEqual([{
+      "GitHub run": "12345",
+      "Tested SHA": sha,
+      "Candidate deployment": deploymentId,
+      "Candidate login": "Passed",
+      "Previous deployment": previousId,
+      "Promotion": "Command succeeded",
+      "Public alias": "Passed",
+      "Public login": "Passed",
+    }]);
   });
 
-  it("does not create a deployment if the production APP_ORIGIN is local or invalid", () => {
-    const harness = createHarness({ target: "production" });
+  it("does not create a deployment if the production APP_ORIGIN is local or invalid", async () => {
+    const harness = createHarness();
     harness.environment.APP_ORIGIN = "http://127.0.0.1:3000";
 
-    expect(harness.run()).toBe(1);
+    expect(await harness.run()).toBe(1);
     expect(vercelCalls(harness.calls)).toHaveLength(0);
   });
 
-  it("stops before aliasing when the PR head changes during the build", () => {
+  it("stops before promotion when main advances during candidate verification", async () => {
     const harness = createHarness({ currentHeads: [sha, sha, "b".repeat(40)] });
 
-    expect(harness.run()).toBe(1);
+    expect(await harness.run()).toBe(1);
     const calls = vercelCalls(harness.calls);
-    expect(calls.map(operation)).toEqual(["pull", "build", "deploy", "inspect", "api"]);
+    expect(calls.map(operation)).toEqual(["pull", "build", "deploy", "inspect", "api", "api"]);
     expect(harness.logs.join("\n")).not.toMatch(/VERCEL_TOKEN_SENTINEL|SENTRY_TOKEN_SENTINEL/);
   });
 
@@ -253,36 +281,83 @@ describe("Vercel deploy runner", () => {
     ["wrong project", { inspectedProjectId: "prj_other123" }],
     ["wrong source SHA", { inspectedSha: "b".repeat(40) }],
     ["non-ready state", { readyState: "ERROR" }],
-  ])("stops before publication for an inspection with %s", (_label, override) => {
+  ])("stops before publication for an inspection with %s", async (_label, override) => {
     const harness = createHarness(override);
 
-    expect(harness.run()).toBe(1);
+    expect(await harness.run()).toBe(1);
     expect(vercelCalls(harness.calls).map(operation)).toEqual(["pull", "build", "deploy", "inspect", "api"]);
   });
 
   it.each([
     [1, ""],
     [0, JSON.stringify({ id: deploymentId, url: deploymentUrl, projectId, readyState: "READY" })],
-  ])("does not publish when deployment metadata is unavailable", (failureStatus, failureStdout) => {
+  ])("does not publish when deployment metadata is unavailable", async (failureStatus, failureStdout) => {
     const harness = createHarness({ failOperation: "api", failureStatus, failureStdout });
-    expect(harness.run()).toBe(1);
+    expect(await harness.run()).toBe(1);
     expect(vercelCalls(harness.calls).map(operation)).toEqual(["pull", "build", "deploy", "inspect", "api"]);
     expect(harness.logs.join("\n")).not.toContain("SENTINEL");
   });
 
-  it("suppresses CLI output that may contain credentials", () => {
+  it.each([
+    [() => htmlResponse("BYPASS_SENTINEL", 302), "unexpected_login_response"],
+    [() => htmlResponse("BYPASS_SENTINEL"), "login_marker_missing"],
+    [() => new Response(loginHtml, { headers: { "Content-Type": "text/plain" } }), "unexpected_login_response"],
+    [() => { throw new Error("BYPASS_SENTINEL"); }, "login_request_failed"],
+  ])("blocks promotion on a failed candidate login smoke", async (candidateResponse, reason) => {
+    const harness = createHarness({ candidateResponse });
+
+    expect(await harness.run()).toBe(1);
+    expect(harness.requests).toHaveLength(3);
+    expect(harness.sequence).not.toContain("promote");
+    expect(harness.logs.join("\n")).toContain(reason);
+    expect(harness.logs.join("\n")).not.toContain("SENTINEL");
+    expect(harness.summaries[0]).toMatchObject({
+      "Candidate deployment": deploymentId,
+      "Candidate login": "Failed",
+      "Promotion": "Not attempted",
+    });
+  });
+
+  it("does not probe the public endpoint when the alias still points to the previous deployment", async () => {
+    const harness = createHarness({ aliasAfterPromotion: previousId });
+
+    expect(await harness.run()).toBe(1);
+    expect(harness.sequence).toContain("promote");
+    expect(harness.sequence).not.toContain("public login");
+    expect(harness.logs.join("\n")).toContain(`reason=production_alias_mismatch; active=${previousId}`);
+    expect(harness.summaries[0]).toMatchObject({ "Public alias": "Failed" });
+  });
+
+  it.each([
+    [{ failOperation: "promote" }, "Attempted, outcome uncertain", "Not run"],
+    [{ publicResponse: () => htmlResponse("private response", 503) }, "Command succeeded", "Failed"],
+  ])("records both IDs when promotion or the public smoke fails", async (options, promotion, publicLogin) => {
+    const harness = createHarness(options);
+
+    expect(await harness.run()).toBe(1);
+    expect(harness.logs.join("\n")).toContain("Check the live Production alias before retry or rollback");
+    expect(harness.logs.join("\n")).not.toMatch(/SENTINEL|private response/);
+    expect(harness.summaries[0]).toMatchObject({
+      "Candidate deployment": deploymentId,
+      "Previous deployment": previousId,
+      "Promotion": promotion,
+      "Public login": publicLogin,
+    });
+  });
+
+  it("suppresses CLI output that may contain credentials", async () => {
     const harness = createHarness({ failOperation: "pull" });
 
-    expect(harness.run()).toBe(1);
+    expect(await harness.run()).toBe(1);
     expect(harness.logs.join("\n")).not.toMatch(/VERCEL_TOKEN_SENTINEL|SENTRY_TOKEN_SENTINEL|GH_TOKEN_SENTINEL/);
   });
 
   it.each([
     ["private non-JSON output", "invalid_json_output"],
     ['{"unexpected":"private"}', "invalid_deployment_reference"],
-  ])("distinguishes successful CLI execution from invalid deployment output: %s", (failureStdout, category) => {
+  ])("distinguishes successful CLI execution from invalid deployment output: %s", async (failureStdout, category) => {
     const harness = createHarness({ failOperation: "deploy", failureStatus: 0, failureStdout });
-    expect(harness.run()).toBe(1);
+    expect(await harness.run()).toBe(1);
     expect(harness.logs.join("\n")).toContain(`reason=${category}`);
     expect(harness.logs.join("\n")).not.toMatch(/private|SENTINEL/);
     expect(vercelCalls(harness.calls).map(operation)).toEqual(["pull", "build", "deploy"]);
@@ -300,13 +375,13 @@ describe("Vercel deploy runner", () => {
     ['Error: unknown or unexpected option: --private-value', "invalid_cli_arguments"],
     ['Error: getaddrinfo ENOTFOUND private.example.com', "network_failure"],
     ['unrecognized private provider response', "unclassified_cli_failure"],
-  ])("reports a safe deploy failure category for %s", (failureOutput, category) => {
+  ])("reports a safe deploy failure category for %s", async (failureOutput, category) => {
     const harness = createHarness({
       failOperation: "deploy",
       failureOutput: `${failureOutput}\nVERCEL_TOKEN_SENTINEL SENTRY_TOKEN_SENTINEL`,
     });
 
-    expect(harness.run()).toBe(1);
+    expect(await harness.run()).toBe(1);
     expect(harness.logs.join("\n")).toContain(`reason=${category}; exit=1`);
     expect(harness.logs.join("\n")).not.toMatch(/SENTINEL|private|provider response/);
     expect(vercelCalls(harness.calls).map(operation)).toEqual(["pull", "build", "deploy"]);
