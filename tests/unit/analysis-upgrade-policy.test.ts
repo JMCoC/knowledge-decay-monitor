@@ -95,6 +95,13 @@ const s302Names = [
   "20261114150500_s3_02_round_commands.sql",
   "20261114150600_s3_02_findings_projection.sql",
 ];
+const s305Names = [
+  "20261116120000_s3_05_correction_processing.sql",
+  "20261117120000_s3_05_candidate_lifecycle.sql",
+  "20261117130000_s3_05_member_processing_read.sql",
+  "20261121120000_s3_05_enqueue_lock_budget_fix.sql",
+  "20261121130000_s3_05_correction_worker_reads.sql",
+];
 
 describe("analysis migration upgrade stages", () => {
   it("keeps later-schema assertions out of the historical S2-11 database suite", () => {
@@ -141,6 +148,13 @@ describe("analysis migration upgrade stages", () => {
     expect(files).toEqual([...s302Names].sort());
   });
 
+  it("pins the S3-05 stage to the migration files in the repository", () => {
+    const files = readdirSync("supabase/migrations")
+      .filter((name) => name.includes("_s3_05_"))
+      .sort();
+    expect(files).toEqual([...s305Names].sort());
+  });
+
   it("classifies every reviewed S1 and S2 migration by its exact name", () => {
     for (const name of s1Names) {
       expect(migrationStage(`supabase/migrations/${name}`)).toBe("s1");
@@ -171,6 +185,9 @@ describe("analysis migration upgrade stages", () => {
     }
     for (const name of s302Names) {
       expect(migrationStage(`supabase/migrations/${name}`)).toBe("s3_02");
+    }
+    for (const name of s305Names) {
+      expect(migrationStage(`supabase/migrations/${name}`)).toBe("s3_05");
     }
     for (const name of [
       "20261011013954_s2_02_credit_operations.sql",
@@ -216,6 +233,18 @@ describe("analysis migration upgrade stages", () => {
     }
   });
 
+  it("keeps every S3-05 migration out of the S3-02 baseline", () => {
+    for (const name of s305Names) {
+      const migration = `supabase/migrations/${name}`;
+      expect(includeMigration(migration, "s2_11")).toBe(false);
+      expect(includeMigration(migration, "s3_01")).toBe(false);
+      expect(includeMigration(migration, "s3_02")).toBe(false);
+      expect(includeMigration(migration, "s3_05")).toBe(true);
+    }
+    expect(() => migrationStage("supabase/migrations/20990101000000_s9_99_unknown.sql"))
+      .toThrow("Unreviewed migration in upgrade inventory.");
+  });
+
   it("pins the historical upgrade and database suite to a filtered S2-11 workspace", () => {
     const upgradeScript = readFileSync("scripts/check-analysis-upgrade.mjs", "utf8");
     expect(upgradeScript.includes('copyS1Workspace(s211Root, "s2_11")')).toBe(true);
@@ -224,6 +253,7 @@ describe("analysis migration upgrade stages", () => {
     expect(upgradeScript.includes('["test", "db", "--local", "--workdir", s211Root]')).toBe(true);
     expect(upgradeScript.includes('relativeFile.startsWith("supabase/tests/database/s3_01_")')).toBe(true);
     expect(upgradeScript.includes('relativeFile.startsWith("supabase/tests/database/s3_02_")')).toBe(true);
+    expect(upgradeScript.includes('relativeFile.startsWith("supabase/tests/database/s3_05_")')).toBe(true);
   });
 
   it("excludes only S2-11 lease fields from the S2-01 notification history hash", () => {

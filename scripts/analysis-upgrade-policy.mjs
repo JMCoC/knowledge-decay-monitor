@@ -88,7 +88,15 @@ const s302Names = new Set([
   "20261114150600_s3_02_findings_projection.sql",
 ]);
 
-const stageOrder = Object.freeze({ s1: 0, s2_01: 1, s2_02: 2, s2_03: 3, s2_04: 4, s2_06: 5, s2_08a: 6, s2_08b: 7, s2_11: 8, s3_01: 9, s3_02: 10 });
+const s305Names = new Set([
+  "20261116120000_s3_05_correction_processing.sql",
+  "20261117120000_s3_05_candidate_lifecycle.sql",
+  "20261117130000_s3_05_member_processing_read.sql",
+  "20261121120000_s3_05_enqueue_lock_budget_fix.sql",
+  "20261121130000_s3_05_correction_worker_reads.sql",
+]);
+
+const stageOrder = Object.freeze({ s1: 0, s2_01: 1, s2_02: 2, s2_03: 3, s2_04: 4, s2_06: 5, s2_08a: 6, s2_08b: 7, s2_11: 8, s3_01: 9, s3_02: 10, s3_05: 11 });
 
 const s2_11DatabaseTestSources = new Map([
   [
@@ -103,7 +111,7 @@ const s2_11DatabaseTestSources = new Map([
 
 /**
  * @param {string} path
- * @param {"s1" | "s2_01" | "s2_02" | "s2_03" | "s2_04" | "s2_06" | "s2_08a" | "s2_08b" | "s2_11" | "s3_01" | "s3_02"} stage
+ * @param {"s1" | "s2_01" | "s2_02" | "s2_03" | "s2_04" | "s2_06" | "s2_08a" | "s2_08b" | "s2_11" | "s3_01" | "s3_02" | "s3_05"} stage
  */
 export function databaseTestSourceForStage(path, stage) {
   if (!Object.hasOwn(stageOrder, stage)) throw new Error("Unknown upgrade stage.");
@@ -139,12 +147,13 @@ export function migrationStage(path) {
   if (s211Names.has(name)) return "s2_11";
   if (s301Names.has(name)) return "s3_01";
   if (s302Names.has(name)) return "s3_02";
+  if (s305Names.has(name)) return "s3_05";
   throw new Error("Unreviewed migration in upgrade inventory.");
 }
 
 /**
  * @param {string} path
- * @param {"s1" | "s2_01" | "s2_02" | "s2_03" | "s2_04" | "s2_06" | "s2_08a" | "s2_08b" | "s2_11" | "s3_01" | "s3_02"} stage
+ * @param {"s1" | "s2_01" | "s2_02" | "s2_03" | "s2_04" | "s2_06" | "s2_08a" | "s2_08b" | "s2_11" | "s3_01" | "s3_02" | "s3_05"} stage
  */
 export function includeMigration(path, stage) {
   if (!Object.hasOwn(stageOrder, stage)) throw new Error("Unknown upgrade stage.");
@@ -153,7 +162,7 @@ export function includeMigration(path, stage) {
 
 /**
  * @param {string} path
- * @param {"s1" | "s2_01" | "s2_02" | "s2_03" | "s2_04" | "s2_06" | "s2_08a" | "s2_08b" | "s2_11" | "s3_01" | "s3_02"} stage
+ * @param {"s1" | "s2_01" | "s2_02" | "s2_03" | "s2_04" | "s2_06" | "s2_08a" | "s2_08b" | "s2_11" | "s3_01" | "s3_02" | "s3_05"} stage
  */
 export function includeFunction(path, stage) {
   if (!Object.hasOwn(stageOrder, stage)) throw new Error("Unknown upgrade stage.");
@@ -166,7 +175,7 @@ export function includeFunction(path, stage) {
 
 /**
  * @param {string} config
- * @param {"s1" | "s2_01" | "s2_02" | "s2_03" | "s2_04" | "s2_06" | "s2_08a" | "s2_08b" | "s2_11" | "s3_01" | "s3_02"} stage
+ * @param {"s1" | "s2_01" | "s2_02" | "s2_03" | "s2_04" | "s2_06" | "s2_08a" | "s2_08b" | "s2_11" | "s3_01" | "s3_02" | "s3_05"} stage
  */
 export function filterFunctionConfigForStage(config, stage) {
   if (!Object.hasOwn(stageOrder, stage)) throw new Error("Unknown upgrade stage.");
