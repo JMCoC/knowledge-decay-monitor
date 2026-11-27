@@ -39,7 +39,8 @@ export type ReviewAuditAction =
   | "correction_items_returned"
   | "correction_candidate_approved"
   | "correction_candidate_rejected"
-  | "correction_candidate_invalidated";
+  | "correction_candidate_invalidated"
+  | "correction_submission_expired";
 
 export type ReviewAuditMetadata =
   | { previousStatus: ReviewFindingStatus; status: ReviewFindingStatus }

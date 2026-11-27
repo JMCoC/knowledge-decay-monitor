@@ -96,7 +96,13 @@ const s305Names = new Set([
   "20261121130000_s3_05_correction_worker_reads.sql",
 ]);
 
-const stageOrder = Object.freeze({ s1: 0, s2_01: 1, s2_02: 2, s2_03: 3, s2_04: 4, s2_06: 5, s2_08a: 6, s2_08b: 7, s2_11: 8, s3_01: 9, s3_02: 10, s3_05: 11 });
+const s3_04Names = new Set([
+  "20261126110000_s3_04_audit_enum.sql",
+  "20261126120000_s3_04_correction_upload.sql",
+  "20261127120000_s3_04_reserve_correction_upload.sql",
+]);
+
+const stageOrder = Object.freeze({ s1: 0, s2_01: 1, s2_02: 2, s2_03: 3, s2_04: 4, s2_06: 5, s2_08a: 6, s2_08b: 7, s2_11: 8, s3_01: 9, s3_02: 10, s3_05: 11, s3_04: 12 });
 
 const s2_11DatabaseTestSources = new Map([
   [
@@ -148,6 +154,7 @@ export function migrationStage(path) {
   if (s301Names.has(name)) return "s3_01";
   if (s302Names.has(name)) return "s3_02";
   if (s305Names.has(name)) return "s3_05";
+  if (s3_04Names.has(name)) return "s3_04";
   throw new Error("Unreviewed migration in upgrade inventory.");
 }
 

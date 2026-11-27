@@ -29,6 +29,11 @@ const s305Migrations = [
   "20261121120000_s3_05_enqueue_lock_budget_fix.sql",
   "20261121130000_s3_05_correction_worker_reads.sql",
 ];
+const s304Migrations = [
+  "20261126110000_s3_04_audit_enum.sql",
+  "20261126120000_s3_04_correction_upload.sql",
+  "20261127120000_s3_04_reserve_correction_upload.sql",
+];
 
 describe("review migration stages", () => {
   it("pins the S3-02 allowlist to the migration files in the repository", () => {
@@ -43,6 +48,13 @@ describe("review migration stages", () => {
       .filter((name) => name.includes("_s3_05_"))
       .sort();
     expect(files).toEqual([...s305Migrations].sort());
+  });
+
+  it("pins the S3-04 allowlist to the migration files in the repository", () => {
+    const files = readdirSync("supabase/migrations")
+      .filter((name) => name.includes("_s3_04_"))
+      .sort();
+    expect(files).toEqual([...s304Migrations].sort());
   });
 
   it("recognizes the S2 baseline and the exact S3-01 migration allowlist", () => {

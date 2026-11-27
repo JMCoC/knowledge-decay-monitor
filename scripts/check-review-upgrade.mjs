@@ -403,6 +403,7 @@ export function includeReviewDatabaseTestFile(fileName, stage) {
   if (typeof fileName !== "string" || !/^[a-z0-9_.-]+\.test\.sql$/i.test(fileName)) return false;
   if (fileName.startsWith("s3_02_") && stage !== "s3_02") return false;
   if (fileName.startsWith("s3_05_")) return false;
+  if (fileName.startsWith("s3_04_")) return false;
   if (fileName.startsWith("s3_01_") && stage === "s2") return false;
   return true;
 }

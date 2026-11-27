@@ -46,7 +46,7 @@ select is((
   'correction_round_prepared', 'correction_round_opened', 'correction_round_cancelled',
   'correction_submission_confirmed', 'correction_candidate_selected', 'correction_items_returned',
   'correction_candidate_approved', 'correction_candidate_rejected', 'correction_candidate_invalidated',
-  'correction_round_draft_updated'
+  'correction_round_draft_updated', 'correction_submission_expired'
 ]::text[], 'Audit enum includes the appended draft-edit event');
 
 select finish();

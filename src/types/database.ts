@@ -2168,6 +2168,13 @@ export type Database = {
         }
         Returns: string
       }
+      expire_stale_correction_reservations: {
+        Args: { p_limit?: number }
+        Returns: {
+          outcome: string
+          submission_id: string
+        }[]
+      }
       fail_analysis: {
         Args: {
           p_analysis_id: string
@@ -2660,6 +2667,7 @@ export type Database = {
         | "correction_candidate_rejected"
         | "correction_candidate_invalidated"
         | "correction_round_draft_updated"
+        | "correction_submission_expired"
       review_audit_entity_type:
         | "finding"
         | "correction_round"
@@ -2890,6 +2898,7 @@ export const Constants = {
         "correction_candidate_rejected",
         "correction_candidate_invalidated",
         "correction_round_draft_updated",
+        "correction_submission_expired",
       ],
       review_audit_entity_type: [
         "finding",
